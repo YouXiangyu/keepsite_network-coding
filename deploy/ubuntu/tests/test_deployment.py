@@ -113,6 +113,7 @@ systemctl() {
   printf 'systemctl %s\n' "$*" >> "$TEST_LOG"
   current=$(cat "$TEST_CURRENT" 2>/dev/null || true)
   if [[ "$1" == stop && "$MODE" == stop_fail ]]; then return 1; fi
+  if [[ "$1" == enable && "$MODE" == enable_fail ]]; then return 1; fi
   if [[ "$1" == is-active && ! -f "$TEST_CURRENT" ]]; then return 1; fi
   if [[ "$1" == restart ]]; then
     if [[ "$MODE" == rollback_fail || ( "$MODE" == restart_fail_new && "$current" == "$TEST_NEW" ) ]]; then return 1; fi
@@ -175,8 +176,31 @@ sleep() { :; }
 
     def test_first_deploy_starts_without_existing_unit(self):
         self.current.unlink()
+        resolved = subprocess.run([self.bash, '-c', 'readlink -f "$1"', '_', self.current.as_posix()],
+                                  capture_output=True, text=True, timeout=5)
+        self.assertEqual(resolved.returncode, 0, resolved.stderr)
+        self.assertTrue(resolved.stdout.strip().endswith('/current'))
+        self.assertFalse(self.current.exists())
+        # Exercise real GNU readlink behavior, not the previous missing-file stub.
+        source = self.script.read_text(encoding='utf-8').replace('readlink() { cat "$TEST_CURRENT" 2>/dev/null; }', '')
+        self.script.write_text(source, encoding='utf-8')
         result = self.run_activation('success')
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_enable_failure_same_commit_retry_checks_enable_without_restart(self):
+        first = self.run_activation('enable_fail')
+        self.assertEqual(first.returncode, 1, first.stderr)
+        self.assertEqual(self.current.read_text(), self.new.as_posix())
+        self.log.write_text('')
+        repeated = self.run_activation('enable_fail')
+        self.assertEqual(repeated.returncode, 1, repeated.stderr)
+        self.assertIn('systemctl enable', self.log.read_text())
+        self.assertNotIn('systemctl restart', self.log.read_text())
+        self.log.write_text('')
+        recovered = self.run_activation('success')
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertIn('systemctl enable', self.log.read_text())
+        self.assertNotIn('systemctl restart', self.log.read_text())
 
 
 if __name__ == '__main__':

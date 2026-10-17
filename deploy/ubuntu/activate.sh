@@ -7,8 +7,10 @@ RELEASE="${1:?Release directory required}"
 [[ -f "$RELEASE/demo/dist/client/index.html" && -x "$RELEASE/backend/.venv/bin/python" ]] || exit 2
 [[ -s "$RELEASE/.artifact-sha256" && -f "$RELEASE/.prepared-sha256" ]] || { echo 'Release is not verified/prepared.' >&2; exit 2; }
 cmp -s "$RELEASE/.artifact-sha256" "$RELEASE/.prepared-sha256" || exit 2
-PREVIOUS="$(readlink -f /opt/memoverse/current || true)"
-if [[ -n "$PREVIOUS" ]]; then
+PREVIOUS=''
+# GNU readlink -f can print a canonical path even when the final component is absent.
+if [[ -e /opt/memoverse/current || -L /opt/memoverse/current ]]; then
+  PREVIOUS="$(readlink -f /opt/memoverse/current || true)"
   [[ "$PREVIOUS" =~ ^/opt/memoverse/releases/[a-f0-9]{40}$ && -d "$PREVIOUS" ]] || { echo 'Existing current link is unexpected; not changed.' >&2; exit 2; }
 fi
 activate_link() {
@@ -26,6 +28,7 @@ install_unit() {
   install -o root -g root -m 0644 "$1/deploy/ubuntu/memoverse.service" /etc/systemd/system/memoverse.service && systemctl daemon-reload
 }
 if [[ "$PREVIOUS" == "$RELEASE" ]] && health; then
+  if ! systemctl enable memoverse; then echo 'Release is healthy but enable-on-boot failed.' >&2; exit 1; fi
   echo "Already active and healthy: $RELEASE"
   exit 0
 fi
