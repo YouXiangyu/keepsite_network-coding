@@ -169,3 +169,8 @@ need an operator-reviewed journald reload/restart to apply. Nginx's own logs hav
 daily/10 MB rotation, three old files and compression, without duplicating the
 distribution's `/var/log/nginx/*.log` rules. Inspect actual disk usage during the
 trial. Retaining data/backups across updates also requires monitoring free disk.
+# 当前部署入口
+
+仓库更新入口为 `scripts/deploy-lightsail.ps1`：默认输出计划，确认参数后加 `-Execute`。脚本要求工作区已提交，使用当前 Git 提交生成源码包和同源 API 的前端构建，上传后准备新发布目录并执行健康检查；失败时恢复此前代码链接。
+
+数据迁移使用 `scripts/package-server-data.py --output <绝对路径.tar.gz>`，接收端在启动服务前执行 `--verify-extracted <解包目录>`。SQLite 业务行完整保留，原图与所有 ready 任务的产物逐文件校验；临时传输包不作为长期备份。
