@@ -49,6 +49,7 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
     data: new Map<string, ReturnType<typeof dataFor>>(), revision: 1, denyModel: false, conflictOnce: false,
     rejectVerification: false, unverifiedLogin: false, holdState: undefined as Promise<void> | undefined,
     csrfToken: undefined as string | undefined,
+    logoutUrl: undefined as string | undefined,
   };
   const currentData = (user = server.user) => {
     if (!server.data.has(user)) server.data.set(user, dataFor(user));
@@ -83,7 +84,7 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
     if (path === '/api/auth/register') return respond(route, { verificationRequired: true, email: body.email });
     if (path === '/api/auth/verify-email') return respond(route, server.rejectVerification ? { detail: '验证码不正确。' } : { verified: true }, server.rejectVerification ? 400 : 200);
     if (['/api/auth/resend-code', '/api/auth/forgot-password', '/api/auth/reset-password'].includes(path)) return respond(route, { ok: true });
-    if (path === '/api/auth/logout') { server.user = ''; return respond(route, { ok: true }); }
+    if (path === '/api/auth/logout') { server.user = ''; return respond(route, { ok: true, logoutUrl: server.logoutUrl }); }
     if (!server.user) return respond(route, { detail: '请登录。' }, 401);
     if (path === '/api/state') {
       const snapshot = state();
@@ -293,6 +294,48 @@ test('logout discards a late account response before another account signs in', 
   await expect(page.locator('.memoverse-shell')).toHaveAttribute('data-user-id', 'b');
   await expect(page.getByRole('link', { name: /B 的海边/ }).first()).toBeVisible();
   await expect(page.getByText('A 的海边', { exact: true })).toHaveCount(0);
+});
+
+test('Cognito logout leaves an anonymous document before redirect and returns signed out', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' });
+  await page.goto('/collection');
+  await expect(page.getByRole('heading', { name: '我的收藏', exact: true })).toBeVisible();
+  const origin = new URL(page.url()).origin;
+  const provider = 'https://memoverse.auth.ap-northeast-3.amazoncognito.com';
+  api.logoutUrl = provider + '/logout?' + new URLSearchParams({ client_id: 'testclient123', logout_uri: origin + '/' });
+  let beforeNavigation: { privateUI: boolean; pathname: string; message: boolean } | undefined;
+  await page.exposeFunction('recordLogoutDocument', (snapshot: typeof beforeNavigation) => { beforeNavigation = snapshot; });
+  await page.evaluate(() => {
+    window.addEventListener('beforeunload', () => {
+      void (window as any).recordLogoutDocument({ privateUI: !!document.querySelector('.memoverse-shell'),
+        pathname: location.pathname, message: document.body.innerText.includes('已退出登录。') });
+    }, { once: true });
+  });
+  await page.route(provider + '/logout?**', async route => {
+    await route.fulfill({ status: 302, headers: { location: origin + '/' } });
+  });
+  await page.getByRole('button', { name: '退出登录', exact: true }).first().click();
+  await expect.poll(() => beforeNavigation).toEqual({ privateUI: false, pathname: '/login', message: true });
+  await expect(page).toHaveURL(origin + '/');
+  await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
+  await expect(page.locator('.memoverse-shell')).toHaveCount(0);
+  expect(api.user).toBe('');
+});
+
+test('an unsafe logout URL stays on the signed-out local page', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' });
+  api.logoutUrl = 'https://evil.example/logout';
+  await page.goto('/collection');
+  await expect(page.getByRole('heading', { name: '我的收藏', exact: true })).toBeVisible();
+  const origin = new URL(page.url()).origin;
+  const externalNavigations: string[] = [];
+  await page.route('https://evil.example/**', async route => { externalNavigations.push(route.request().url()); await route.abort(); });
+  await page.getByRole('button', { name: '退出登录', exact: true }).first().click();
+  await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
+  await expect(page.getByText('已退出登录。', { exact: true })).toBeVisible();
+  await expect(page.locator('.memoverse-shell')).toHaveCount(0);
+  await expect(page).toHaveURL(origin + '/login');
+  expect(externalNavigations).toEqual([]);
 });
 
 test('unconfigured authentication remains unavailable and cannot expose workspace', async ({ page }) => {

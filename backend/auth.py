@@ -693,10 +693,11 @@ def install_auth(app: FastAPI, data_root: Path, on_authenticated=None, *, config
             if row:
                 service.check_write(request, {'csrf': row['csrf']})
             result = await run_in_threadpool(service.logout, sid)
-            response = JSONResponse(result)
-            service.clear_cookie(response, service.cookie_name)
-            service.clear_cookie(response, service.oauth_cookie)
-            return response
+            # Only the request's sid was revoked. A later login or OAuth start
+            # in another tab may already have replaced either shared cookie.
+            # Do not let this delayed response clear those newer cookies; the
+            # old opaque sid is invalid until expiry or the next login replaces it.
+            return JSONResponse(result)
         except AuthError as error:
             return failure(error)
 

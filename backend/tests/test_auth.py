@@ -274,6 +274,49 @@ def test_logout_invalidates_before_best_effort_revoke(auth):
         assert db.execute('SELECT COUNT(*) FROM sessions').fetchone()[0] == 0
 
 
+def test_delayed_logout_preserves_new_login_and_oauth_cookies(auth, monkeypatch):
+    first = login(auth).json()
+    old_sid = auth.client.cookies.get(auth.service.cookie_name)
+    revoking = threading.Event()
+    release = threading.Event()
+
+    def delayed_revoke(token):
+        auth.provider.revoke_calls.append(token)
+        revoking.set()
+        assert release.wait(10), 'Test did not release provider revocation'
+
+    monkeypatch.setattr(auth.provider, 'revoke', delayed_revoke)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(auth.client.post, '/api/auth/logout',
+                              headers={**HEADERS, 'X-CSRF-Token': first['csrfToken']})
+        try:
+            assert revoking.wait(5), 'Logout never reached provider revocation'
+            # The exact old sid is already invalid before the network call ends.
+            assert auth.client.get('/api/protected').status_code == 401
+            auth.provider.subject = 'subject-b'
+            auth.provider.email = 'second@example.com'
+            second = login(auth).json()
+            new_sid = auth.client.cookies.get(auth.service.cookie_name)
+            assert new_sid and new_sid != old_sid
+            assert second['user']['id'] != first['user']['id']
+            start = auth.client.get('/api/auth/google', follow_redirects=False)
+            assert start.status_code == 302
+            binding = auth.client.cookies.get(auth.service.oauth_cookie)
+            assert binding
+        finally:
+            release.set()
+        response = pending.result(timeout=5)
+
+    assert response.status_code == 200 and response.json()['ok']
+    assert 'set-cookie' not in response.headers
+    assert auth.client.cookies.get(auth.service.cookie_name) == new_sid
+    assert auth.client.cookies.get(auth.service.oauth_cookie) == binding
+    assert auth.client.get('/api/protected').json()['user'] == second['user']
+    assert auth.client.get('/api/protected', headers={
+        'Cookie': auth.service.cookie_name + '=' + old_sid}).status_code == 401
+    assert len(auth.provider.revoke_calls) == 1
+
+
 def test_google_uses_pkce_nonce_bound_once_and_fixed_redirect(auth):
     start = auth.client.get('/api/auth/google?returnUrl=https://evil.test', follow_redirects=False)
     assert start.status_code == 302

@@ -46,7 +46,8 @@ export const errorMessage = (error: unknown) => error instanceof Error ? error.m
 let epoch = 0;
 let activeSession: SignedInSession | null = null;
 const pending = new Set<AbortController>();
-const expiredListeners = new Set<() => void>();
+interface SessionEnd { reason: 'expired' | 'logout'; logoutUrl?: string }
+const expiredListeners = new Set<(event: SessionEnd) => void>();
 
 export const sessionEpoch = () => epoch;
 export function assertSessionEpoch(expected: number) {
@@ -63,13 +64,13 @@ export function installSession(session: AuthSession | null) {
   activeSession = null;
   activeSession = session?.authenticated ? requireSignedIn(session) : null;
 }
-export function onSessionExpired(listener: () => void) {
+export function onSessionExpired(listener: (event: SessionEnd) => void) {
   expiredListeners.add(listener);
   return () => { expiredListeners.delete(listener); };
 }
-function expireSession() {
+function expireSession(event: SessionEnd = { reason: 'expired' }) {
   installSession(null);
-  for (const listener of expiredListeners) listener();
+  for (const listener of expiredListeners) listener(event);
 }
 function staleRequest(): never {
   throw new DOMException('请求所属会话已结束。', 'AbortError');
@@ -157,11 +158,24 @@ export async function signIn(email: string, password: string) {
   assertSessionEpoch(scope);
   return requireSignedIn(validateSession(result));
 }
-export async function signOut() {
+function checkedLogoutUrl(value: unknown, returnOrigin: string): string | undefined {
+  if (typeof value !== 'string' || /[\u0000-\u0020\\]/.test(value)) return;
+  try {
+    const url = new URL(value);
+    const params = [...url.searchParams];
+    if (url.protocol !== 'https:' || url.username || url.password || url.port || url.hash || url.pathname !== '/logout'
+        || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.auth\.[a-z]{2}(?:-[a-z]+)+-\d\.amazoncognito\.com$/.test(url.hostname)
+        || params.length !== 2 || params.some(([key]) => key !== 'client_id' && key !== 'logout_uri')
+        || !/^[A-Za-z0-9]{1,128}$/.test(url.searchParams.get('client_id') ?? '')
+        || url.searchParams.get('logout_uri') !== new URL('/', returnOrigin).href) return;
+    return url.href;
+  } catch { return; }
+}
+export async function signOut(returnOrigin: string) {
   const scope = epoch;
-  await jsonRequest('/api/auth/logout', { method: 'POST', authenticated: true });
+  const result = await jsonRequest<{ logoutUrl?: unknown }>('/api/auth/logout', { method: 'POST', authenticated: true });
   assertSessionEpoch(scope);
-  expireSession();
+  expireSession({ reason: 'logout', logoutUrl: checkedLogoutUrl(result?.logoutUrl, returnOrigin) });
 }
 export function registerAccount(email: string, password: string) {
   return jsonRequest<{ verificationRequired: boolean; email: string }>('/api/auth/register', {

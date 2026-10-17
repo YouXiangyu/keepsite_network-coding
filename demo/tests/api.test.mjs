@@ -11,6 +11,9 @@ const hook = registerHooks({ resolve(specifier, context, nextResolve) {
 const api = await import(apiUrl);
 hook.deregister();
 const originalFetch = globalThis.fetch;
+const origin = 'https://memoverse.example';
+const logoutUrl = 'https://memoverse.auth.ap-northeast-3.amazoncognito.com/logout?'
+  + new URLSearchParams({ client_id: 'testclient123', logout_uri: origin + '/' });
 afterEach(() => { api.installSession(null); globalThis.fetch = originalFetch; });
 after(() => { globalThis.fetch = originalFetch; });
 
@@ -164,11 +167,73 @@ test('logout aborts pending model loading and clears the account scope', async (
     return new Promise(resolve => { resolveModel = resolve; });
   };
   const loading = api.fetchModel('/api/models/model/model.glb', new AbortController().signal);
-  await api.signOut();
+  await api.signOut(origin);
   assert.equal(modelSignal.aborted, true);
   resolveModel(new Response(new Uint8Array([1, 2, 3])));
   await assert.rejects(loading, error => error.name === 'AbortError');
   await assert.rejects(api.getState(), error => error.status === 401);
+});
+
+test('explicit logout forwards only the validated Cognito destination after clearing the local session', async () => {
+  api.installSession(signedSession());
+  let ended;
+  const unsubscribe = api.onSessionExpired(event => { ended = event; });
+  try {
+    globalThis.fetch = async () => Response.json({ ok: true, logoutUrl });
+    await api.signOut(origin);
+    assert.deepEqual(ended, { reason: 'logout', logoutUrl });
+    await assert.rejects(api.getState(), error => error.status === 401);
+  } finally { unsubscribe(); }
+});
+
+test('logout rejects unsafe provider and return URLs while still clearing the local session', async () => {
+  const unsafe = [
+    'javascript:alert(1)', logoutUrl.replace('https:', 'http:'),
+    logoutUrl.replace('memoverse.auth.ap-northeast-3.amazoncognito.com', 'evil.example'),
+    logoutUrl.replace('.amazoncognito.com', '.amazoncognito.com.evil.example'),
+    logoutUrl.replace('https://', 'https://user:password@'),
+    logoutUrl.replace('.com/logout', '.com:444/logout'), logoutUrl.replace('/logout?', '/oauth2/authorize?'),
+    logoutUrl.replace(encodeURIComponent(origin + '/'), encodeURIComponent('https://evil.example/')),
+    logoutUrl.replace(encodeURIComponent(origin + '/'), encodeURIComponent(origin + '/redirect')),
+    logoutUrl.replace(encodeURIComponent(origin + '/'), encodeURIComponent(origin + '/?next=https://evil.example')),
+    logoutUrl.replace('logout_uri=', 'redirect_uri='), logoutUrl + '&logout_uri=https%3A%2F%2Fevil.example%2F',
+    logoutUrl + '&redirect_uri=https%3A%2F%2Fevil.example%2F', logoutUrl + '#fragment',
+    logoutUrl.replace('client_id=testclient123&', ''), logoutUrl.replace('testclient123', ''),
+    logoutUrl.replace('https://', '//'), 42, null, undefined,
+  ];
+  let ended;
+  const unsubscribe = api.onSessionExpired(event => { ended = event; });
+  try {
+    for (const value of unsafe) {
+      api.installSession(signedSession());
+      ended = undefined;
+      globalThis.fetch = async () => Response.json({ ok: true, logoutUrl: value });
+      await api.signOut(origin);
+      assert.equal(ended?.reason, 'logout');
+      assert.equal(ended?.logoutUrl, undefined, String(value));
+      await assert.rejects(api.getState(), error => error.status === 401);
+    }
+  } finally { unsubscribe(); }
+});
+
+test('a delayed logout response cannot clear or redirect a replacement account', async () => {
+  api.installSession(signedSession('a'));
+  let resolveBody;
+  let started;
+  let ended = 0;
+  const bodyStarted = new Promise(resolve => { started = resolve; });
+  const unsubscribe = api.onSessionExpired(() => { ended += 1; });
+  try {
+    globalThis.fetch = async () => ({ ok: true, json: () => { started(); return new Promise(resolve => { resolveBody = resolve; }); } });
+    const pending = api.signOut(origin);
+    await bodyStarted;
+    api.installSession(signedSession('b'));
+    resolveBody({ ok: true, logoutUrl });
+    await assert.rejects(pending, error => error.name === 'AbortError');
+    assert.equal(ended, 0);
+    globalThis.fetch = async () => Response.json(serverState('b'));
+    assert.equal((await api.getState()).userId, 'b');
+  } finally { unsubscribe(); }
 });
 
 test('multipart uploads keep original bytes and authenticated CSRF', async () => {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { flushSync } from 'react-dom';
 import { ArrowLeft, ArrowRight, CheckCircle, CircleNotch, Stack } from '@phosphor-icons/react';
 import {
   ApiError, cancelSessionRequests, errorMessage, forgotPassword, getSession, installSession,
@@ -47,12 +48,19 @@ export default function AuthGate({ children }: { children: (session: SignedInSes
     }
   }, []);
 
-  useEffect(() => onSessionExpired(() => {
-    setSession(previous => ({ ...(previous ?? anonymous), authenticated: false, user: undefined, csrfToken: undefined }));
-    setChecking(false);
-    setServiceError('登录状态已结束，请重新登录。');
-    returnTo.current = '/collection';
-    navigate('/login', true);
+  useEffect(() => onSessionExpired(({ reason, logoutUrl }) => {
+    const clear = () => {
+      setSession(previous => ({ ...(previous ?? anonymous), authenticated: false, user: undefined, csrfToken: undefined }));
+      setChecking(false);
+      setServiceError(reason === 'logout' ? '已退出登录。' : '登录状态已结束，请重新登录。');
+      returnTo.current = '/collection';
+      navigate('/login', true);
+    };
+    if (reason === 'logout') {
+      // Commit the anonymous document before a provider navigation can cache this page.
+      flushSync(clear);
+      if (logoutUrl) window.location.assign(logoutUrl);
+    } else clear();
   }), []);
 
   useEffect(() => {

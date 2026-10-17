@@ -380,7 +380,7 @@ export default function Prototype({ session }: { session: SignedInSession }) {
   const logout = async () => {
     if (logoutBusy) return;
     setLogoutBusy(true);
-    try { await signOut(); }
+    try { await signOut(window.location.origin); }
     catch (error) { if (alive.current) { setStorageError(errorMessage(error)); setLogoutBusy(false); } }
   };
   const navLinks = tabs.map(({ id, label, icon: Icon }) => <Link key={id} to={'/' + id} current={tab === id} className={tab === id ? 'selected' : ''}><Icon size={23} weight={tab === id ? 'fill' : 'regular'} /><span>{label}</span>{id === 'friends' && unseen > 0 && <span className="nav-count">{unseen}</span>}</Link>);
