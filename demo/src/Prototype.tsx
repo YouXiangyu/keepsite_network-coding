@@ -1,169 +1,414 @@
-import { lazy, Suspense, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { Books, Compass, Users, User, Plus, EnvelopeSimple, MagnifyingGlass, CaretRight, CaretDown, ArrowLeft, X, BookmarkSimple, FolderSimple, Cloud, GearSix, Camera, PencilSimple, Trash, Check, Heart, Export, WarningCircle } from '@phosphor-icons/react';
-import { BottomSheet, Carousel, KeyboardInput, KeyboardTextarea, MobileScroll, useKeyboard, useKeyboardInsets } from './mobile';
+import { lazy, Suspense, useEffect, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
+import { Books, Compass, Users, User, Plus, Bell, MagnifyingGlass, CaretRight, CaretDown, ArrowLeft, BookmarkSimple, Cloud, GearSix, Camera, PencilSimple, Trash, Check, Heart, Export, WarningCircle, SignOut, ArrowUpRight } from '@phosphor-icons/react';
 import { Art, Tilt } from './art';
-import { type AppData, type Category, type CollectionItem, type CommunityItem, type ShareItem } from './data';
-import { initializeWorkspace, getState, mutate, uploadMedia, downloadBackup, errorMessage, ApiError, type ServerState } from './api';
+import { Brand } from './AuthGate';
+import WebDialog from './WebDialog';
+import { type AppData, type Category, type CollectionItem, type CommunityItem } from './data';
+import { getState, mutate, uploadMedia, downloadBackup, signOut, sessionEpoch, assertSessionEpoch, errorMessage, ApiError, type ServerState, type SignedInSession } from './api';
+import { navigate, useLocationPath } from './navigation';
 
 const ReliefViewer = lazy(() => import('./ReliefViewer'));
+type Tab = 'collection' | 'explore' | 'friends' | 'profile';
+type Route = { type: 'main'; tab: Tab } | { type: 'category'; category: Category }
+  | { type: 'detail'; source: 'collection' | 'community' | 'shares'; id: string }
+  | { type: 'add'; editId?: string } | { type: 'month'; month: string }
+  | { type: 'notifications' } | { type: 'search'; scope: Tab } | { type: 'not-found' };
+type Sheet = 'profile' | 'sync' | 'settings' | 'sort' | 'delete' | 'share' | null;
+const categories: { id: Category; label: string }[] = [
+  { id: 'movie', label: '电影' }, { id: 'travel', label: '旅行' },
+  { id: 'daily', label: '日常' }, { id: 'exhibition', label: '展览' },
+];
+const tabs = [
+  { id: 'collection' as const, label: '我的收藏', icon: Books },
+  { id: 'explore' as const, label: '探索', icon: Compass },
+  { id: 'friends' as const, label: '朋友分享', icon: Users },
+  { id: 'profile' as const, label: '我的', icon: User },
+];
+const catName = (id: Category) => categories.find(category => category.id === id)?.label ?? '日常';
+const dateLabel = (date: string) => date.replaceAll('-', '.');
+const emptyData = (): AppData => ({ collections: [], shares: [], community: [], profile: { name: '', bio: '' }, likedCommunityIds: [] });
+const encoded = encodeURIComponent;
 
-type Tab='collection'|'explore'|'friends'|'profile';
-type Page={type:'main'}|{type:'category';category:Category}|{type:'detail';item:CollectionItem;communityId?:string;shareId?:string}|{type:'add';editId?:string}|{type:'month';month:string}|{type:'notifications'}|{type:'search';scope?:Tab};
-type Sheet='profile'|'sync'|'settings'|'sort'|'delete'|'share'|null;
-const categories:{id:Category;label:string}[]=[{id:'movie',label:'电影'},{id:'travel',label:'旅行'},{id:'daily',label:'日常'},{id:'exhibition',label:'展览'}];
-const homeCategories=[categories[0],categories[2],categories[1],categories[3]];
-const catName=(id:Category)=>categories.find(c=>c.id===id)?.label||'日常';
-const dateLabel=(date:string)=>date.replaceAll('-','.');
-const shortDate=(date:string)=>date.slice(5).replace('-','.');
-function IconButton({label,children,onClick,className='',dot=false}:{label:string;children:ReactNode;onClick:()=>void;className?:string;dot?:boolean}){return <button type="button" className={`icon-button ${className}`} aria-label={label} onClick={onClick}>{children}{dot&&<span className="unread-dot"/>}</button>;}
-function Empty({title='这里还没有收藏',text='把喜欢的瞬间，慢慢留在这里。',action}:{title?:string;text?:string;action?:ReactNode}){return <div className="empty-state"><Books size={38} weight="light"/><h3>{title}</h3><p>{text}</p>{action}</div>;}
+function parseRoute(path: string): Route {
+  const url = new URL(path, window.location.origin);
+  let parts: string[];
+  try { parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent); }
+  catch { return { type: 'not-found' }; }
+  if (!parts.length) return { type: 'main', tab: 'collection' };
+  if (parts.length === 1 && tabs.some(tab => tab.id === parts[0])) return { type: 'main', tab: parts[0] as Tab };
+  if (parts[0] === 'category' && parts.length === 2 && categories.some(category => category.id === parts[1])) return { type: 'category', category: parts[1] as Category };
+  if (parts[0] === 'collection' && parts.length === 3 && parts[2] === 'edit') return { type: 'add', editId: parts[1] };
+  if (['collection', 'community', 'shares'].includes(parts[0]) && parts.length === 2) return { type: 'detail', source: parts[0] as 'collection' | 'community' | 'shares', id: parts[1] };
+  if (parts[0] === 'add' && parts.length === 1) return { type: 'add' };
+  if (parts[0] === 'month' && parts.length === 2 && /^\d{4}-(0[1-9]|1[0-2])$/.test(parts[1])) return { type: 'month', month: parts[1] };
+  if (parts[0] === 'notifications' && parts.length === 1) return { type: 'notifications' };
+  if (parts[0] === 'search' && parts.length === 1) {
+    const scope = url.searchParams.get('scope');
+    return { type: 'search', scope: tabs.some(tab => tab.id === scope) ? scope as Tab : 'collection' };
+  }
+  return { type: 'not-found' };
+}
 
-export default function Prototype(){
- const [data,setData]=useState<AppData>({collections:[],shares:[],community:[],profile:{name:'',bio:''},likedCommunityIds:[]});
- const [ready,setReady]=useState(false),[storageError,setStorageError]=useState('');
- const [tab,setTab]=useState<Tab>('collection'),[pages,setPages]=useState<Page[]>([{type:'main'}]);
- const [query,setQuery]=useState(''),[source,setSource]=useState('all'),[sort,setSort]=useState('recent');
- const [exploreCategory,setExploreCategory]=useState('featured'),[onlyUnread,setOnlyUnread]=useState(false);
- const [sheet,setSheet]=useState<Sheet>(null),[toast,setToast]=useState(''),[rotation,setRotation]=useState(0);
- const [draft,setDraft]=useState({id:'',version:1,date:'',title:'',category:'daily' as Category,tags:'',note:'',customImage:'',art:'cafe'}),[formError,setFormError]=useState('');
- const [profileDraft,setProfileDraft]=useState({name:'',bio:''}),[sheetError,setSheetError]=useState('');
- const [busy,setBusy]=useState(false),[pollError,setPollError]=useState(''),[bootAttempt,setBootAttempt]=useState(0);
- const [versionConflict,setVersionConflict]=useState(false);
- const fileInput=useRef<HTMLInputElement>(null),selectedFile=useRef<File|null>(null),previewUrl=useRef('');
- const uploaded=useRef<{file:File;assetId:string}|null>(null),mutationLock=useRef(false);
- const revision=useRef({serverId:'',value:-1}),latestData=useRef(data),retryAction=useRef<(()=>void)|null>(null);
- const keyboard=useKeyboard(),{bottomInset,isKeyboardVisible}=useKeyboardInsets();
- const page=pages[pages.length-1];
- const currentItem=page.type==='detail'?data.collections.find(i=>i.id===page.item.id)||page.item:undefined;
- const unseen=data.shares.filter(s=>s.unread).length;
+function Link({ to, children, className = '', onNavigate, current, disabled = false }: {
+  to: string; children: ReactNode; className?: string; onNavigate?: () => void; current?: boolean; disabled?: boolean;
+}) {
+  const click = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (disabled) { event.preventDefault(); return; }
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    onNavigate?.();
+    navigate(to);
+  };
+  return <a href={to} className={className} onClick={click} aria-current={current ? 'page' : undefined} aria-disabled={disabled || undefined}>{children}</a>;
+}
+function IconButton({ label, children, onClick, className = '', disabled = false }: {
+  label: string; children: ReactNode; onClick: () => void; className?: string; disabled?: boolean;
+}) {
+  return <button type="button" className={`icon-button ${className}`} aria-label={label} onClick={onClick} disabled={disabled}>{children}</button>;
+}
+function Empty({ title = '这里还没有收藏', text = '留下一张照片，让喜欢的瞬间有处可寻。', children }: {
+  title?: string; text?: string; children?: ReactNode;
+}) {
+  return <div className="empty-state"><Books size={38} weight="light" /><h2>{title}</h2><p>{text}</p>{children}</div>;
+}
+function PhotoCard({ item, to, onNavigate, hero = false }: {
+  item: CollectionItem; to?: string; onNavigate?: () => void; hero?: boolean;
+}) {
+  return <Link to={to ?? `/collection/${encoded(item.id)}`} className={`photo-card ${hero ? 'hero-card' : ''}`} onNavigate={onNavigate}>
+    <Tilt><Art name={item.art} src={item.customImage} alt={item.title} ratio={hero ? 1.5 : 1} />
+      {item.generation === 'ready' && item.modelUrl && <span className="relief-badge">立体收藏</span>}
+    </Tilt><div className="card-caption"><div><h3>{item.title}</h3><p>{catName(item.category)}{item.date && <> · {dateLabel(item.date)}</>}</p></div><ArrowUpRight size={18} /></div>
+  </Link>;
+}
+function communityItem(item: CommunityItem): CollectionItem {
+  return { id: `community-${item.id}`, title: item.title, category: item.category, tags: [catName(item.category)],
+    note: item.description, date: '', addedAt: 0, source: 'friend', sender: item.author, art: item.art, version: 1,
+    customImage: item.customImage, assetId: item.assetId, modelId: item.modelId, modelUrl: item.modelUrl,
+    modelCamera: item.modelCamera, generation: item.generation, generationJobId: item.generationJobId };
+}
 
- const acceptState=(state:ServerState)=>{
-  if(!state.initialized||!state.data)throw new Error('本机工作区尚未初始化。');
-  if(revision.current.serverId&&revision.current.serverId!==state.serverId)throw new Error('本机工作区已更换，请重新加载后继续。');
-  if(state.revision>=revision.current.value){revision.current={serverId:state.serverId,value:state.revision};latestData.current=state.data;setData(state.data);}
-  return latestData.current;
- };
- useEffect(()=>{let live=true;setStorageError('');initializeWorkspace().then(state=>{if(live){acceptState(state);setReady(true);}}).catch(error=>{if(live)setStorageError(errorMessage(error));});return()=>{live=false;};},[bootAttempt]);
- const hasActiveJobs=data.collections.some(item=>['queued','processing','blocked'].includes(item.generation));
- useEffect(()=>{
-  if(!ready||(!hasActiveJobs&&page.type!=='detail'))return;
-  let disposed=false;let timer:ReturnType<typeof setTimeout>;const controller=new AbortController();
-  const poll=async()=>{try{const state=await getState(controller.signal);if(!disposed){acceptState(state);setPollError('');}}catch(error){if(!disposed)setPollError(errorMessage(error));}finally{if(!disposed)timer=setTimeout(poll,hasActiveJobs?4000:10000);}};
-  timer=setTimeout(poll,hasActiveJobs?4000:10000);
-  return()=>{disposed=true;clearTimeout(timer);controller.abort();};
- },[ready,hasActiveJobs,page.type]);
- const releasePreview=()=>{if(previewUrl.current)URL.revokeObjectURL(previewUrl.current);previewUrl.current='';selectedFile.current=null;uploaded.current=null;};
- useEffect(()=>()=>releasePreview(),[]);
- const runMutation=async(operation:()=>Promise<ServerState>,success?:(next:AppData)=>void,target:'page'|'form'|'sheet'='page')=>{
-  if(mutationLock.current)return;
-  mutationLock.current=true;setBusy(true);
-  const setError=target==='form'?setFormError:target==='sheet'?setSheetError:setStorageError;setError('');
-  try{const next=acceptState(await operation());retryAction.current=null;success?.(next);}
-  catch(error){setError(errorMessage(error));if(target==='page')retryAction.current=()=>{void runMutation(operation,success,target);};if(target==='form'&&error instanceof ApiError&&error.status===409)setVersionConflict(true);}
-  finally{mutationLock.current=false;setBusy(false);}
- };
- useEffect(()=>{if(!toast)return;const t=window.setTimeout(()=>setToast(''),2600);return()=>clearTimeout(t);},[toast]);
- useEffect(()=>{document.title=`${page.type==='category'?catName(page.category):page.type==='detail'?page.item.title:'我的收藏'} · MemoVerse`;},[page]);
- const changeTab=(next:Tab)=>{if(mutationLock.current)return;releasePreview();keyboard.hide();setTab(next);setPages([{type:'main'}]);setQuery('');setSource('all');};
- const push=(next:Page)=>{if(mutationLock.current)return;keyboard.hide();setPages(old=>[...old,next]);setQuery('');setSource('all');setRotation(0);};
- const back=()=>{if(mutationLock.current)return;if(page.type==='add')releasePreview();keyboard.hide();setPages(old=>old.length>1?old.slice(0,-1):old);setQuery('');setRotation(0);};
- const showSheet=(next:Sheet)=>{if(mutationLock.current)return;keyboard.hide();setSheetError('');if(next==='profile')setProfileDraft({...data.profile});setSheet(next);};
- const openItem=(item:CollectionItem,meta?:{communityId?:string;shareId?:string})=>{
-  push({type:'detail',item,...meta});
-  if(meta?.shareId)void runMutation(()=>mutate(`/api/shares/${encodeURIComponent(meta.shareId!)}/read`));
-  if(meta?.communityId)void runMutation(()=>mutate(`/api/community/${encodeURIComponent(meta.communityId!)}/view`));
- };
- const openCommunity=(c:CommunityItem)=>openItem({id:`community-${c.id}`,title:c.title,category:c.category,art:c.art,tags:[catName(c.category)],note:c.description,source:'friend',sender:c.author,date:'2026-10-12',addedAt:Date.now(),generation:'reference',version:1},{communityId:c.id});
- const addToCollection=(item:CollectionItem,communityId?:string)=>{
-  if(data.collections.some(i=>i.id===item.id)){setToast('已经在你的收藏中了');return;}
-  const share=data.shares.find(s=>s.item.id===item.id);
-  const endpoint=communityId?`/api/community/${encodeURIComponent(communityId)}/collect`:share?`/api/shares/${encodeURIComponent(share.id)}/collect`:null;
-  if(!endpoint){setStorageError('未找到这份分享的来源，无法收藏。');return;}
-  void runMutation(()=>mutate(endpoint),()=>setToast('已加入我的收藏'));
- };
- const openAdd=(item?:CollectionItem)=>{if(mutationLock.current)return;releasePreview();const now=new Date();const date=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;setDraft({id:item?.id||crypto.randomUUID(),version:item?.version||1,date:item?.date||date,title:item?.title||'',category:item?.category||'daily',tags:item?.tags.join('、')||'',note:item?.note||'',customImage:item?.customImage||'',art:item?.art||'cafe'});setFormError('');setVersionConflict(false);push({type:'add',editId:item?.id});};
- const refreshDraftVersion=()=>void runMutation(()=>getState(),next=>{
-  const item=next.collections.find(i=>i.id===draft.id);
-  if(!item)throw new Error('这件收藏已被删除；当前草稿仍保留。');
-  setDraft(previous=>({...previous,version:item.version}));setVersionConflict(false);
-  setFormError('已读取最新版本，草稿未改变。再次保存将使用当前草稿覆盖对应字段。');
- },'form');
- const readFile=(file?:File)=>{
-  if(!file||mutationLock.current)return;
-  if(!['image/png','image/jpeg','image/webp'].includes(file.type)){setFormError('请选择 JPG、PNG 或 WebP 图片。');return;}
-  if(file.size>12*1024*1024){setFormError('图片请小于 12 MB。');return;}
-  releasePreview();selectedFile.current=file;previewUrl.current=URL.createObjectURL(file);setDraft(d=>({...d,customImage:previewUrl.current}));setFormError('');
- };
- const submitCollection=(e:FormEvent)=>{
-  e.preventDefault();if(!draft.title.trim()){setFormError('给这件收藏起个名字吧。');return;}
-  const editing=page.type==='add'&&!!page.editId;
-  const file=selectedFile.current;
-  if(!editing&&!file){setFormError('请先选择一张真实图片。');return;}
-  const payload={title:draft.title.trim(),category:draft.category,tags:draft.tags.trim()?draft.tags.split(/[、,，]/).map(t=>t.trim()).filter(Boolean):editing?[]:null,note:draft.note.trim(),date:draft.date,art:draft.art};
-  const id=draft.id,version=draft.version;
-  void runMutation(async()=>{
-   let assetId:string|undefined;
-   if(file){if(uploaded.current?.file!==file){const asset=await uploadMedia(file);uploaded.current={file,assetId:asset.assetId};}assetId=uploaded.current!.assetId;}
-   return editing?mutate(`/api/collections/${encodeURIComponent(id)}`,'PATCH',{...payload,version,...(assetId?{assetId}:{})}):mutate('/api/collections','POST',{...payload,id,assetId});
-  },next=>{const item=next.collections.find(i=>i.id===id);if(!item)throw new Error('服务未返回保存后的收藏，请刷新确认。');releasePreview();keyboard.hide();setPages([{type:'main'},{type:'detail',item}]);setTab('collection');setToast(editing?'修改已保存':'已保存到本机工作区');},'form');
- };
- const filtered=(items:CollectionItem[])=>[...items].filter(i=>(source==='all'||i.source===source)&&(!query||`${i.title} ${i.tags.join(' ')} ${i.note}`.toLowerCase().includes(query.toLowerCase()))).sort((a,b)=>sort==='name'?a.title.localeCompare(b.title,'zh-CN'):sort==='oldest'?a.addedAt-b.addedAt:b.addedAt-a.addedAt);
+export default function Prototype({ session }: { session: SignedInSession }) {
+  const path = useLocationPath();
+  const route = parseRoute(path);
+  const routeName = path.split('?')[0];
+  const tab: Tab = route.type === 'main' ? route.tab : route.type === 'month' ? 'profile'
+    : route.type === 'notifications' || route.type === 'detail' && route.source === 'shares' ? 'friends'
+    : route.type === 'detail' && route.source === 'community' ? 'explore'
+    : route.type === 'search' ? route.scope : 'collection';
+  const [data, setData] = useState<AppData>(emptyData);
+  const [ready, setReady] = useState(false);
+  const [bootAttempt, setBootAttempt] = useState(0);
+  const [storageError, setStorageError] = useState('');
+  const [pollError, setPollError] = useState('');
+  const [query, setQuery] = useState(new URLSearchParams(window.location.search).get('q') ?? '');
+  const [source, setSource] = useState('all');
+  const [sort, setSort] = useState('recent');
+  const [exploreCategory, setExploreCategory] = useState('featured');
+  const [onlyUnread, setOnlyUnread] = useState(false);
+  const [sheet, setSheet] = useState<Sheet>(null);
+  const [toast, setToast] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [logoutBusy, setLogoutBusy] = useState(false);
+  const [formError, setFormError] = useState('');
+  const [sheetError, setSheetError] = useState('');
+  const [versionConflict, setVersionConflict] = useState(false);
+  const [engine, setEngine] = useState<ServerState['generationEngine']>();
+  const [profileDraft, setProfileDraft] = useState({ name: '', bio: '' });
+  const [draft, setDraft] = useState({ id: '', version: 1, date: '', title: '', category: 'daily' as Category, tags: '', note: '', customImage: '', art: 'cafe' });
+  const mutationLock = useRef(false);
+  const alive = useRef(true);
+  const latest = useRef(data);
+  const revision = useRef({ serverId: '', value: -1 });
+  const fileInput = useRef<HTMLInputElement>(null);
+  const selectedFile = useRef<File | null>(null);
+  const uploaded = useRef<{ file: File; assetId: string } | null>(null);
+  const previewUrl = useRef('');
+  const retryAction = useRef<(() => void) | null>(null);
+  const heading = useRef<HTMLDivElement>(null);
+  const unseen = data.shares.filter(share => share.unread).length;
+  const hasActiveJobs = data.collections.some(item => ['queued', 'processing', 'blocked'].includes(item.generation));
+  const share = route.type === 'detail' && route.source === 'shares' ? data.shares.find(item => item.id === route.id) : undefined;
+  const community = route.type === 'detail' && route.source === 'community' ? data.community.find(item => item.id === route.id) : undefined;
+  const currentItem = route.type !== 'detail' ? undefined : route.source === 'shares' ? share?.item
+    : route.source === 'community' ? community ? communityItem(community) : undefined
+    : data.collections.find(item => item.id === route.id);
+  const owned = !!currentItem && !share && !community && data.collections.some(item => item.id === currentItem.id);
 
- function PhotoCard({item,layout='poster',subtitle=false,ratio}:{item:CollectionItem;layout?:'hero'|'poster'|'square'|'natural';subtitle?:boolean;ratio?:number}){return <button className={`photo-card ${layout}`} onClick={()=>openItem(item)}><Tilt className={layout==='hero'?'photo-mount':''}><Art name={item.art} src={item.customImage} alt={item.title} ratio={ratio??(layout==='hero'?1.66:layout==='poster'?.7:layout==='square'?1:undefined)}/></Tilt><span className="card-name">{item.title}</span>{subtitle&&<span className="card-meta">{catName(item.category)} · {shortDate(item.date)}</span>}</button>;}
- const sectionHeading=(label:string,action?:()=>void,count?:number)=><div className="section-heading">{action?<button className="section-link" onClick={action}><h2>{label}</h2><CaretRight size={20} weight="light"/></button>:<h2>{label}</h2>}{count!==undefined&&<span>{count}件</span>}</div>;
- const inboxButton=<IconButton label="消息" onClick={()=>push({type:'notifications'})} dot={unseen>0}><EnvelopeSimple size={27} weight="light"/></IconButton>;
- const topBar=(placeholder:string)=><div className="topbar"><button className="avatar-button" aria-label="打开我的资料" onClick={()=>changeTab('profile')}><Art name="avatar" alt={data.profile.name} ratio={1}/></button><button className="search-trigger" onClick={()=>push({type:'search',scope:tab})}><MagnifyingGlass size={21} weight="light"/><span>{placeholder}</span></button>{inboxButton}</div>;
- const backBar=(label='收藏')=><div className="backbar"><button onClick={back}><ArrowLeft size={21} weight="light"/><span>{label}</span></button>{inboxButton}</div>;
- const searchField=(placeholder:string)=><label className="search-field"><MagnifyingGlass size={20} weight="light"/><KeyboardInput aria-label={placeholder} placeholder={placeholder} value={query} onChange={e=>setQuery(e.target.value)}/>{query&&<IconButton label="清除搜索" onClick={()=>setQuery('')}><X size={17}/></IconButton>}</label>;
- const sourceTabs=<div className="filter-tabs" role="tablist" aria-label="收藏来源">{[['all','全部'],['mine','我的经历'],['friend','朋友推荐']].map(([v,label])=><button role="tab" aria-selected={source===v} className={source===v?'active':''} key={v} onClick={()=>setSource(v)}>{label}</button>)}</div>;
- const renderGrid=(items:CollectionItem[])=>items.length?<div className="masonry">{[0,1].map(column=><div className="masonry-column" key={column}>{items.filter((_,index)=>index%2===column).map(i=><button className="grid-card" key={i.id} onClick={()=>openItem(i)}><Tilt><Art name={i.art} src={i.customImage} alt={i.title}/></Tilt><span className="grid-caption"><span className="card-name">{i.title}</span>{i.source==='friend'&&<span className="source-badge">朋友推荐</span>}</span><span className="card-meta">{dateLabel(i.date)}</span></button>)}</div>)}</div>:<Empty title="没有找到这件收藏" text="换个名字或标签试试看。"/>;
+  const releasePreview = () => {
+    if (previewUrl.current) URL.revokeObjectURL(previewUrl.current);
+    previewUrl.current = '';
+    selectedFile.current = null;
+    uploaded.current = null;
+  };
+  useEffect(() => { alive.current = true; return () => { alive.current = false; releasePreview(); }; }, []);
+  const acceptState = (state: ServerState) => {
+    if (!state.initialized || !state.data) throw new Error('收藏空间正在准备中，请稍后重试。');
+    if (revision.current.serverId && revision.current.serverId !== state.serverId) throw new Error('收藏空间已更新，请重新加载后继续。');
+    if (state.revision >= revision.current.value) {
+      revision.current = { serverId: state.serverId, value: state.revision };
+      latest.current = state.data;
+      setData(state.data);
+      setEngine(state.generationEngine);
+    }
+    return latest.current;
+  };
+  useEffect(() => {
+    let live = true;
+    const controller = new AbortController();
+    setStorageError('');
+    getState(controller.signal).then(state => {
+      if (live) { acceptState(state); setReady(true); }
+    }).catch(error => { if (live && error.name !== 'AbortError') setStorageError(errorMessage(error)); });
+    return () => { live = false; controller.abort(); };
+  }, [bootAttempt, session.csrfToken]);
+  useEffect(() => {
+    if (!ready || (!hasActiveJobs && route.type !== 'detail')) return;
+    let live = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const controller = new AbortController();
+    const poll = async () => {
+      try { const state = await getState(controller.signal); if (live) { acceptState(state); setPollError(''); } }
+      catch (error) { if (live && !(error instanceof DOMException && error.name === 'AbortError')) setPollError(errorMessage(error)); }
+      finally { if (live) timer = setTimeout(poll, hasActiveJobs ? 4000 : 10000); }
+    };
+    timer = setTimeout(poll, hasActiveJobs ? 4000 : 10000);
+    return () => { live = false; clearTimeout(timer); controller.abort(); };
+  }, [ready, hasActiveJobs, route.type]);
+  useEffect(() => {
+    setSheet(null);
+    setSource('all');
+    setFormError('');
+    setQuery(new URLSearchParams(window.location.search).get('q') ?? '');
+    window.scrollTo(0, 0);
+    heading.current?.focus({ preventScroll: true });
+  }, [routeName]);
+  useEffect(() => {
+    if (!ready) return;
+    releasePreview();
+    if (route.type !== 'add') return;
+    const item = route.editId ? latest.current.collections.find(item => item.id === route.editId) : undefined;
+    const now = new Date();
+    const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    setDraft({ id: item?.id ?? crypto.randomUUID(), version: item?.version ?? 1, date: item?.date ?? date,
+      title: item?.title ?? '', category: item?.category ?? 'daily', tags: item?.tags.join('、') ?? '',
+      note: item?.note ?? '', customImage: item?.customImage ?? '', art: item?.art ?? 'cafe' });
+    setVersionConflict(false);
+  }, [ready, routeName]);
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(''), 3200);
+    return () => clearTimeout(timer);
+  }, [toast]);
+  useEffect(() => {
+    document.title = `${currentItem?.title ?? tabs.find(item => item.id === tab)?.label ?? '我的收藏'} · MemoVerse`;
+  }, [tab, currentItem?.title]);
 
- const renderCollection=()=> <>{topBar('搜索收藏')}<div className="page-heading"><h1>我的收藏</h1><span>{data.collections.length}件</span></div>{data.collections.length?<>{sectionHeading('最近收藏')}<Carousel className="edge-rail hero-rail" contentClassName="rail-track" ariaLabel="最近收藏">{[...data.collections].sort((a,b)=>b.addedAt-a.addedAt).slice(0,5).map(i=><PhotoCard key={i.id} item={i} layout="hero" subtitle/>)}</Carousel>{homeCategories.filter(c=>data.collections.some(i=>i.category===c.id)).map(c=><section className="collection-group" key={c.id}>{sectionHeading(c.label,()=>push({type:'category',category:c.id}),data.collections.filter(i=>i.category===c.id).length)}<Carousel className="edge-rail" contentClassName="rail-track" ariaLabel={`${c.label}收藏`}>{data.collections.filter(i=>i.category===c.id).slice(0,8).map(i=><PhotoCard key={i.id} item={i} layout={c.id==='movie'?'poster':'square'}/>)}</Carousel></section>)}</>:<Empty action={<button className="primary-button" onClick={()=>openAdd()}>添加第一件收藏</button>}/>}</>;
- const renderCategory=(category:Category)=><>{backBar()}<div className="page-heading category-title"><h1>{catName(category)}</h1><span>{data.collections.filter(i=>i.category===category).length}件</span></div><button className="sort-button" onClick={()=>showSheet('sort')}>{sort==='recent'?'最近添加':sort==='oldest'?'最早添加':'按名称排序'}<CaretDown size={17}/></button>{searchField(`搜索${catName(category)}收藏`)}{sourceTabs}{renderGrid(filtered(data.collections.filter(i=>i.category===category)))}</>;
- const community=data.community.filter(i=>exploreCategory==='featured'||i.category===exploreCategory).sort((a,b)=>(b.saves*3+b.likes*2+Math.log1p(b.exposures))-(a.saves*3+a.likes*2+Math.log1p(a.exposures)));
- const renderExplore=()=> <>{topBar('搜索主题与纪念品')}<div className="page-heading"><h1>探索</h1></div><div className="filter-tabs explore-tabs" role="tablist" aria-label="探索分类">{[{id:'featured',label:'精选'},...categories].map(c=><button role="tab" aria-selected={exploreCategory===c.id} className={exploreCategory===c.id?'active':''} key={c.id} onClick={()=>setExploreCategory(c.id)}>{c.label}</button>)}</div>{sectionHeading(exploreCategory==='featured'?'周末灵感':`${categories.find(c=>c.id===exploreCategory)?.label}灵感`)}<Carousel className="edge-rail explore-hero" contentClassName="rail-track" ariaLabel="精选主题">{community.slice(0,3).map(i=><button className="photo-card hero" key={i.id} onClick={()=>openCommunity(i)}><Tilt className="photo-mount"><Art name={i.art} alt={i.title} ratio={1.8}/></Tilt><span className="card-name">{i.title}</span><span className="card-meta">{catName(i.category)} · 主题精选</span></button>)}</Carousel>
-  <section className="collection-group">{sectionHeading('值得留念')}<Carousel className="edge-rail" contentClassName="rail-track" ariaLabel="值得留念">{community.slice(1,4).map(i=><button key={i.id} className="photo-card medium" onClick={()=>openCommunity(i)}><Tilt><Art name={i.art} alt={i.title} ratio={1.45}/></Tilt><span className="card-name">{i.title}</span><span className="card-meta">{catName(i.category)}</span></button>)}</Carousel></section>
-  <section className="collection-group">{sectionHeading('更多主题')}<button className="theme-row" onClick={()=>setExploreCategory('daily')}><Art name="cafe" alt="咖啡馆里的午后" ratio={1}/><span><strong>咖啡馆里的午后</strong><small>日常的小小收藏</small></span><CaretRight size={20}/></button><button className="theme-row" onClick={()=>setExploreCategory('travel')}><Art name="ticket" alt="沿途的一张票" ratio={1}/><span><strong>沿途的一张票</strong><small>把旅途留在身边</small></span><CaretRight size={20}/></button></section>
-  <section className="community-ranking">{sectionHeading('社区人气榜')}<p className="section-description">看看最近被大家留下的好日子</p>{community.slice(0,5).map((i,n)=><button className="rank-row" key={i.id} onClick={()=>openCommunity(i)}><span className="rank-number">{String(n+1).padStart(2,'0')}</span><Art name={i.art} alt={i.title} ratio={1}/><span><strong>{i.title}</strong><small>{i.saves} 次收藏 · {i.likes} 人喜欢</small></span><CaretRight size={17}/></button>)}<p className="demo-caption">当前展示为示例社区，供预览榜单与主题。</p></section></>;
- const visibleShares=data.shares.filter(s=>!onlyUnread||s.unread);
- const openShare=(s:ShareItem)=>openItem(s.item,{shareId:s.id});
- const renderFriends=()=> <>{topBar('搜索朋友或收藏')}<div className="page-heading"><h1>朋友分享</h1></div><div className="filter-tabs" role="tablist" aria-label="收到的分享"><button role="tab" aria-selected={!onlyUnread} className={!onlyUnread?'active':''} onClick={()=>setOnlyUnread(false)}>全部</button><button role="tab" aria-selected={onlyUnread} className={onlyUnread?'active':''} onClick={()=>setOnlyUnread(true)}>未查看 <em>{unseen||''}</em></button></div>{!visibleShares.length?<Empty title="都已经看过了" text="下一份来自朋友的美好，正在路上。"/>:<>{sectionHeading('最新收到')}<div className="sender-line"><Art name="city" alt={visibleShares[0].sender} ratio={1}/><strong>{visibleShares[0].sender}</strong><span>{shortDate(visibleShares[0].receivedAt)}</span></div><button className="latest-share" onClick={()=>openShare(visibleShares[0])}><Tilt><Art name={visibleShares[0].item.art==='lighthouse'?'lighthouseSunset':visibleShares[0].item.art} alt={visibleShares[0].item.title} ratio={2.05}/></Tilt></button><div className="share-heading"><button onClick={()=>openShare(visibleShares[0])}><h2>{visibleShares[0].item.title}</h2></button><IconButton label="收藏最新分享" onClick={()=>addToCollection(visibleShares[0].item)}><BookmarkSimple size={23} weight={data.collections.some(i=>i.id===visibleShares[0].item.id)?'fill':'light'}/></IconButton></div><p className="share-note">{visibleShares[0].item.note||'想把这一份美好分享给你。'}</p>
-  {visibleShares.length>1&&<section className="collection-group">{sectionHeading('最近分享')}<div className="share-grid">{visibleShares.slice(1,3).map(s=><button key={s.id} className="share-tile" onClick={()=>openShare(s)}><Art name={s.item.art} alt={s.item.title} ratio={1.7}/><span className="share-title">{s.item.title}{s.unread&&<i/>}</span><span className="byline"><Art name={s.item.art} alt={s.sender} ratio={1}/>{s.sender} · {shortDate(s.receivedAt)}</span></button>)}</div></section>}{visibleShares.length>3&&<section className="collection-group">{sectionHeading('更早')}{visibleShares.slice(3).map(s=><button className="theme-row" key={s.id} onClick={()=>openShare(s)}><Art name={s.item.art} alt={s.item.title} ratio={1}/><span><strong>{s.item.title}</strong><small>{s.sender} · {shortDate(s.receivedAt)}</small></span><CaretRight size={19}/></button>)}</section>}</>}</>;
- const months=[...new Set(data.collections.map(i=>i.date.slice(0,7)))].sort().reverse();
- const renderProfile=()=> <><div className="page-heading profile-heading"><h1>我的</h1>{inboxButton}</div><div className="profile-card"><Art name="avatar" alt={data.profile.name} ratio={1}/><div><h2>{data.profile.name}</h2><p>{data.profile.bio}</p><button className="quiet-pill" onClick={()=>showSheet('profile')}>编辑资料</button></div></div><p className="profile-stats">{data.collections.length}件收藏 · {new Set(data.collections.map(i=>i.category)).size}个分类</p>{sectionHeading('最近收藏',()=>changeTab('collection'))}<Carousel className="edge-rail profile-rail" contentClassName="rail-track" ariaLabel="我的最近收藏">{[...data.collections].sort((a,b)=>b.addedAt-a.addedAt).slice(0,5).map(i=><PhotoCard item={i} key={i.id} ratio={.79}/>)}</Carousel><section className="collection-group month-section">{sectionHeading('按月回看')}<Carousel className="edge-rail" contentClassName="rail-track" ariaLabel="按月回看">{months.map((m,n)=><button key={m} className="month-card" onClick={()=>push({type:'month',month:m})}><Tilt><Art name={n===0?'monthOctober':'monthSeptember'} alt={`${m}的收藏`} ratio={1.18}/></Tilt><strong>{m.slice(0,4)}年{Number(m.slice(5))}月</strong><small>{data.collections.filter(i=>i.date.startsWith(m)).length}件收藏</small></button>)}</Carousel></section><div className="settings-list"><button onClick={()=>push({type:'search'})}><FolderSimple size={25} weight="light"/><span>收藏管理</span><CaretRight size={20}/></button><button onClick={()=>showSheet('sync')}><Cloud size={25} weight="light"/><span>账户与同步</span><CaretRight size={20}/></button><button onClick={()=>showSheet('settings')}><GearSix size={25} weight="light"/><span>设置与隐私</span><CaretRight size={20}/></button></div></>;
+  const runMutation = async (operation: () => Promise<ServerState>, success?: (next: AppData) => void, target: 'page' | 'form' | 'sheet' = 'page') => {
+    if (mutationLock.current) return;
+    mutationLock.current = true;
+    setBusy(true);
+    const setError = target === 'form' ? setFormError : target === 'sheet' ? setSheetError : setStorageError;
+    setError('');
+    try {
+      const response = await operation();
+      if (!alive.current) return;
+      const next = acceptState(response);
+      retryAction.current = null;
+      success?.(next);
+    } catch (error) {
+      if (!alive.current || error instanceof DOMException && error.name === 'AbortError') return;
+      setError(errorMessage(error));
+      if (target === 'page') retryAction.current = () => { void runMutation(operation, success, target); };
+      if (target === 'form' && error instanceof ApiError && error.status === 409) setVersionConflict(true);
+    } finally {
+      mutationLock.current = false;
+      if (alive.current) setBusy(false);
+    }
+  };
+  const showSheet = (next: Sheet) => {
+    if (busy) return;
+    setSheetError('');
+    if (next === 'profile') setProfileDraft({ ...data.profile });
+    setSheet(next);
+  };
+  const back = () => {
+    if (busy) return;
+    if (Number(window.history.state?.memoverseDepth ?? 0) > 0) window.history.back();
+    else navigate('/' + tab);
+  };
+  const viewCommunity = (id: string) => { void runMutation(() => mutate(`/api/community/${encoded(id)}/view`)); };
+  const viewShare = (id: string) => { void runMutation(() => mutate(`/api/shares/${encoded(id)}/read`)); };
+  const addShared = (shareId?: string, communityId?: string) => {
+    const endpoint = communityId ? `/api/community/${encoded(communityId)}/collect` : shareId ? `/api/shares/${encoded(shareId)}/collect` : null;
+    if (endpoint) void runMutation(() => mutate(endpoint), () => setToast('已加入我的收藏'));
+  };
+  const readFile = (file?: File) => {
+    if (!file || busy) return;
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) { setFormError('请选择 JPG、PNG 或 WebP 图片。'); return; }
+    if (file.size > 12 * 1024 * 1024) { setFormError('图片请小于 12 MB。'); return; }
+    releasePreview();
+    selectedFile.current = file;
+    previewUrl.current = URL.createObjectURL(file);
+    setDraft(previous => ({ ...previous, customImage: previewUrl.current }));
+    setFormError('');
+  };
+  const submitCollection = (event: FormEvent) => {
+    event.preventDefault();
+    if (!draft.title.trim()) { setFormError('给这件收藏起个名字吧。'); return; }
+    const editing = route.type === 'add' && !!route.editId;
+    const file = selectedFile.current;
+    if (!editing && !file) { setFormError('请先选择一张图片。'); return; }
+    const payload = { title: draft.title.trim(), category: draft.category,
+      tags: draft.tags.trim() ? draft.tags.split(/[、,，]/).map(value => value.trim()).filter(Boolean) : editing ? [] : null,
+      note: draft.note.trim(), date: draft.date, art: draft.art };
+    const { id, version } = draft;
+    const submittedScope = sessionEpoch();
+    void runMutation(async () => {
+      let assetId: string | undefined;
+      if (file) {
+        if (uploaded.current?.file !== file) { const asset = await uploadMedia(file); uploaded.current = { file, assetId: asset.assetId }; }
+        assetId = uploaded.current!.assetId;
+      }
+      assertSessionEpoch(submittedScope);
+      return editing ? mutate(`/api/collections/${encoded(id)}`, 'PATCH', { ...payload, version, ...(assetId ? { assetId } : {}) })
+        : mutate('/api/collections', 'POST', { ...payload, id, assetId });
+    }, next => {
+      if (!next.collections.some(item => item.id === id)) throw new Error('服务未返回保存后的收藏，请刷新确认。');
+      releasePreview();
+      navigate(`/collection/${encoded(id)}`);
+      setToast(editing ? '修改已保存' : '收藏已保存，正在准备立体效果');
+    }, 'form');
+  };
+  const filtered = (items: CollectionItem[]) => [...items].filter(item => (source === 'all' || item.source === source)
+    && (!query || `${item.title} ${item.tags.join(' ')} ${item.note}`.toLowerCase().includes(query.toLowerCase())))
+    .sort((left, right) => sort === 'name' ? left.title.localeCompare(right.title, 'zh-CN')
+      : sort === 'oldest' ? left.addedAt - right.addedAt : right.addedAt - left.addedAt);
+  const backBar = () => <button className="back-link" onClick={back}><ArrowLeft size={19} />返回{tabs.find(item => item.id === tab)?.label}</button>;
+  const headingBlock = (title: string, subtitle?: string, action?: ReactNode) => <header className="page-heading"><div><span className="eyebrow">YOUR LIFE, COLLECTED</span><h1>{title}</h1>{subtitle && <p>{subtitle}</p>}</div>{action}</header>;
+  const sectionHeading = (title: string, to?: string, count?: number) => <div className="section-heading"><h2>{title}{count !== undefined && <span>{count}</span>}</h2>{to && <Link to={to}>查看全部<CaretRight size={16} /></Link>}</div>;
+  const searchField = (placeholder: string) => <label className="search-field"><MagnifyingGlass size={20} /><span className="visually-hidden">{placeholder}</span><input type="search" placeholder={placeholder} value={query} onChange={event => setQuery(event.target.value)} /></label>;
+  const sourceTabs = <div className="filter-tabs" role="group" aria-label="收藏来源">{[['all', '全部'], ['mine', '我的经历'], ['friend', '朋友推荐']].map(([value, label]) => <button key={value} aria-pressed={source === value} className={source === value ? 'active' : ''} onClick={() => setSource(value)}>{label}</button>)}</div>;
+  const grid = (items: CollectionItem[]) => items.length ? <div className="collection-grid">{items.map(item => <PhotoCard key={item.id} item={item} />)}</div> : <Empty title="没有找到这件收藏" text="试试其他名字、标签或分类。" />;
+  const toolbar = <div className="page-tools"><Link to={`/search?scope=${tab}`} className="search-trigger"><MagnifyingGlass size={20} />搜索{tab === 'explore' ? '主题与收藏' : tab === 'friends' ? '朋友的分享' : '收藏'}</Link>
+    <Link to="/notifications" className="inbox-link"><Bell size={21} /><span className="visually-hidden">消息</span>{unseen > 0 && <span className="unread-dot" />}</Link></div>;
 
- const renderDetail=()=>{
-  if(!currentItem||page.type!=='detail')return null;
-  const owned=data.collections.some(i=>i.id===currentItem.id),liked=page.communityId?data.likedCommunityIds.includes(page.communityId):false;
-  if(!owned&&!page.shareId&&!page.communityId)return <>{backBar()}<Empty title="这件收藏已不存在" text="可能已在其他页面移除，请返回收藏列表。"/></>;
-  const statusText={reference:'参考素材 · 卡片轻晃预览',queued:'图片已保存，正在排队生成',processing:'正在生成立体模型',blocked:'图片已保存，生成服务暂不可用',ready:'模型已生成',failed:'生成失败，原图仍保留'}[currentItem.generation];
-  return <>{backBar(page.communityId?'探索':page.shareId?'朋友分享':'收藏')}
-   <div className="detail-title"><span className="eyebrow">{catName(currentItem.category)} · {currentItem.source==='friend'?'朋友推荐':'我的经历'}</span><h1>{currentItem.title}</h1><span className="card-meta">{dateLabel(currentItem.date)}</span></div>
-   <div className="detail-stage" data-model-url={currentItem.generation==='ready'?currentItem.modelUrl:undefined}>{currentItem.generation==='ready'&&currentItem.modelUrl?<Suspense fallback={<p role="status">正在打开浮雕…</p>}><ReliefViewer key={currentItem.modelUrl} modelUrl={currentItem.modelUrl} title={currentItem.title} imageUrl={currentItem.customImage}/></Suspense>:<div className="detail-art" style={{transform:`perspective(1000px) rotateY(${rotation}deg)`}}><Art name={currentItem.art} src={currentItem.customImage} alt={currentItem.title}/></div>}</div>
-   {!(currentItem.generation==='ready'&&currentItem.modelUrl)&&<div className="tilt-controls"><IconButton label="向左轻晃" onClick={()=>setRotation(r=>Math.max(-12,r-4))}><ArrowLeft size={18}/></IconButton><button onClick={()=>setRotation(0)}>图片卡片预览</button><IconButton label="向右轻晃" onClick={()=>setRotation(r=>Math.min(12,r+4))}><CaretRight size={20}/></IconButton></div>}
-   <div className="detail-tags">{currentItem.tags.map(t=><span key={t}>{t}</span>)}</div>{currentItem.note&&<p className="detail-note">{currentItem.note}</p>}{currentItem.sender&&<p className="card-meta">来自 {currentItem.sender} 的分享</p>}
-   <div className="generation-status" role="status"><span className={['queued','processing','blocked'].includes(currentItem.generation)?'status-pending':'status-preview'}/>{statusText}</div>
-   {currentItem.generationError&&<p className="field-hint">{currentItem.generationError}</p>}
-   {owned&&['failed','blocked'].includes(currentItem.generation)&&<button className="secondary-button generation-retry" disabled={busy} onClick={()=>void runMutation(()=>mutate(`/api/collections/${encodeURIComponent(currentItem.id)}/retry-generation`),()=>setToast('已重新检查生成任务'))}>重试生成</button>}
-   <div className="detail-actions">{owned?<><button className="primary-button" disabled={busy} onClick={()=>openAdd(currentItem)}><PencilSimple size={18}/>编辑收藏</button><button className="secondary-button" disabled={busy} onClick={()=>showSheet('share')}><Export size={19}/>分享</button><IconButton className="delete-button" label="删除收藏" onClick={()=>showSheet('delete')}><Trash size={20}/></IconButton></>:<button className="primary-button" disabled={busy} onClick={()=>addToCollection(currentItem,page.communityId)}><BookmarkSimple size={20}/>加入我的收藏</button>}
-   {page.communityId&&<IconButton label={liked?'取消喜欢':'喜欢这件纪念品'} className={liked?'liked':''} onClick={()=>{const id=page.communityId!;void runMutation(()=>mutate(`/api/community/${encodeURIComponent(id)}/like`,'PUT',{liked:!liked}));}}><Heart size={23} weight={liked?'fill':'regular'}/></IconButton>}</div></>;
- };
- const renderAdd=()=> <>{backBar()}<div className="page-heading"><h1>{page.type==='add'&&page.editId?'编辑收藏':'留下一件美好'}</h1></div><p className="page-intro">一张照片，把这一刻留在身边。</p><form className="collection-form" onSubmit={submitCollection}><fieldset className="mutation-fields" disabled={busy}><button type="button" className="upload-card" onClick={()=>fileInput.current?.click()}>{draft.customImage||page.type==='add'&&page.editId?<Art name={draft.art} src={draft.customImage} alt="收藏图片预览" ratio={1.5}/>:<div className="upload-placeholder"><Camera size={34} weight="light"/><strong>选择一张照片</strong></div>}<span><Camera size={19}/>{draft.customImage?'更换图片':'选择你的图片'}</span></button><input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" className="file-input" aria-label="选择收藏图片" onChange={e=>{readFile(e.target.files?.[0]);e.target.value='';}}/>{!draft.customImage&&<p className="field-hint">请选择 JPG、PNG 或 WebP 图片，最大 12 MB。</p>}<label className="field-label">名称<KeyboardInput value={draft.title} onChange={e=>setDraft(d=>({...d,title:e.target.value}))} placeholder="给这件收藏起个名字" maxLength={70} aria-label="收藏名称"/></label><fieldset className="category-picker"><legend>分类</legend>{categories.map(c=><button key={c.id} type="button" className={draft.category===c.id?'selected':''} onClick={()=>setDraft(d=>({...d,category:c.id}))}>{c.label}</button>)}</fieldset><label className="field-label">标签 <span>选填，用顿号分隔</span><KeyboardInput value={draft.tags} onChange={e=>setDraft(d=>({...d,tags:e.target.value}))} placeholder="例如：果茶、周末" maxLength={100} aria-label="收藏标签"/></label><label className="field-label">想记住的话 <span>选填</span><KeyboardTextarea value={draft.note} onChange={e=>setDraft(d=>({...d,note:e.target.value}))} placeholder="那天的天气，或想推荐给朋友的理由…" maxLength={500} rows={3} aria-label="收藏备注"/></label>{formError&&<p className="form-error" role="alert">{formError}</p>}{versionConflict&&page.type==='add'&&page.editId&&<button type="button" className="secondary-button wide" onClick={refreshDraftVersion}>读取最新版本，保留草稿</button>}<button className="primary-button wide" type="submit"><Check size={20}/>{busy?'正在保存…':formError?'重试保存':'保存收藏'}</button><p className="field-hint">原图保存到本机工作区，随后自动创建生成任务。</p></fieldset></form></>;
- const renderNotifications=()=> <>{backBar()}<div className="page-heading"><h1>消息</h1><button className="text-button" disabled={busy} onClick={()=>void runMutation(()=>mutate('/api/shares/read-all'),()=>setToast('已全部标为查看'))}>全部已读</button></div>{data.shares.map(s=><button className="notification-row" key={s.id} onClick={()=>openShare(s)}><Art name={s.item.art} alt={s.item.title} ratio={1}/><span><strong>{s.sender} 分享了一件收藏</strong><small>{s.item.title} · {shortDate(s.receivedAt)}</small></span>{s.unread&&<i className="notice-dot"/>}</button>)}</>;
- const renderSearch=()=>{const scope=page.type==='search'?page.scope:undefined;return <>{backBar(scope==='explore'?'探索':scope==='friends'?'朋友分享':'收藏')}<div className="page-heading"><h1>{scope==='explore'?'找一份灵感':scope==='friends'?'找朋友的分享':'找一件收藏'}</h1></div>{searchField(scope==='explore'?'搜索主题、名称或作者':scope==='friends'?'搜索分享者或收藏名称':'搜索名称、标签或备注')}{scope==='explore'?<div className="search-results">{data.community.filter(i=>!query||(i.title+' '+i.author+' '+i.description).includes(query)).map(i=><button className="theme-row" key={i.id} onClick={()=>openCommunity(i)}><Art name={i.art} alt={i.title} ratio={1}/><span><strong>{i.title}</strong><small>{i.author} · {catName(i.category)}</small></span><CaretRight size={18}/></button>)}</div>:scope==='friends'?<div className="search-results">{data.shares.filter(s=>!query||(s.sender+' '+s.item.title).includes(query)).map(s=><button className="theme-row" key={s.id} onClick={()=>openShare(s)}><Art name={s.item.art} alt={s.item.title} ratio={1}/><span><strong>{s.item.title}</strong><small>{s.sender} · {shortDate(s.receivedAt)}</small></span><CaretRight size={18}/></button>)}</div>:<>{sourceTabs}{renderGrid(filtered(data.collections))}</>}</>;};
- let content:ReactNode;
- if(page.type==='category')content=renderCategory(page.category);else if(page.type==='detail')content=renderDetail();else if(page.type==='add')content=renderAdd();else if(page.type==='notifications')content=renderNotifications();else if(page.type==='search')content=renderSearch();else if(page.type==='month')content=<>{backBar('我的')}<div className="page-heading"><h1>{page.month.replace('-','年')}月</h1></div>{renderGrid(filtered(data.collections.filter(i=>i.date.startsWith(page.month))))}</>;else content=tab==='collection'?renderCollection():tab==='explore'?renderExplore():tab==='friends'?renderFriends():renderProfile();
+  const renderCollection = () => <>{toolbar}{headingBlock('我的收藏', '那些舍不得忘记的，慢慢收集在这里。', <Link to="/add" className="primary-button page-add"><Plus size={19} />添加收藏</Link>)}
+    <div className="collection-overview"><span><strong>{data.collections.length}</strong> 件珍藏</span><span><strong>{new Set(data.collections.map(item => item.category)).size}</strong> 个分类</span><span>每张图片，都有自己的故事</span></div>
+    {data.collections.length ? <>{sectionHeading('最近收藏')}<div className="recent-grid">{[...data.collections].sort((a, b) => b.addedAt - a.addedAt).slice(0, 3).map(item => <PhotoCard key={item.id} item={item} hero />)}</div>
+      {[categories[0], categories[2], categories[1], categories[3]].filter(category => data.collections.some(item => item.category === category.id)).map(category => <section className="collection-section" key={category.id}>
+        {sectionHeading(category.label, `/category/${category.id}`, data.collections.filter(item => item.category === category.id).length)}
+        <div className="collection-rail" aria-label={`${category.label}收藏`}>{data.collections.filter(item => item.category === category.id).slice(0, 8).map(item => <PhotoCard key={item.id} item={item} />)}</div>
+      </section>)}</> : <Empty><Link to="/add" className="primary-button">添加第一件收藏</Link></Empty>}</>;
+  const renderCategory = (category: Category) => <>{backBar()}{headingBlock(catName(category), `${data.collections.filter(item => item.category === category).length} 件收藏`)}
+    <div className="collection-toolbar">{searchField(`搜索${catName(category)}收藏`)}<button className="sort-button" onClick={() => showSheet('sort')}>{sort === 'recent' ? '最近添加' : sort === 'oldest' ? '最早添加' : '按名称排序'}<CaretDown size={17} /></button></div>{sourceTabs}{grid(filtered(data.collections.filter(item => item.category === category)))}</>;
+  const exploreItems = data.community.filter(item => exploreCategory === 'featured' || item.category === exploreCategory)
+    .sort((a, b) => (b.saves * 3 + b.likes * 2 + Math.log1p(b.exposures)) - (a.saves * 3 + a.likes * 2 + Math.log1p(a.exposures)));
+  const renderExplore = () => <>{toolbar}{headingBlock('探索', '从别人的珍藏里，遇见下一份生活灵感。')}
+    <div className="filter-tabs" role="group" aria-label="探索分类">{[{ id: 'featured', label: '精选' }, ...categories].map(category => <button key={category.id} aria-pressed={exploreCategory === category.id} className={exploreCategory === category.id ? 'active' : ''} onClick={() => setExploreCategory(category.id)}>{category.label}</button>)}</div>
+    <div className="collection-grid explore-grid">{exploreItems.map(item => <div key={item.id}><PhotoCard item={communityItem(item)} to={`/community/${encoded(item.id)}`} onNavigate={() => viewCommunity(item.id)} /><p className="community-byline">{item.author}<span>{item.saves} 次收藏 · {item.likes} 人喜欢</span></p></div>)}</div>
+    <section className="collection-section">{sectionHeading('社区人气榜')}<div className="ranking-list">{exploreItems.slice(0, 5).map((item, index) => <Link key={item.id} to={`/community/${encoded(item.id)}`} className="rank-row" onNavigate={() => viewCommunity(item.id)}><span className="rank-number">{String(index + 1).padStart(2, '0')}</span><Art name={item.art} src={item.customImage} alt={item.title} ratio={1} /><span><strong>{item.title}</strong><small>{catName(item.category)} · {item.author}</small></span><ArrowUpRight size={18} /></Link>)}</div><p className="section-footnote">当前为本次测试的统一初始内容，互动只影响你的账户。</p></section></>;
+  const renderFriends = () => {
+    const shares = data.shares.filter(item => !onlyUnread || item.unread);
+    return <>{toolbar}{headingBlock('朋友分享', '收到的每一份美好，都可以留在自己的收藏里。')}
+      <div className="filter-tabs" role="group" aria-label="分享筛选"><button aria-pressed={!onlyUnread} className={!onlyUnread ? 'active' : ''} onClick={() => setOnlyUnread(false)}>全部分享</button><button aria-pressed={onlyUnread} className={onlyUnread ? 'active' : ''} onClick={() => setOnlyUnread(true)}>未查看{unseen > 0 && <span className="count-pill">{unseen}</span>}</button></div>
+      {shares.length ? <div className="collection-grid friends-grid">{shares.map(item => <article className="friend-card" key={item.id}><div className="sender-line"><span className="letter-avatar">{item.sender.slice(0, 1)}</span><span><strong>{item.sender}</strong><small>{dateLabel(item.receivedAt)}</small></span>{item.unread && <span className="notice-label">未查看</span>}</div>
+        <PhotoCard item={item.item} to={`/shares/${encoded(item.id)}`} onNavigate={() => viewShare(item.id)} hero /><p className="share-note">{item.item.note}</p><button className="text-button" disabled={busy} onClick={() => addShared(item.id)}><BookmarkSimple size={18} />收藏这份分享</button></article>)}</div> : <Empty title="都已经看过了" text="下一份来自朋友的美好，正在路上。" />}</>;
+  };
+  const renderProfile = () => {
+    const months = [...new Set(data.collections.map(item => item.date.slice(0, 7)))].sort().reverse();
+    return <>{headingBlock('我的', '把喜欢的日子，收成自己的故事。')}<div className="profile-card"><span className="profile-avatar">{(data.profile.name || session.user.name || session.user.email).slice(0, 1)}</span><div><h2>{data.profile.name || session.user.name}</h2><p>{data.profile.bio}</p><small>{session.user.email}</small></div><button className="secondary-button" onClick={() => showSheet('profile')}><PencilSimple size={17} />编辑资料</button></div>
+      <div className="collection-overview"><span><strong>{data.collections.length}</strong> 件收藏</span><span><strong>{months.length}</strong> 个月的回忆</span></div>
+      {sectionHeading('最近收藏', '/collection')}<div className="collection-rail">{[...data.collections].sort((a, b) => b.addedAt - a.addedAt).slice(0, 5).map(item => <PhotoCard key={item.id} item={item} />)}</div>
+      <section className="collection-section">{sectionHeading('按月回看')}<div className="month-grid">{months.map(month => {
+        const items = data.collections.filter(item => item.date.startsWith(month));
+        return <Link key={month} to={`/month/${month}`} className="month-card"><Art name={items[0].art} src={items[0].customImage} alt={`${month}的收藏`} ratio={1.8} /><div><strong>{month.slice(0, 4)}年{Number(month.slice(5))}月</strong><span>{items.length} 件收藏</span></div></Link>;
+      })}</div></section><div className="settings-list"><button onClick={() => showSheet('sync')}><Cloud size={22} /><span>账户与保存状态</span><CaretRight size={18} /></button><button onClick={() => showSheet('settings')}><GearSix size={22} /><span>隐私与数据导出</span><CaretRight size={18} /></button></div></>;
+  };
+  const renderDetail = () => {
+    if (!currentItem) return <>{backBar()}<Empty title="这件收藏已不存在" text="请返回收藏列表查看其他内容。" /></>;
+    const statusText = { reference: '图片收藏', queued: '图片已保存，正在排队生成', processing: '正在生成立体效果', blocked: '图片已保存，生成服务暂不可用', ready: '立体效果已准备好', failed: '生成未完成，原图仍保留' }[currentItem.generation];
+    return <>{backBar()}<div className="detail-layout"><div className="detail-stage" data-model-url={currentItem.generation === 'ready' ? currentItem.modelUrl : undefined}>
+      {currentItem.generation === 'ready' && currentItem.modelUrl ? <Suspense fallback={<p role="status">正在打开浮雕…</p>}><ReliefViewer key={currentItem.modelUrl} modelUrl={currentItem.modelUrl} title={currentItem.title} imageUrl={currentItem.customImage} /></Suspense>
+        : <Art name={currentItem.art} src={currentItem.customImage} alt={currentItem.title} />}</div>
+      <section className="detail-information"><span className="eyebrow">{catName(currentItem.category)} · {community ? '社区推荐' : currentItem.source === 'friend' ? '朋友推荐' : '我的经历'}</span><h1>{currentItem.title}</h1>{currentItem.date && <p className="card-meta">{dateLabel(currentItem.date)}</p>}
+        <div className="detail-tags">{currentItem.tags.map(tag => <span key={tag}>{tag}</span>)}</div>{currentItem.note && <p className="detail-note">{currentItem.note}</p>}{currentItem.sender && <p className="card-meta">来自 {currentItem.sender} 的分享</p>}
+        <p className="generation-status" role="status"><span className={hasActiveJobs ? 'pending' : ''} />{statusText}</p>
+        {owned && ['failed', 'blocked'].includes(currentItem.generation) && <button className="secondary-button" disabled={busy} onClick={() => void runMutation(() => mutate(`/api/collections/${encoded(currentItem.id)}/retry-generation`), () => setToast('已重新检查生成任务'))}>重试生成</button>}
+        <div className="detail-actions">{owned ? <><Link to={`/collection/${encoded(currentItem.id)}/edit`} className="primary-button" disabled={busy}><PencilSimple size={18} />编辑收藏</Link><button className="secondary-button" disabled={busy} onClick={() => showSheet('share')}><Export size={18} />分享</button><IconButton label="删除收藏" disabled={busy} onClick={() => showSheet('delete')}><Trash size={20} /></IconButton></>
+          : <button className="primary-button" disabled={busy} onClick={() => addShared(share?.id, community?.id)}><BookmarkSimple size={19} />加入我的收藏</button>}
+          {community && <IconButton label={data.likedCommunityIds.includes(community.id) ? '取消喜欢' : '喜欢这件纪念品'} disabled={busy} onClick={() => void runMutation(() => mutate(`/api/community/${encoded(community.id)}/like`, 'PUT', { liked: !data.likedCommunityIds.includes(community.id) }))}><Heart size={22} weight={data.likedCommunityIds.includes(community.id) ? 'fill' : 'regular'} /></IconButton>}
+        </div>
+      </section></div></>;
+  };
+  const renderAdd = () => {
+    if (route.type === 'add' && route.editId && !data.collections.some(item => item.id === route.editId)) return <>{backBar()}<Empty title="这件收藏已不存在" /></>;
+    return <div className="form-page">{backBar()}{headingBlock(route.type === 'add' && route.editId ? '编辑收藏' : '留下一件美好', '一张照片，把这一刻留在身边。')}
+      <form className="collection-form" onSubmit={submitCollection}><fieldset disabled={busy} className="mutation-fields">
+        <div className="upload-column"><button type="button" className="upload-card" onClick={() => fileInput.current?.click()}>{draft.customImage ? <Art name={draft.art} src={draft.customImage} alt="收藏图片预览" ratio={1.2} /> : <div className="upload-placeholder"><Camera size={38} weight="light" /><strong>选择一张照片</strong><span>JPG、PNG 或 WebP，最大 12 MB</span></div>}<span className="upload-label"><Camera size={18} />{draft.customImage ? '更换图片' : '选择图片'}</span></button><input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp" className="visually-hidden" tabIndex={-1} aria-label="选择收藏图片" onChange={event => { readFile(event.target.files?.[0]); event.target.value = ''; }} /><p className="field-hint">图片保存后会自动准备立体效果，你可以先继续浏览。</p></div>
+        <div className="form-column"><label className="field-label">名称<input value={draft.title} onChange={event => setDraft(previous => ({ ...previous, title: event.target.value }))} placeholder="给这件收藏起个名字" maxLength={70} required /></label>
+          <fieldset className="category-picker"><legend>分类</legend>{categories.map(category => <button key={category.id} type="button" className={draft.category === category.id ? 'selected' : ''} aria-pressed={draft.category === category.id} onClick={() => setDraft(previous => ({ ...previous, category: category.id }))}>{category.label}</button>)}</fieldset>
+          <label className="field-label">日期<input type="date" value={draft.date} required onChange={event => setDraft(previous => ({ ...previous, date: event.target.value }))} /></label>
+          <label className="field-label">标签 <span>选填，用顿号分隔</span><input value={draft.tags} onChange={event => setDraft(previous => ({ ...previous, tags: event.target.value }))} placeholder="例如：果茶、周末" maxLength={100} /></label>
+          <label className="field-label">想记住的话 <span>选填</span><textarea value={draft.note} onChange={event => setDraft(previous => ({ ...previous, note: event.target.value }))} placeholder="那天的天气，或想推荐给朋友的理由…" maxLength={500} rows={4} /></label>
+          {formError && <p className="form-error" role="alert">{formError}</p>}
+          {versionConflict && <button type="button" className="secondary-button" onClick={() => void runMutation(() => getState(), next => {
+            const item = next.collections.find(item => item.id === draft.id);
+            if (!item) throw new Error('收藏已被删除，当前草稿仍保留。');
+            setDraft(previous => ({ ...previous, version: item.version }));
+            setVersionConflict(false);
+            setFormError('已读取最新版本。再次保存会使用当前草稿更新内容。');
+          }, 'form')}>读取最新版本，保留草稿</button>}
+          <button className="primary-button save-button" type="submit"><Check size={19} />{busy ? '正在保存…' : '保存收藏'}</button>
+        </div></fieldset></form></div>;
+  };
+  const renderSearch = () => {
+    const scope = route.type === 'search' ? route.scope : 'collection';
+    return <>{backBar()}{headingBlock(scope === 'explore' ? '找一份灵感' : scope === 'friends' ? '找朋友的分享' : '找一件收藏')}{searchField('搜索名称、标签或备注')}
+      {scope === 'explore' ? <div className="collection-grid search-results">{data.community.filter(item => !query || `${item.title} ${item.author} ${item.description}`.includes(query)).map(item => <PhotoCard key={item.id} item={communityItem(item)} to={`/community/${encoded(item.id)}`} />)}</div>
+        : scope === 'friends' ? <div className="collection-grid search-results">{data.shares.filter(item => !query || `${item.sender} ${item.item.title}`.includes(query)).map(item => <PhotoCard key={item.id} item={item.item} to={`/shares/${encoded(item.id)}`} />)}</div> : <>{sourceTabs}{grid(filtered(data.collections))}</>}</>;
+  };
+  let content: ReactNode;
+  if (route.type === 'main') content = route.tab === 'collection' ? renderCollection() : route.tab === 'explore' ? renderExplore() : route.tab === 'friends' ? renderFriends() : renderProfile();
+  else if (route.type === 'category') content = renderCategory(route.category);
+  else if (route.type === 'detail') content = renderDetail();
+  else if (route.type === 'add') content = renderAdd();
+  else if (route.type === 'search') content = renderSearch();
+  else if (route.type === 'month') content = <>{backBar()}{headingBlock(`${route.month.replace('-', '年')}月`)}{grid(filtered(data.collections.filter(item => item.date.startsWith(route.month))))}</>;
+  else if (route.type === 'notifications') content = <>{backBar()}{headingBlock('消息', undefined, <button className="text-button" disabled={busy} onClick={() => void runMutation(() => mutate('/api/shares/read-all'), () => setToast('已全部标为查看'))}>全部已读</button>)}<div className="notifications-list">{data.shares.map(item => <Link key={item.id} to={`/shares/${encoded(item.id)}`} className="notification-row" onNavigate={() => viewShare(item.id)}><Art name={item.item.art} src={item.item.customImage} alt={item.item.title} ratio={1} /><span><strong>{item.sender} 分享了一件收藏</strong><small>{item.item.title} · {dateLabel(item.receivedAt)}</small></span>{item.unread && <span className="notice-label">未查看</span>}</Link>)}</div></>;
+  else content = <Empty title="没有找到这个页面" text="返回收藏，继续看看喜欢的日子。"><Link to="/collection" className="primary-button">回到我的收藏</Link></Empty>;
 
- return <div className="memoverse-shell" aria-busy={busy}>{!ready?<MobileScroll className="app-screen"><div className="screen-content"><Empty title={storageError?'暂时无法打开收藏':'正在打开你的收藏'} text={storageError||'美好值得被好好保存。'} action={storageError?<button className="primary-button" onClick={()=>setBootAttempt(n=>n+1)}>重试连接</button>:undefined}/></div></MobileScroll>:<MobileScroll key={`${tab}-${page.type}-${page.type==='category'?page.category:page.type==='detail'?page.item.id:''}`} className="app-screen"><main className={`screen-content ${page.type==='main'?'home-content':`page-${page.type}`}`} data-page={page.type==='main'?tab:page.type}>{(storageError||pollError)&&<div className="storage-error" role="alert"><WarningCircle size={18}/><span>{storageError||pollError}</span><button disabled={busy} onClick={()=>{if(storageError&&retryAction.current)retryAction.current();else void getState().then(state=>{acceptState(state);setPollError('');setStorageError('');}).catch(error=>setStorageError(errorMessage(error)));}}>重试</button></div>}{content}</main></MobileScroll>}
-  {ready&&!isKeyboardVisible&&page.type!=='add'&&<nav className="bottom-nav" aria-label="主导航" style={{bottom:bottomInset}}><button className={tab==='collection'?'selected':''} onClick={()=>changeTab('collection')} aria-current={tab==='collection'?'page':undefined}><Books size={26} weight={tab==='collection'?'fill':'light'}/><span>收藏</span></button><button className={tab==='explore'?'selected':''} onClick={()=>changeTab('explore')} aria-current={tab==='explore'?'page':undefined}><Compass size={26} weight={tab==='explore'?'fill':'light'}/><span>探索</span></button><button className="create-button" aria-label="添加收藏" onClick={()=>openAdd()}><span><Plus size={29} weight="light"/></span></button><button className={tab==='friends'?'selected':''} onClick={()=>changeTab('friends')} aria-current={tab==='friends'?'page':undefined}><Users size={27} weight={tab==='friends'?'fill':'light'}/><span>朋友分享</span></button><button className={tab==='profile'?'selected':''} onClick={()=>changeTab('profile')} aria-current={tab==='profile'?'page':undefined}><User size={26} weight={tab==='profile'?'fill':'light'}/><span>我的</span></button></nav>}
-  {toast&&<div className="toast" role="status" style={{bottom:bottomInset+88}}><Check size={16}/>{toast}</div>}
-  <BottomSheet open={sheet!==null} onOpenChange={open=>{if(!open&&!mutationLock.current)setSheet(null);}} title={sheet==='profile'?'编辑资料':sheet==='sync'?'账户与同步':sheet==='settings'?'设置与隐私':sheet==='sort'?'收藏排序':sheet==='delete'?'删除这件收藏？':'分享这件美好'} snap={sheet==='delete'?.4:.68}><div className="sheet-body">{sheetError&&<p className="form-error" role="alert">{sheetError} 请重试，未提交内容仍保留。</p>}
-   {sheet==='profile'&&<form onSubmit={e=>{e.preventDefault();void runMutation(()=>mutate('/api/profile','PATCH',profileDraft),()=>{keyboard.hide();setSheet(null);setToast('资料已保存');},'sheet');}}><fieldset className="mutation-fields" disabled={busy}><label className="field-label">昵称<KeyboardInput aria-label="昵称" value={profileDraft.name} maxLength={24} onChange={e=>setProfileDraft(d=>({...d,name:e.target.value}))}/></label><label className="field-label">简介<KeyboardTextarea aria-label="简介" value={profileDraft.bio} maxLength={100} onChange={e=>setProfileDraft(d=>({...d,bio:e.target.value}))}/></label><button className="primary-button wide" type="submit">{busy?'正在保存…':'保存资料'}</button></fieldset></form>}
-   {sheet==='sort'&&<div className="sheet-options">{[['recent','最近添加'],['oldest','最早添加'],['name','按名称排序']].map(([v,label])=><button key={v} onClick={()=>{setSort(v);setSheet(null);}}>{label}{sort===v&&<Check size={20}/>}</button>)}</div>}
-   {sheet==='sync'&&<><div className="status-panel"><Cloud size={32} weight="light"/><strong>本地收藏已保留</strong><p>共 {data.collections.length} 件收藏，数据保存在本机 SQLite 与媒体目录。</p></div><div className="info-row"><span>当前工作区</span><strong>本机单用户工作区</strong></div><div className="info-row"><span>云端同步</span><strong>尚未连接</strong></div><div className="info-row"><span>AnyImage 生成</span><strong>{hasActiveJobs?'任务排队或等待服务':'查看收藏任务状态'}</strong></div><p className="field-hint">已连接本机服务。真实模型是否生成以每件收藏的任务状态为准。正式认证、云同步和近场传输尚未接通。</p></>}
-   {sheet==='settings'&&<><div className="info-row"><span>收藏图片</span><strong>保存在本机媒体目录</strong></div><p className="sheet-copy">你的导入图片不会自动公开，也不会发送到第三方服务。收藏、探索中的初始内容用于界面演示。</p><p className="sheet-copy">旧浏览器收藏保留为迁移前备份；新修改写入本机服务。请导出 ZIP 备份以同时保存记录与图片。正式账号隔离与对象存储同步尚未接入。</p><button className="secondary-button wide" disabled={busy} onClick={async()=>{if(mutationLock.current)return;mutationLock.current=true;setBusy(true);setSheetError('');try{await downloadBackup();setToast('已导出含图片的本机备份');}catch(error){setSheetError(errorMessage(error));}finally{mutationLock.current=false;setBusy(false);}}}><Export size={19}/>导出本地备份</button></>}
-   {sheet==='delete'&&currentItem&&<><p className="sheet-copy">“{currentItem.title}”会从本机工作区移除，朋友的独立副本不受影响。</p><button className="danger-button wide" disabled={busy} onClick={()=>void runMutation(()=>mutate(`/api/collections/${encodeURIComponent(currentItem.id)}`,'DELETE',{version:currentItem.version}),()=>{setSheet(null);setPages([{type:'main'}]);setTab('collection');setToast('已从本机工作区移除');},'sheet')}>删除收藏</button><button className="secondary-button wide" disabled={busy} onClick={()=>setSheet(null)}>保留收藏</button></>}
-   {sheet==='share'&&currentItem&&<><div className="share-preview"><Art name={currentItem.art} src={currentItem.customImage} alt={currentItem.title} ratio={1.5}/><strong>{currentItem.title}</strong></div><p className="sheet-copy">这份收藏已经准备好。两台设备间的近场传输将在后续接入。</p><button className="secondary-button wide" onClick={async()=>{try{await navigator.clipboard.writeText(`${currentItem.title}\n${currentItem.note}\n${currentItem.tags.join(' · ')}`);setToast('推荐文字已复制');}catch{setToast('当前浏览器暂不支持复制');}}}>复制推荐文字</button></>}
-  </div></BottomSheet>
- </div>;
+  const logout = async () => {
+    if (logoutBusy) return;
+    setLogoutBusy(true);
+    try { await signOut(); }
+    catch (error) { if (alive.current) { setStorageError(errorMessage(error)); setLogoutBusy(false); } }
+  };
+  const navLinks = tabs.map(({ id, label, icon: Icon }) => <Link key={id} to={'/' + id} current={tab === id} className={tab === id ? 'selected' : ''}><Icon size={23} weight={tab === id ? 'fill' : 'regular'} /><span>{label}</span>{id === 'friends' && unseen > 0 && <span className="nav-count">{unseen}</span>}</Link>);
+
+  return <div className="memoverse-shell" data-authenticated="true" data-user-id={session.user.id}>
+    <a href="#main-content" className="skip-link">跳到主要内容</a>
+    <aside className="sidebar"><Link to="/collection" className="brand-link"><Brand /></Link><p className="sidebar-caption">给记忆一个位置</p><nav aria-label="主导航">{navLinks}</nav><Link to="/add" className="primary-button sidebar-add"><Plus size={20} />添加收藏</Link>
+      <div className="sidebar-account"><Link to="/profile"><span className="letter-avatar">{(data.profile.name || session.user.name || session.user.email).slice(0, 1)}</span><span><strong>{data.profile.name || session.user.name}</strong><small>{session.user.email}</small></span></Link><button onClick={() => void logout()} disabled={logoutBusy}><SignOut size={18} />{logoutBusy ? '正在退出…' : '退出登录'}</button></div>
+    </aside>
+    <header className="mobile-header"><Link to="/collection"><Brand /></Link><button className="icon-button" onClick={() => void logout()} disabled={logoutBusy} aria-label="退出登录"><SignOut size={21} /></button></header>
+    <main id="main-content" className="workspace" aria-busy={busy}><div ref={heading} className="page-focus-anchor" tabIndex={-1} />
+      {!ready ? <Empty title={storageError ? '暂时无法打开收藏' : '正在打开你的收藏'} text={storageError || '很快就好。'}>{storageError && <button className="primary-button" onClick={() => setBootAttempt(value => value + 1)}>重试连接</button>}</Empty> : <>
+        {(storageError || pollError) && <div className="storage-error" role="alert"><WarningCircle size={20} /><span>{storageError || pollError}</span><button disabled={busy} onClick={() => {
+          if (storageError && retryAction.current) retryAction.current();
+          else void getState().then(state => { if (alive.current) { acceptState(state); setPollError(''); setStorageError(''); } }).catch(error => { if (alive.current) setStorageError(errorMessage(error)); });
+        }}>重试</button></div>}{content}
+      </>}
+    </main>
+    <nav className="mobile-navigation" aria-label="手机主导航">{navLinks.slice(0, 2)}<Link to="/add" className="mobile-add"><Plus size={25} /><span>添加</span></Link>{navLinks.slice(2)}</nav>
+    {toast && <div className="toast" role="status"><Check size={17} />{toast}</div>}
+    <WebDialog open={sheet !== null} onOpenChange={open => { if (!open && !busy) setSheet(null); }} title={sheet === 'profile' ? '编辑资料' : sheet === 'sync' ? '账户与保存状态' : sheet === 'settings' ? '隐私与数据导出' : sheet === 'sort' ? '收藏排序' : sheet === 'delete' ? '删除这件收藏？' : '分享这件美好'}>
+      {sheetError && <p className="form-error" role="alert">{sheetError}</p>}
+      {sheet === 'profile' && <form onSubmit={event => { event.preventDefault(); void runMutation(() => mutate('/api/profile', 'PATCH', profileDraft), () => { setSheet(null); setToast('资料已保存'); }, 'sheet'); }}><fieldset disabled={busy} className="mutation-fields"><label className="field-label">昵称<input value={profileDraft.name} maxLength={24} required onChange={event => setProfileDraft(previous => ({ ...previous, name: event.target.value }))} /></label><label className="field-label">简介<textarea value={profileDraft.bio} maxLength={100} rows={3} onChange={event => setProfileDraft(previous => ({ ...previous, bio: event.target.value }))} /></label><button className="primary-button wide" type="submit">{busy ? '正在保存…' : '保存资料'}</button></fieldset></form>}
+      {sheet === 'sort' && <div className="sheet-options">{[['recent', '最近添加'], ['oldest', '最早添加'], ['name', '按名称排序']].map(([value, label]) => <button key={value} onClick={() => { setSort(value); setSheet(null); }}>{label}{sort === value && <Check size={20} />}</button>)}</div>}
+      {sheet === 'sync' && <><div className="status-panel"><Cloud size={35} weight="light" /><h3>收藏已保存在你的账户中</h3><p>共 {data.collections.length} 件收藏</p></div><div className="info-row"><span>登录邮箱</span><strong>{session.user.email}</strong></div><div className="info-row"><span>立体生成</span><strong>{engine?.available === false ? '服务暂不可用，图片已保留' : hasActiveJobs ? '任务处理中' : '查看各收藏的生成状态'}</strong></div><p className="sheet-copy">你可以在浏览器登录同一账户，继续查看和管理收藏。</p></>}
+      {sheet === 'settings' && <><p className="sheet-copy">导入的图片不会自动发布到社区。你可以导出当前账户的收藏记录、原图与已有模型。</p><button className="secondary-button wide" disabled={busy} onClick={async () => { if (mutationLock.current) return; mutationLock.current = true; setBusy(true); setSheetError(''); try { await downloadBackup(); if (alive.current) setToast('备份已开始下载'); } catch (error) { if (alive.current) setSheetError(errorMessage(error)); } finally { mutationLock.current = false; if (alive.current) setBusy(false); } }}><Export size={19} />导出账户备份</button></>}
+      {sheet === 'delete' && currentItem && <><p className="sheet-copy">“{currentItem.title}”将从你的收藏中移除，其他账户的独立副本不受影响。</p><button className="danger-button wide" disabled={busy} onClick={() => void runMutation(() => mutate(`/api/collections/${encoded(currentItem.id)}`, 'DELETE', { version: currentItem.version }), () => { setSheet(null); navigate('/collection'); setToast('已删除收藏'); }, 'sheet')}>删除收藏</button><button className="secondary-button wide" disabled={busy} onClick={() => setSheet(null)}>保留收藏</button></>}
+      {sheet === 'share' && currentItem && <><Art name={currentItem.art} src={currentItem.customImage} alt={currentItem.title} ratio={1.5} /><p className="sheet-copy">先把这段推荐文字分享给朋友。面对面传送完整收藏的功能将在后续客户端中提供。</p><button className="secondary-button wide" onClick={async () => { try { await navigator.clipboard.writeText(`${currentItem.title}\n${currentItem.note}\n${currentItem.tags.join(' · ')}`); setToast('推荐文字已复制'); } catch { setSheetError('暂时无法复制，请检查浏览器权限。'); } }}>复制推荐文字</button></>}
+    </WebDialog>
+  </div>;
 }

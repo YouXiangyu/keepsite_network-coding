@@ -1,96 +1,194 @@
-import { test, after } from 'node:test';
+import { test, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
-import { makeSeedData, validateData } from '../src/data.ts';
+import { signedSession, serverState } from './web-fixtures.mjs';
 
-// Node 24 strips TypeScript; resolve the app's extensionless Vite import for Node.
 const apiUrl = new URL('../src/api.ts', import.meta.url).href;
-const hook = registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (context.parentURL === apiUrl && specifier === './data') {
-      return { url: new URL('../src/data.ts', import.meta.url).href, shortCircuit: true };
-    }
-    return nextResolve(specifier, context);
-  },
-});
-const { planInitialization, getState, mutate, uploadMedia, ApiError, API_BASE } = await import(apiUrl);
+const hook = registerHooks({ resolve(specifier, context, nextResolve) {
+  if (context.parentURL === apiUrl && specifier === './data') return { url: new URL('../src/data.ts', import.meta.url).href, shortCircuit: true };
+  return nextResolve(specifier, context);
+} });
+const api = await import(apiUrl);
 hook.deregister();
 const originalFetch = globalThis.fetch;
+afterEach(() => { api.installSession(null); globalThis.fetch = originalFetch; });
 after(() => { globalThis.fetch = originalFetch; });
-const state = () => ({ initialized: true, serverId: 'local-server', revision: 7, data: makeSeedData() });
 
-test('migration preserves existing snapshots and retries with the same identity', () => {
-  const data = makeSeedData();
-  data.collections[0].title = '我的旧收藏';
-  data.collections[0].customImage = 'data:image/png;base64,aGVsbG8=';
-  const source = { migrationId: 'stable-id', completedServerIds: [], data };
-  const first = planInitialization(source, { initialized: false, serverId: 'local-server' });
-  const retry = planInitialization(source, { initialized: true, serverId: 'local-server' });
-  assert.equal(first.migrationId, retry.migrationId);
-  assert.equal(first.data, data);
-  assert.equal(retry.data.collections[0].customImage, data.collections[0].customImage);
+test('anonymous code cannot request workspace, upload, model or mutations', async () => {
+  let requests = 0;
+  globalThis.fetch = async () => { requests += 1; throw new Error('unexpected fetch'); };
+  await assert.rejects(api.getState(), error => error.status === 401);
+  await assert.rejects(api.mutate('/api/collections', 'POST', {}), error => error.status === 401);
+  await assert.rejects(api.uploadMedia(new File(['x'], 'image.png', { type: 'image/png' })), error => error.status === 401);
+  await assert.rejects(api.fetchModel('/api/models/model/model.glb', new AbortController().signal), error => error.status === 401);
+  assert.equal(requests, 0);
 });
 
-test('completed migration never overwrites later server changes or silently reseeds', () => {
-  const source = { migrationId: 'stable-id', completedServerIds: ['local-server'], data: makeSeedData() };
-  assert.equal(planInitialization(source, { initialized: true, serverId: 'local-server' }), null);
-  assert.throws(() => planInitialization(source, { initialized: false, serverId: 'local-server' }), /不会重新写入/);
-});
-
-test('only a genuinely empty workspace without legacy data receives seed content', () => {
-  const source = { migrationId: 'new-browser', completedServerIds: [] };
-  assert.equal(planInitialization(source, { initialized: true, serverId: 'existing-server' }), null);
-  assert.equal(planInitialization(source, { initialized: false, serverId: 'empty-server' }).data.collections.length, 14);
-});
-
-test('legacy pending state can be validated for migration but is not an API state', () => {
-  const data = makeSeedData();
-  delete data.collections[0].version;
-  data.collections[0].generation = 'pending';
-  assert.doesNotThrow(() => validateData(data, true));
-  assert.throws(() => validateData(data), /格式异常/);
-});
-
-test('API state resolves media URLs without changing record IDs', async () => {
-  const response = state();
-  response.data.collections[0].customImage = '/api/media/photo';
-  response.data.collections[0].modelUrl = '/api/models/model.glb';
-  globalThis.fetch = async () => Response.json(response);
-  const result = await getState();
-  assert.equal(result.data.collections[0].id, response.data.collections[0].id);
-  assert.equal(result.data.collections[0].customImage, `${API_BASE}/api/media/photo`);
-  assert.equal(result.data.collections[0].modelUrl, `${API_BASE}/api/models/model.glb`);
-});
-
-test('resource mutations send explicit JSON and local client header', async () => {
-  globalThis.fetch = async (url, options) => {
-    assert.equal(url, `${API_BASE}/api/collections/abc`);
-    assert.equal(options.method, 'PATCH');
-    assert.equal(options.headers.get('X-MemoVerse-Client'), 'local');
-    assert.deepEqual(JSON.parse(options.body), { version: 2, title: '保留草稿' });
-    return Response.json(state());
+test('session lookup is same-origin and never initializes account data', async () => {
+  const requests = [];
+  globalThis.fetch = async (path, options) => {
+    requests.push(path);
+    assert.equal(options.credentials, 'same-origin');
+    return Response.json({ authenticated: false, configured: true, providers: { google: false, email: true } });
   };
-  assert.equal((await mutate('/api/collections/abc', 'PATCH', { version: 2, title: '保留草稿' })).revision, 7);
+  assert.equal((await api.getSession()).authenticated, false);
+  assert.deepEqual(requests, ['/api/auth/session']);
 });
 
-test('conflicts and service failures reject instead of returning fake success', async () => {
-  globalThis.fetch = async () => Response.json({ detail: '版本已更新' }, { status: 409 });
-  await assert.rejects(() => mutate('/api/collections/abc', 'PATCH', {}), error => error instanceof ApiError && error.status === 409 && error.message === '版本已更新');
-  globalThis.fetch = async () => { throw new TypeError('connection refused'); };
-  await assert.rejects(() => getState(), /无法连接本机服务/);
+test('invalid session identity cannot retain a previously active account', async () => {
+  api.installSession(signedSession('a'));
+  assert.throws(() => api.installSession({ ...signedSession('b'), user: { id: 42, email: 'b@example.test', name: 'B' } }), error => error.status === 401);
+  await assert.rejects(api.getState(), error => error.status === 401);
 });
 
-test('uploads carry the original file as multipart, not a Data URL JSON payload', async () => {
+test('login preserves password bytes and uses the Web client header', async () => {
+  const password = '  Aa123456789!  ';
+  globalThis.fetch = async (path, options) => {
+    assert.equal(path, '/api/auth/login');
+    assert.equal(options.headers.get('X-MemoVerse-Client'), 'web');
+    assert.equal(options.credentials, 'same-origin');
+    assert.equal(JSON.parse(options.body).password, password);
+    return Response.json(signedSession());
+  };
+  assert.equal((await api.signIn('a@example.test', password)).user.id, 'a');
+});
+
+test('unverified email retains actionable error code', async () => {
+  globalThis.fetch = async () => Response.json({ detail: '请验证邮箱', code: 'email_unverified' }, { status: 403 });
+  await assert.rejects(api.signIn('a@example.test', 'A-password-12!'), error => error.status === 403 && error.code === 'email_unverified');
+});
+
+test('email codes are passed verbatim without length assumptions', async () => {
+  const code = ' long-code-AB12 ';
+  globalThis.fetch = async (path, options) => {
+    assert.equal(JSON.parse(options.body).code, code);
+    assert.equal(options.headers.get('X-MemoVerse-Client'), 'web');
+    return Response.json(path.endsWith('verify-email') ? { verified: true } : { ok: true });
+  };
+  assert.equal((await api.verifyEmail('a@example.test', code)).verified, true);
+  await api.resetPassword('a@example.test', code, 'A-password-12!');
+});
+
+test('authenticated writes attach the active CSRF token and preserve versions', async () => {
+  api.installSession(signedSession());
+  globalThis.fetch = async (path, options) => {
+    assert.equal(path, '/api/collections/item-1');
+    assert.equal(options.headers.get('X-MemoVerse-Client'), 'web');
+    assert.equal(options.headers.get('X-CSRF-Token'), 'test-csrf-a');
+    assert.equal(options.credentials, 'same-origin');
+    assert.deepEqual(JSON.parse(options.body), { version: 2, title: '保留草稿' });
+    return Response.json(serverState());
+  };
+  assert.equal((await api.mutate('/api/collections/item-1', 'PATCH', { version: 2, title: '保留草稿' })).revision, 7);
+});
+
+test('a state from another user invalidates the current session', async () => {
+  api.installSession(signedSession());
+  let expired = 0;
+  const unsubscribe = api.onSessionExpired(() => { expired += 1; });
+  globalThis.fetch = async () => Response.json(serverState('b'));
+  await assert.rejects(api.getState(), error => error.status === 401);
+  await assert.rejects(api.getState(), error => error.status === 401);
+  assert.equal(expired, 1);
+  unsubscribe();
+});
+
+test('an old account response cannot become the new account state even if fetch ignores abort', async () => {
+  api.installSession(signedSession('a'));
+  let resolve;
+  let signal;
+  globalThis.fetch = (_path, options) => { signal = options.signal; return new Promise(done => { resolve = done; }); };
+  const pending = api.getState();
+  api.installSession(signedSession('b'));
+  assert.equal(signal.aborted, true);
+  resolve(Response.json(serverState('a')));
+  await assert.rejects(pending, error => error.name === 'AbortError');
+  globalThis.fetch = async () => Response.json(serverState('b'));
+  assert.equal((await api.getState()).userId, 'b');
+});
+
+test('a late unauthorized response must not log out the new account', async () => {
+  api.installSession(signedSession('a'));
+  let resolve;
+  let expired = 0;
+  const unsubscribe = api.onSessionExpired(() => { expired += 1; });
+  globalThis.fetch = () => new Promise(done => { resolve = done; });
+  const pending = api.getState();
+  api.installSession(signedSession('b'));
+  resolve(Response.json({ detail: 'expired' }, { status: 401 }));
+  await assert.rejects(pending, error => error.name === 'AbortError');
+  assert.equal(expired, 0);
+  unsubscribe();
+});
+
+test('a completed upload cannot continue as a create operation in a replacement session', () => {
+  api.installSession(signedSession('a'));
+  const submittingScope = api.sessionEpoch();
+  api.installSession(signedSession('b'));
+  assert.throws(() => api.assertSessionEpoch(submittingScope), error => error.name === 'AbortError');
+});
+
+test('switching account while decoding a body also discards the old response', async () => {
+  api.installSession(signedSession('a'));
+  let resolveBody;
+  let started;
+  const bodyStarted = new Promise(resolve => { started = resolve; });
+  globalThis.fetch = async () => ({ ok: true, json: () => { started(); return new Promise(resolve => { resolveBody = resolve; }); } });
+  const pending = api.getState();
+  await bodyStarted;
+  api.installSession(signedSession('b'));
+  resolveBody(serverState('a'));
+  await assert.rejects(pending, error => error.name === 'AbortError');
+});
+
+test('model 401 expires the session instead of leaving private business UI authenticated', async () => {
+  api.installSession(signedSession());
+  let expired = false;
+  const unsubscribe = api.onSessionExpired(() => { expired = true; });
+  globalThis.fetch = async () => Response.json({ detail: '登录已过期' }, { status: 401 });
+  await assert.rejects(api.fetchModel('/api/models/model/model.glb', new AbortController().signal), error => error.status === 401);
+  assert.equal(expired, true);
+  unsubscribe();
+});
+
+test('logout aborts pending model loading and clears the account scope', async () => {
+  api.installSession(signedSession());
+  let resolveModel;
+  let modelSignal;
+  globalThis.fetch = async (path, options) => {
+    if (path === '/api/auth/logout') {
+      assert.equal(options.headers.get('X-CSRF-Token'), 'test-csrf-a');
+      return Response.json({ ok: true });
+    }
+    modelSignal = options.signal;
+    return new Promise(resolve => { resolveModel = resolve; });
+  };
+  const loading = api.fetchModel('/api/models/model/model.glb', new AbortController().signal);
+  await api.signOut();
+  assert.equal(modelSignal.aborted, true);
+  resolveModel(new Response(new Uint8Array([1, 2, 3])));
+  await assert.rejects(loading, error => error.name === 'AbortError');
+  await assert.rejects(api.getState(), error => error.status === 401);
+});
+
+test('multipart uploads keep original bytes and authenticated CSRF', async () => {
+  api.installSession(signedSession());
   const file = new File([new Uint8Array([137, 80, 78, 71])], 'memory.png', { type: 'image/png' });
-  globalThis.fetch = async (url, options) => {
-    assert.equal(url, `${API_BASE}/api/media`);
+  globalThis.fetch = async (path, options) => {
+    assert.equal(path, '/api/media');
     assert.ok(options.body instanceof FormData);
     assert.equal(options.body.get('file'), file);
     assert.equal(options.headers.get('Content-Type'), null);
-    assert.equal(options.headers.get('X-MemoVerse-Client'), 'local');
+    assert.equal(options.headers.get('X-CSRF-Token'), 'test-csrf-a');
     return Response.json({ assetId: 'asset-1', url: '/api/media/asset-1', sha256: 'hash', size: 4, width: 1, height: 1, mimeType: 'image/png' });
   };
-  const result = await uploadMedia(file);
-  assert.equal(result.assetId, 'asset-1');
-  assert.equal(result.url, `${API_BASE}/api/media/asset-1`);
+  assert.equal((await api.uploadMedia(file)).url, '/api/media/asset-1');
+});
+
+test('conflict and network errors do not turn into fake successful state', async () => {
+  api.installSession(signedSession());
+  globalThis.fetch = async () => Response.json({ detail: '版本已更新' }, { status: 409 });
+  await assert.rejects(api.mutate('/api/collections/item-1', 'PATCH', {}), error => error.status === 409 && error.message === '版本已更新');
+  globalThis.fetch = async () => { throw new TypeError('network failed'); };
+  await assert.rejects(api.getState(), /暂时无法连接服务/);
 });

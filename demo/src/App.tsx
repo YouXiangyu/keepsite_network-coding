@@ -1,10 +1,6 @@
-import { MobileRuntime } from "./mobile";
-import Prototype from "./Prototype";
+import AuthGate from './AuthGate';
+import Prototype from './Prototype';
 
 export default function App() {
-  return (
-    <MobileRuntime>
-      <Prototype />
-    </MobileRuntime>
-  );
+  return <AuthGate>{session => <Prototype key={session.user.id} session={session} />}</AuthGate>;
 }

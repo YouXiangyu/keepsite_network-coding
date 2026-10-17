@@ -3,6 +3,7 @@ import { ArrowLeft, ArrowRight, ArrowUp, ArrowDown, ArrowsCounterClockwise } fro
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { boundedTilt, MAX_RELIEF_TILT, pressedTilt } from './relief-angle';
+import { fetchModel } from './api';
 import './relief-viewer.css';
 
 function disposeModel(root: THREE.Object3D) {
@@ -96,10 +97,8 @@ export default function ReliefViewer({ modelUrl, title, imageUrl }: { modelUrl: 
     setStatus('loading');
     angles.current = [0, 0];
     host.dataset.tiltDegrees = '0';
-    fetch(modelUrl, { signal: controller.signal }).then(response => {
-      if (!response.ok) throw new Error('模型文件暂时无法读取');
-      return response.arrayBuffer();
-    }).then(buffer => new GLTFLoader().parseAsync(buffer, new URL('.', modelUrl).href)).then(gltf => {
+    fetchModel(modelUrl, controller.signal)
+      .then(buffer => new GLTFLoader().parseAsync(buffer, new URL('.', new URL(modelUrl, window.location.href)).href)).then(gltf => {
       if (disposed) { disposeModel(gltf.scene); return; }
       model = gltf.scene;
       const box = new THREE.Box3().setFromObject(model);
@@ -144,6 +143,6 @@ export default function ReliefViewer({ modelUrl, title, imageUrl }: { modelUrl: 
         <button aria-label="浮雕向下" disabled={status !== 'ready'} onClick={() => step(0, 5)}><ArrowDown size={19}/></button>
         <button aria-label="浮雕向右" disabled={status !== 'ready'} onClick={() => step(5, 0)}><ArrowRight size={19}/></button>
       </div>}
-    <p className="relief-caption">{status === 'ready' ? '轻转视角，看看照片里的层次' : '图片与浮雕都保存在本机'}</p>
+    <p className="relief-caption">{status === 'ready' ? '移动鼠标或使用方向按钮，看看照片里的层次' : '原图已保留在你的账户中'}</p>
   </section>;
 }
