@@ -17,7 +17,7 @@
 | 规格 | `t3.small`：x86_64、2 vCPU、2 GB RAM；CPU credits 为 standard，避免 surplus credit 费用 |
 | 系统与磁盘 | Canonical Ubuntu 24.04；10 GB 加密 gp3 根卷 `vol-0bb6aa01805d28c75`，旧 20 GB 卷已删除 |
 | 最近运行状态 | 2026-10-18 Web / 账号版本已正式发布，`running` 且系统、实例、EBS 检查通过；应用与 Nginx active，保持运行待用户验收，操作前仍须实时查询 |
-| 当前运行提交 | `61e6bd2787d286736e21b703ee3dcecea528538e`，四个逻辑提交已推送 GitHub；纯文档提交不改变运行版本 |
+| 当前运行提交 | `80d7681556823f81372b9c6cc5d32450ddc7961f`，包含联邦退出与旧响应 cookie 竞态修复；纯文档提交不改变运行版本 |
 | 公网 IPv4 | 本轮启动查询为 `13.230.191.15`，自动分配；每次启动仍必须重新查询 |
 | Launch template / 新建默认版本 | `lt-016bca8507ac81480` / `2`，根盘默认 10 GB |
 | 安全组 / SSH key pair | `sg-0f472ac3891c65681` / `memoverse-ec2-20261017` |
@@ -59,7 +59,7 @@
 | 应用服务 | `memoverse.service`，单 Uvicorn worker，`127.0.0.1:8000` |
 | Nginx 配置 | `/etc/nginx/sites-available/memoverse` |
 | 旧 Nginx BasicAuth 哈希 | `/etc/nginx/memoverse.htpasswd`，当前网站使用应用账号登录 |
-| 本轮激活回滚备份 | `/opt/memoverse/activation-backups/activation-m1rFC4fz`，root-only，保存切换前旧环境、站点、unit 与 release；同版本重复激活另存 `activation-WKPhdvkQ`，不能代替原始回滚备份 |
+| 本轮激活回滚备份 | `/opt/memoverse/activation-backups/activation-m1rFC4fz`，root-only，保存旧 BasicAuth 阶段环境、站点、unit 与 release；`activation-WKPhdvkQ` 是重复激活备份，`activation-LJTXEZwD` 是退出修复发布前的账号版本备份，不能混用 |
 | TLS 证书与私钥目录 | `/etc/letsencrypt/live/keepsite.space` |
 | TLS 配置脚本 | `deploy/ubuntu/enable-https.sh` |
 | 日志 | `journalctl -u memoverse`；`/var/log/memoverse/`；本机 `.cache/server/` |
@@ -68,7 +68,7 @@ HTTPS 由源站 Nginx 使用 Let's Encrypt 证书提供，`certbot.timer` 续期
 
 旧运行版本的 SQLite、原图和模型仍完整保留在原目录；新账号版本已使用 SQLite schema 2 与私有 S3，经鉴权后端代理文件访问。模板版本 `efc6dc4631e0466ed4de23463deb73a3b8e3b6f3af2bda57d7bf3e314dc14b5e`，73 个服务器文件逐一 SHA 验证通过（不含 source.sqlite3），权限 root:memoverse、目录 0750 / 文件 0640；18 图 / 18 模型与全部初始内容 ready。真实双账号隔离、私有文件、CPU 生成、备份、退出及刷新轮换均已验证。当前生成流程是官方 AnyImage MoGe2 CPU 推理加项目网格/GLB 导出；不是 Blender Bake Mesh，也不是 Lambda。2 GB 实例配置了 2 GB swap，应用 drop-in 设置 MemoryHigh=1200M、MemoryMax=1500M。
 
-相同 commit、环境和站点配置重复激活已返回 `Already active`，MainPID 保持 `2314`，没有重启应用。Google 控制台 UI 已核验应用为 Testing、测试名单含 1 个当前用户账号（个人邮箱不入 Git），Cognito authorize 到已登记 Google client 的跳转通过；本人 Google consent 与真实邮件收件仍待用户验收。QA 使用的临时 Cognito 账号设置 MessageAction=SUPPRESS，不作为邮件投递证据。详细验证与当前 QA 清理进度见 `docs/EC2部署验收.md`。
+`61e6bd2` 的相同 commit、环境和站点配置重复激活曾返回 `Already active`，当时 MainPID 保持 `2314`，没有重启应用。随后已正常发布 `80d7681`；真实浏览器 Cognito 退出回站与 Back 匿名保护通过。Google 控制台 UI 已核验应用为 Testing、测试名单含 1 个当前用户账号（个人邮箱不入 Git），Cognito authorize 到已登记 Google client 的跳转通过；本人 Google consent 与真实邮件收件仍待用户验收。QA 使用的临时 Cognito 账号设置 MessageAction=SUPPRESS，不作为邮件投递证据。3 个 QA 身份、2 个业务账号和额外对象已精确清理，S3 剩 72 个模板对象；详见 `docs/EC2部署验收.md`。
 
 ## 启停与计费决策
 
@@ -90,5 +90,5 @@ HTTPS 由源站 Nginx 使用 Let's Encrypt 证书提供，`certbot.timer` 续期
 - `docs/EC2部署验收.md`：当前环境验收与 DDNS 验证范围。
 - 通用 Ubuntu 发布脚本会核验制品哈希与准备状态后复用同一 commit；未知目录或内容冲突停止，不自动删除。激活失败后依旧要核对回滚输出与真实运行状态，不能将尝试回滚等同成功。
 - 当前没有统一 formatter。遵循现有风格，不放宽 Web 运行契约或扩散到无关代码。
-- 2026-10-18 最新阶段已发布 Web / 账号版本；此前“未开机、只改文档”属于历史收尾记录。用户尚未验收，保持服务器运行。本轮 QA 清理仍在进行，历史 22 + 6 项及新增 9 个模板合成测试目录删除被自动审批拒绝，未绕过；清单与状态集中在 `docs/EC2部署验收.md`。保留业务数据、模型、模板、凭据、当前准确发布制品、回滚备份和验收证据。
+- 2026-10-18 最新阶段已发布 Web / 账号版本及退出修复；此前“未开机、只改文档”属于历史收尾记录。用户尚未验收，保持服务器运行。本轮线上 QA 数据、临时转运凭据与服务器暂存目录已清理；本机无预览端口监听。历史 22 + 6 项、本轮 9 个模板合成测试目录，以及最终审计确认的 7 个认证/后端测试目录删除均被自动审批拒绝，未绕过；清单与状态集中在 `docs/EC2部署验收.md`。保留业务数据、模型、模板、凭据、当前准确发布制品、回滚备份和验收证据。
 - DDNS 限定一个实例管理一个域名。正常服务停止会撤回自己确认过的 A 记录；强制关机、Token 失效或并发改 DNS 时不保证撤回，停机后应读回确认。2026-10-18 换盘后已验证新公网 IP 发布，以及最终真实 EC2 停机后 A 记录归零。

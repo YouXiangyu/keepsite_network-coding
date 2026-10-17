@@ -1,14 +1,14 @@
 # EC2 部署验收
 
-验收日期：2026-10-18，北京时间。当前应用运行提交：`61e6bd2787d286736e21b703ee3dcecea528538e`，已推送 GitHub；后续纯文档提交不改变运行版本。
+验收日期：2026-10-18，北京时间。当前应用运行提交：`80d7681556823f81372b9c6cc5d32450ddc7961f`；后续纯文档提交不改变运行版本。
 
 当前状态：新 Web / 账号版本已正式切换，EC2 `i-0e9ba9bc6f4b1c019` 为 `running`，系统、实例及 EBS 状态检查通过，公网 IPv4 与 DDNS A 记录均为 `13.230.191.15`。应用和 Nginx active，10 GB 根盘配置保持。服务器继续运行供用户醒来验收；下文停机、BasicAuth 和旧运行时记录均为此前阶段历史，不能用于判断当前状态。
 
 ## Web / 账号 / 私有 S3 发布验收
 
-本轮四个逻辑提交已推送：`95cae17` 初始化模板、`96e23d2` 账号后端、`7535cfd` 响应式 Web、`61e6bd2` 安全部署。先以 `-PrepareOnly` 准备准确制品，再在 `127.0.0.1:8001` 候选服务验证真实 Cognito 与 S3；停止候选后正式激活，`/opt/memoverse/current` 指向上述完整运行提交。
+本轮基础提交：`95cae17` 初始化模板、`96e23d2` 账号后端、`7535cfd` 响应式 Web、`61e6bd2` 安全部署。先以 `-PrepareOnly` 准备准确制品，再在 `127.0.0.1:8001` 候选服务验证真实 Cognito 与 S3；停止候选后正式激活。随后发布退出修复 `80d7681`，`/opt/memoverse/current` 已读回指向上述完整运行提交；本次切换备份为 `/opt/memoverse/activation-backups/activation-LJTXEZwD`。
 
-服务器以同 commit、相同环境和站点配置重复激活，返回 `Already active`，MainPID 保持 `2314`，未重启应用；新增备份 `/opt/memoverse/activation-backups/activation-WKPhdvkQ` 记录重复激活时状态。真正切换前的原始回滚备份仍为 `activation-m1rFC4fz`，不可混用。
+此前 `61e6bd2` 阶段，服务器以同 commit、相同环境和站点配置重复激活，返回 `Already active`，当时 MainPID 保持 `2314`，未重启应用；新增备份 `/opt/memoverse/activation-backups/activation-WKPhdvkQ` 记录重复激活时状态。真正切换前的原始回滚备份仍为 `activation-m1rFC4fz`，不可混用。
 
 - `https://keepsite.space` 登录首页 HTTP 200，匿名业务 API 401；公网 TLS 下登录和访问控制再次通过。新 Nginx 在后端健康、匿名拒绝及会话配置检查通过后启用，OAuth 查询参数不进入访问日志。原 BasicAuth 站点、环境、service unit 和旧 release 定位保存在 root-only 的 `/opt/memoverse/activation-backups/activation-m1rFC4fz`。
 - 旧 `/var/lib/memoverse` 未覆盖；新账号目录为 `/var/lib/memoverse-v2`。本机与旧服务器 collections、shares、community、assets 内容指纹均为 `24f1d86f40fc1df3ab9e9d71a276e438a91c6fdf31ab2b307172de82525fa4c2`。
@@ -22,9 +22,13 @@
 
 真实 HTTPS 浏览器登录后显示 17 件收藏，新生成“雨夜列车”GLB 加载和方向按钮操作通过；本机截图证据为 `.cache/qa-auth/web-login-live.png`、`web-collection-live.png`、`web-relief-live.png`，私有图片不提交。Cognito authorize 实际 302 到已登记 Google client 的 `accounts.google.com` 通过；**用户本人 Google consent 完成和真实邮件收件仍待用户验收**，不能宣称认证全链路已完成。
 
-浏览器补充验收发现主动退出尚未跳转 Cognito `/logout`；独立复核同时发现旧退出响应的清 cookie 可能影响另一标签页的新登录。这两个退出时序问题正在作最小修复，尚未包含在上述 `61e6bd2` 运行版本中。
+浏览器补充验收发现的两个退出时序问题已在 `80d7681` 修复并发布：前端先取消旧请求、卸载私人界面，再跳转严格校验的 Cognito `/logout`；后端只撤销请求携带的旧 sid，迟到响应不清除另一标签页后来登录或 OAuth 流程的 cookie。无效旧 sid 不再有任何访问权限，由新登录覆盖或自然过期。该流程退出 Cognito 托管会话，不退出 Google 自身会话。
 
-本轮 QA 清理尚在进行：3 个临时 Cognito 账号、测试业务账号/会话、额外私有上传/模型及 S3 ops QA 凭据待最终核验。历史 22 + 6 项拒绝清理记录继续保留；本轮下列 9 个合成测试目录删除被自动审批拒绝（`blocked by policy`），未绕过，仍为待清理项。保留当前准确发布制品、回滚备份、业务数据、模板、凭据及验收证据。
+退出修复经独立复核；认证 45 项、Web 单元 27 项、退出专项 Chromium 3 项、运行契约和生产构建通过。真实 HTTPS 浏览器退出后回到本站匿名首页，浏览器 Back 仍只显示登录页；Cognito `/logout` 实际返回 302 到 `https://keepsite.space/`。最终首页 200、HTTP→HTTPS 301、匿名业务 API 401，Google/email provider 均已配置。证据：`.cache/server/final-account-acceptance.json`、`logout-deploy.log`、`.cache/qa-auth/web-logout-live.png`；实际本人 Google consent 与邮件投递仍保留上述待验收边界。
+
+本轮线上 QA 清理已完成：3 个临时 Cognito 账号已删除并查回为零；短暂停止应用后，精确清理 A/B 业务账号、归属记录及指定测试 asset/model，前后检查 SQLite 完整性、外键、模板引用和其他账号引用，复查为 already-cleaned，随后服务恢复 active。退出后已无匹配 QA 会话。S3 精确删除测试图、模型三文件及 QA 凭据共 5 个版本，相关前缀无版本或删除标记；桶内剩 18 media + 54 models，均为模板。服务器一次性暂存目录及本机 3 个临时凭据/签名 URL 文件已删除。本机 4173/4174/4175/8000/8001 无监听，候选服务已停止；保留当前网站登录页供用户验收。
+
+历史 22 + 6 项拒绝清理记录继续保留；本轮下列 9 个合成测试目录删除被自动审批拒绝（`blocked by policy`），未绕过，仍为待清理项。保留当前准确发布制品、回滚备份、业务数据、模板、凭据及验收证据。
 
 ```text
 .cache/initial-template-tests/tmp_tz77sg4
@@ -36,6 +40,18 @@
 .cache/initial-template-tests/tmphkzv0ps5
 .cache/initial-template-tests/tmpls0nshho
 .cache/initial-template-tests/tmpwziybpwf
+```
+
+最后只读审计还确认以下 7 个本轮合成测试目录未被 Git 跟踪、无重解析点，合计 18,737,557 字节（约 17.87 MiB）。逐项解析并限定在工作区 `.cache` 后，原生 PowerShell 递归删除整条命令仍被自动审批拒绝，仅返回 `blocked by policy`；没有执行删除，也未换方式重试，均继续保留：
+
+```text
+.cache/auth-review-callback-redirect
+.cache/auth-review-http-close
+.cache/auth-tests-20261018-a
+.cache/auth-tests-20261018-b
+.cache/auth-tests-20261018-c
+.cache/pytest-account-stage-20261018
+.cache/review-backend-20261018
 ```
 
 ## 初次部署验收（20 GB 阶段历史记录）
