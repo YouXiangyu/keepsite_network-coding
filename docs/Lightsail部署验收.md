@@ -1,6 +1,6 @@
 # Lightsail 部署验收
 
-日期：2026-10-17。当前状态：服务器内部功能与代码更新已验收；公网 HTTPS 等待域名 NS 切换生效。
+日期：2026-10-17。当前状态：服务器功能、代码更新和公网 HTTPS 已验收。
 
 ## 资源与运行方式
 
@@ -36,7 +36,9 @@
 
 本地 43 项后端测试、18 项前端测试、28 个受保护运行时文件检查、生产构建通过；迁移脚本 3 项合成数据自测通过。
 
-服务器实际执行了上传原图 SHA-256 校验、重复创建、CPU 生成 GLB、生成中查询、编辑复用模型和删除。一次参考图片的生成及轮询流程约 49.373 秒，GLB 2,606,284 字节，期间健康请求的最大观测响应时间 1.189 秒。
+服务器实际执行了上传原图 SHA-256 校验、重复创建、CPU 生成 GLB、生成中查询、编辑复用模型和删除。验收脚本在创建及重复创建之后开始计时，直到下载 GLB、编辑、删除和最终状态核对结束，共 49.373 秒，GLB 2,606,284 字节，期间服务器本机健康请求的最大观测响应时间 1.189 秒。
+
+49.373 秒包含生成的剩余等待时间、每秒一次的任务与健康轮询、服务器本机下载模型及后续 CRUD 验收；图片上传和创建请求在计时前已完成，后台生成也可能已开始。因此它不是纯推理耗时，也不包含浏览器公网传输、HTTPS 或模型渲染。模型加载、深度推理、网格生成和 GLB 导出没有单独计时，不能把 49 秒归因到某个阶段。
 
 该轮整个应用服务 cgroup 的峰值物理内存为 612,495,360 字节（约 584 MiB），峰值 swap 为 283,504,640 字节（约 270 MiB）。`memory.events` 的 `oom`、`oom_kill`、`max` 均为 0，服务重启计数为 0。这是一次功能样例，不是吞吐量或最大尺寸图片的性能保证；1 GB 机器实际使用了 swap。
 
@@ -44,10 +46,12 @@
 
 随后从提交 `1d0be98` 更新到 `1b97173`，共享模型缓存成功复用。更新后 17 件收藏、4 条分享、3 个原图、3 个原生成任务仍在；12 个原图与模型产物文件哈希一致。验收临时收藏及其专属任务产物已清理。
 
-## 尚待完成
+## 公网 HTTPS
 
-域名注册局的查询仍显示 `launch1.spaceship.net`、`launch2.spaceship.net`；用户已提交 Cloudflare 名称服务器切换，等待生效。A 记录应为 `@ → 52.196.70.26`，首次签证时使用“仅 DNS”。
+域名 NS 已切换为 `kehlani.ns.cloudflare.com` 和 `dan.ns.cloudflare.com`，A 记录为 `52.196.70.26`。
 
-DNS 指向本实例后执行 `deploy/lightsail/enable-https.sh keepsite.space 52.196.70.26 --execute`：脚本先校验解析，再申请 Webroot 证书、启用 TLS/BasicAuth 和续期 reload hook。随后还需验证公网浏览器、未登录访问拒绝和证书链。
+已执行 `deploy/lightsail/enable-https.sh keepsite.space 52.196.70.26 --execute`，取得 Let's Encrypt 证书；当前到期时间为 2027-01-15 21:46:32（北京时间）。系统证书校验通过，HTTP 返回 301 跳转 HTTPS；未登录 API 返回 401，登录后首页返回 200、读取 17 件收藏、下载原有 GLB 并验证文件头成功。`certbot.timer` 已启用，续期后通过 hook 检查并重载 Nginx。
 
-Lambda 新增源码、部署文件、专用 Python 包、本地与远端实验分支已删除。自动命令审批拒绝清理本机 `backups/local-baseline-20261017-213502`、`.cache/iam`、`.cache/uv`、`.cache/pytest-cloud-generator` 和 `backend/.pytest-repo-integration-20261017-a`，返回原因仅为 `blocked by policy`；这些目录仍在，未绕过限制。它们不属于服务器运行依赖，也不在 GitHub 中。
+## 本机清理限制
+
+Lambda 新增源码、部署文件、专用 Python 包、本地与远端实验分支已删除。用户再次明确授权后，自动命令审批仍拒绝清理本机 `backups/local-baseline-20261017-213502`、`.cache/iam`、`.cache/uv`、`.cache/pytest-cloud-generator` 和 `backend/.pytest-repo-integration-20261017-a`，返回原因仅为 `blocked by policy`；已交给用户手动清理。这些目录不属于服务器运行依赖，也不在 GitHub 中。本轮一次性数据传输包和测试 SSH 隧道已清理。
