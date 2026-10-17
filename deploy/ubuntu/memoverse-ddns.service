@@ -1,0 +1,33 @@
+[Unit]
+Description=Publish this EC2 instance IPv4 to the configured Cloudflare A record
+Wants=network-online.target
+After=network-online.target network.target
+ConditionPathExists=/etc/memoverse/cloudflare.json
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/bin/python3 -B /opt/memoverse/admin/sync-cloudflare-dns.py publish --execute
+ExecStop=/usr/bin/python3 -B /opt/memoverse/admin/sync-cloudflare-dns.py withdraw --execute
+TimeoutStartSec=90
+TimeoutStopSec=90
+Restart=on-failure
+RestartSec=10
+StateDirectory=memoverse-ddns
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/memoverse-ddns
+RestrictSUIDSGID=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
