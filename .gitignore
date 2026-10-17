@@ -1,0 +1,31 @@
+.cache/
+demo/node_modules/
+demo/dist/
+demo/test-results/
+demo/playwright-report/
+backend/.venv/
+backend/data/
+**/__pycache__/
+.pytest_cache/
+
+# Credentials and local deployment configuration
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+samconfig.local.toml
+
+# Captured screens may contain imported personal photos.
+demo/qa/*.jpg
+demo/qa/*.jpeg
+demo/qa/*.png
+demo/qa/*.webp
+
+# Local build artifacts and backup copies
+.aws-sam/
+backups/
