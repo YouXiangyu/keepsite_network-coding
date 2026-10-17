@@ -204,3 +204,26 @@ A successful internal health response is not final acceptance: verify the active
 commit, HTTP redirect, unauthenticated denial and authenticated HTTPS behavior.
 The code deployment does not make a data backup automatically; create/verify the
 consistent backup before a schema-changing deployment.
+# EC2 动态公网 IP 与 Cloudflare DDNS
+
+本项目使用自动分配的公网 IPv4。实例停止后该地址释放，下次启动通过 `memoverse-ddns.service` 更新 `keepsite.space` 的 A 记录；不要将最近观测到的 IP 当作固定地址。通过 AWS MCP 按项目运行信息中的 instance ID 启动/停止，避免误操作账户中的其他实例。
+
+一次性配置位于本机 `.cache/server/cloudflare.json`，字段为 `zone_id`、`record_name`、`api_token`；Token 使用 Cloudflare **Edit zone DNS** 模板，资源限定 `keepsite.space`。该文件受本机权限保护并被 Git 忽略。将其安全传输到服务器 `/etc/memoverse/cloudflare.json`，目录 root:root 700、文件 root:root 600；不要将 Token 写入 shell 参数、user data、Git 或日志。
+
+首次配置及修改 DDNS 代码时，单独同步以下运维组件；普通应用发布不会静默替换它们：
+
+```bash
+sudo install -d -m 0755 /opt/memoverse/admin
+sudo install -m 0755 /opt/memoverse/current/scripts/sync-cloudflare-dns.py /opt/memoverse/admin/sync-cloudflare-dns.py
+sudo install -m 0644 /opt/memoverse/current/deploy/ubuntu/memoverse-ddns.service /etc/systemd/system/memoverse-ddns.service
+sudo systemctl daemon-reload
+sudo systemd-analyze verify /etc/systemd/system/memoverse-ddns.service
+sudo python3 /opt/memoverse/admin/sync-cloudflare-dns.py publish
+sudo systemctl enable --now memoverse-ddns
+```
+
+`publish` 默认仅预览；systemd 执行带 `--execute` 的操作。更新一个已经 active 的 DDNS 服务，需要有计划地重启该服务并检查 DNS；这会短暂撤回再发布记录。程序读取 IMDSv2，只修改指定 zone/name 的单一 A 记录，读回验证后将归属记录保存到 `/var/lib/memoverse-ddns/state.json`。正常关闭时仅撤回仍匹配本实例、IP、record ID 和 revision 的记录。
+
+只允许一个实例管理该域名。强制停机、Token 失效或并发 DNS 修改可能导致撤回跳过/失败；实例停机后应检查结果。当前已实测 DDNS 服务停止/启动，保持 EC2 运行供用户验收，用户确认测试通过后再停止实例。
+
+动态 IP 部署使用 `-HostKeyAlias memoverse-i-0e9ba9bc6f4b1c019`，known_hosts 中该别名已关联经 AWS 控制台输出核对的主机公钥。每次启动重新查询 IP，但保留 `StrictHostKeyChecking=yes`，不因地址变化跳过身份校验。
