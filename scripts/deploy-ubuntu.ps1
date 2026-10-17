@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory)][string]$Server,
     [string]$Domain = 'keepsite.space',
     [string]$KeyPath = '',
+    [string]$HostKeyAlias = '',
     [switch]$Execute,
     [switch]$InitializeHost
 )
@@ -9,6 +10,7 @@ $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 if ($Server -notmatch '^(?:\d{1,3}\.){3}\d{1,3}$') { throw 'Use the verified IPv4 address.' }
 if ($Domain -notmatch '^[a-zA-Z0-9][a-zA-Z0-9.-]*\.[a-zA-Z]{2,}$') { throw 'Invalid hostname.' }
+if ($HostKeyAlias -and $HostKeyAlias -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') { throw 'Invalid SSH host key alias.' }
 if (-not $KeyPath) { $KeyPath = Join-Path $ProjectRoot '.cache/server/ssh/id_rsa' }
 $KeyPath = [IO.Path]::GetFullPath($KeyPath)
 $Commit = (& git -C $ProjectRoot rev-parse HEAD).Trim()
@@ -27,6 +29,7 @@ $HashFile = "$Archive.sha256"
 $KnownHosts = Join-Path $TransferDir 'ssh/known_hosts'
 if (-not (Test-Path -LiteralPath $KnownHosts)) { throw 'Verified known_hosts file missing; establish host identity before deploying.' }
 $SshOptions = @('-i', $KeyPath, '-o', 'BatchMode=yes', '-o', "UserKnownHostsFile=$KnownHosts", '-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=15')
+if ($HostKeyAlias) { $SshOptions += @('-o', "HostKeyAlias=$HostKeyAlias") }
 if (Test-Path -LiteralPath $Archive) {
     if (-not (Test-Path -LiteralPath $HashFile)) { throw 'Cached artifact has no verified hash. Inspect it; no rebuild/overwrite attempted.' }
     $ArtifactHash = (Get-FileHash -LiteralPath $Archive -Algorithm SHA256).Hash.ToLowerInvariant()
