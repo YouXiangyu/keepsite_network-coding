@@ -1,0 +1,4 @@
+interface:
+  display_name: "MemoVerse 项目交付"
+  short_description: "管理 MemoVerse 的 Git 提交、阶段审查、AWS 发布与项目资料维护"
+  default_prompt: "使用 $memoverse-delivery 完成本阶段修改、提交、审查和服务器交付。"
