@@ -19,7 +19,7 @@
 | `demo/` | React 19、TypeScript、Vite、Three.js 前端 |
 | `backend/` | FastAPI、SQLite、媒体存储与串行生成任务 |
 | `scripts/` | 本机启动、模型准备、服务器更新与数据迁移 |
-| `deploy/lightsail/` | Ubuntu 安装、systemd、Nginx 和部署说明 |
+| `deploy/ubuntu/` | Ubuntu 安装、systemd、Nginx 和部署说明 |
 | `docs/` | 产品决策、设计参考、接口与验证记录 |
 
 ## 本机运行
@@ -34,13 +34,13 @@
 
 ## 服务器部署
 
-采用东京区域 Lightsail 1 GB 套餐，Ubuntu 24.04，单进程 FastAPI + Nginx。代码按 Git 提交放在独立发布目录；SQLite、图片与模型保存在 `/var/lib/memoverse`，更新代码不覆盖数据。前端在本机构建，服务器不运行开发服务器。
+迁移至东京区域普通按需 EC2 `t3.small`（2 GB），Ubuntu 24.04，单进程 FastAPI + Nginx。代码按 Git 提交放在独立发布目录；SQLite、图片与模型保存在 `/var/lib/memoverse`，更新代码不覆盖数据。前端在本机构建，服务器不运行开发服务器。
 
-- [安装、访问控制、HTTPS 与运维说明](deploy/lightsail/README.md)
-- [部署与更新脚本](scripts/deploy-lightsail.ps1)（默认仅显示计划，执行需要 `-Execute`）
+- [安装、访问控制、HTTPS 与运维说明](deploy/ubuntu/README.md)
+- [部署与更新脚本](scripts/deploy-ubuntu.ps1)（默认仅显示计划，执行需要 `-Execute`）
 - [一次性数据迁移与完整性校验](scripts/package-server-data.py)
 
-已完成服务器数据迁移、实际生成、一次代码更新和公网 HTTPS 验收，详见 [部署验收记录](docs/Lightsail部署验收.md)。访问 [keepsite.space](https://keepsite.space) 需要测试账号与口令；HTTP 自动跳转 HTTPS。
+原 Lightsail 已删除，数据、认证和证书已校验保全，EC2 部署与自动 DNS 更新正在准备。访问 [keepsite.space](https://keepsite.space) 需要测试账号与口令；认证保持不变。原环境的历史验收见 [Lightsail 退役记录](docs/Lightsail部署验收.md)。
 
 ## 验证
 
