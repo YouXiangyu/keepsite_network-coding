@@ -22,6 +22,7 @@ SPEC.loader.exec_module(ddns)
 
 TOKEN = 'unit_test_token_not_a_real_credential'
 CONFIG = {'token': TOKEN, 'zone_id': 'a' * 32, 'record_name': 'keepsite.space'}
+CONFIG_FILE = {'api_token': TOKEN, 'zone_id': CONFIG['zone_id'], 'record_name': CONFIG['record_name']}
 INSTANCE = 'i-0123456789abcdef0'
 CURRENT_IP = '52.196.70.26'
 OTHER_IP = '54.168.1.2'
@@ -271,9 +272,9 @@ class DDNSLifecycleTests(unittest.TestCase):
     def test_config_validation_and_safe_cli_error_logs(self):
         config_path = self.folder / 'config.json'
         for changes in ({'zone_id': '../bad'}, {'zone_id': 'a' * 31}, {'record_name': 'bad/path'},
-                        {'record_name': '*.keepsite.space'}, {'token': TOKEN + '\r\nInjected: value'}):
+                        {'record_name': '*.keepsite.space'}, {'api_token': TOKEN + '\r\nInjected: value'}):
             with self.subTest(changes=changes):
-                config_path.write_text(json.dumps({**CONFIG, **changes}))
+                config_path.write_text(json.dumps({**CONFIG_FILE, **changes}))
                 config_path.chmod(0o600)
                 output = io.StringIO()
                 with contextlib.redirect_stdout(output):
@@ -283,7 +284,7 @@ class DDNSLifecycleTests(unittest.TestCase):
 
     def test_api_rejection_does_not_log_response_body(self):
         config_path = self.folder / 'config.json'
-        config_path.write_text(json.dumps(CONFIG))
+        config_path.write_text(json.dumps(CONFIG_FILE))
         config_path.chmod(0o600)
         http = FakeHTTP()
         original = http.request
@@ -299,6 +300,15 @@ class DDNSLifecycleTests(unittest.TestCase):
             self.assertEqual(ddns.main(['publish', '--config', str(config_path), '--state', str(self.state_path)]), 1)
         self.assertNotIn(TOKEN, output.getvalue())
         self.assertIn('cloudflare_request_rejected', output.getvalue())
+
+    def test_config_requires_api_token_and_does_not_accept_legacy_field(self):
+        config_path = self.folder / 'config.json'
+        config_path.write_text(json.dumps(CONFIG_FILE))
+        config_path.chmod(0o600)
+        self.assertEqual(ddns.load_config(config_path), CONFIG)
+        config_path.write_text(json.dumps(CONFIG))
+        with self.assertRaisesRegex(ddns.DDNSError, 'invalid_api_token'):
+            ddns.load_config(config_path)
 
     def test_atomic_state_failure_leaves_previous_state_unchanged(self):
         ddns.atomic_state(self.state_path, {'status': 'previous'})

@@ -2,6 +2,7 @@
 """Publish this EC2 instance's IPv4; withdraw only a verified owned A record.
 
 No DNS or local-state mutation occurs without --execute. IMDSv2 is mandatory.
+The private config fields are api_token, zone_id and record_name.
 Cloudflare has no conditional DELETE by content: operators must not run two
 publishers for this name concurrently. A forced shutdown may skip ExecStop.
 """
@@ -85,7 +86,7 @@ def private_json(path, *, missing_ok=False):
 
 def load_config(path):
     raw = private_json(path)
-    token = raw.get('token')
+    token = raw.get('api_token')
     if not isinstance(token, str) or re.fullmatch(r'[A-Za-z0-9._~+/=-]{20,512}', token) is None:
         raise DDNSError('invalid_api_token')
     return {'token': token, 'zone_id': identifier(raw.get('zone_id'), 'zone_id'),
