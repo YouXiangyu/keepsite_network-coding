@@ -1,4 +1,4 @@
 interface:
-  display_name: "MemoVerse ÏîÄ¿½»¸¶"
-  short_description: "¹ÜÀí MemoVerse µÄ Git Ìá½»¡¢½×¶ÎÉó²é¡¢AWS ·¢²¼ÓëÏîÄ¿×ÊÁÏÎ¬»¤"
-  default_prompt: "Ê¹ÓÃ $memoverse-delivery Íê³É±¾½×¶ÎĞŞ¸Ä¡¢Ìá½»¡¢Éó²éºÍ·şÎñÆ÷½»¸¶¡£"
+  display_name: "MemoVerse é¡¹ç›®äº¤ä»˜"
+  short_description: "ç®¡ç† MemoVerse çš„ Git æäº¤ã€é˜¶æ®µå®¡æŸ¥ã€AWS å‘å¸ƒä¸é¡¹ç›®èµ„æ–™ç»´æŠ¤"
+  default_prompt: "ä½¿ç”¨ $memoverse-delivery å®Œæˆæœ¬é˜¶æ®µä¿®æ”¹ã€æäº¤ã€å®¡æŸ¥å’ŒæœåŠ¡å™¨äº¤ä»˜ã€‚"
