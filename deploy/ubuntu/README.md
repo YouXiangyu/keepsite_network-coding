@@ -35,15 +35,18 @@ check, with the API base configured for the final HTTPS origin. Upload source an
 `node_modules`, secrets, Windows dependency caches or local user media implicitly.
 
 ```bash
-bash /opt/memoverse/releases/<commit>/deploy/lightsail/install.sh \
+bash /opt/memoverse/releases/<commit>/deploy/ubuntu/install.sh \
   --release /opt/memoverse/releases/<commit> --domain keepsite.space
 # After reviewing that plan:
-sudo bash /opt/memoverse/releases/<commit>/deploy/lightsail/install.sh \
-  --release /opt/memoverse/releases/<commit> --domain keepsite.space --execute
+sudo bash /opt/memoverse/releases/<commit>/deploy/ubuntu/install.sh \
+  --release /opt/memoverse/releases/<commit> --domain keepsite.space --initialize-host --execute
 ```
 
 The installer checks Ubuntu 24.04 and the uploaded release before modifying it.
-It installs Nginx, Python venv/pip, unzip/git/curl, CA certificates, apache2-utils,
+Only explicit `--initialize-host` performs system package/user/global-log setup.
+Ordinary release preparation verifies the initialized host and installs only the
+release venv/model dependencies; it does not run apt or recreate the environment.
+Initial host setup installs Nginx, Python venv/pip, unzip/git/curl, CA certificates, apache2-utils,
 certbot, libgomp1, logrotate and GNU time. A temporary `policy-rc.d` prevents package
 installation from starting the default Nginx site; it is removed on exit. If an
 administrator already supplied that policy, the installer stops without replacing
@@ -127,7 +130,12 @@ the app, API, media or models, and authenticated HTTPS flows preserve images.
 
 ## Updating and rollback
 
-The root-controlled update script should implement this sequence:
+The update entry point is `scripts/deploy-ubuntu.ps1 -Server <verified-ip>`; the
+server is mandatory and has no historical IP fallback. It defaults to a plan.
+Use `-InitializeHost` only for a new host; `-Execute` authorizes the selected plan.
+SSH files and exact reusable release artifacts live in ignored `.cache/server/`.
+Existing authentication, DNS and certificates are preserved. Instance startup and
+provider checks remain separate operator actions. The release flow is:
 
 1. Upload a new commit-named release, including prebuilt `dist/client`; verify its
    identity and frontend runtime checks. Never copy over the running release.
@@ -138,10 +146,15 @@ The root-controlled update script should implement this sequence:
 3. Take a consistent SQLite backup using SQLite's backup API (a raw copy while WAL
    is active is insufficient) and preserve referenced media/model files. Keep
    `/var/lib/memoverse` outside the release tree and never replace it from Git.
-4. Stop the service so its generator child is reaped, atomically switch `current`,
+4. Verify every source/static payload file against the SHA256-identified uploaded
+   archive. A matching `.artifact-sha256` permits resuming dependency preparation;
+   `.prepared-sha256` marks completed preparation. Unknown/conflicting directories
+   stop without deletion. Reuse the exact local cached tar for same-commit retries;
+   do not rebuild a different artifact under the same identity.
+5. Stop the service so its generator child is reaped, atomically switch `current`,
    restart and verify loopback health plus an authenticated HTTPS smoke check.
    `KillMode=control-group` and a 30-second stop window cover owned subprocesses.
-5. If acceptance fails, restore the previous link and restart. Schema-changing
+6. If acceptance fails, restore the previous link and restart. Schema-changing
    updates need an explicit compatible rollback/data-restore decision. Do not
    prune the prior release, backups or shared assets automatically.
 
@@ -149,6 +162,11 @@ The root-controlled update script should implement this sequence:
 
 The unit requests `MemoryHigh=700M`, `MemoryMax=850M` and `MemorySwapMax=2G` to
 contain the API and its child process together, leaving room for the OS/Nginx.
+These conservative limits are retained until the operator chooses the new host
+budget; moving to a larger instance does not silently raise them. Configure a
+reviewed `/etc/systemd/system/memoverse.service.d/resources.conf` with `[Service]`
+and explicit `MemoryHigh`, `MemoryMax`, `MemorySwapMax` values, then daemon-reload
+and deliberately restart. Release installation preserves such drop-ins.
 These are initial safety limits, not measured sizing. Large image decode and
 model activations can exceed them; a 141 MB model file is not its peak RSS.
 The kernel may kill a worker under pressure and jobs must visibly fail/recover.
@@ -171,6 +189,18 @@ distribution's `/var/log/nginx/*.log` rules. Inspect actual disk usage during th
 trial. Retaining data/backups across updates also requires monitoring free disk.
 # 当前部署入口
 
-仓库更新入口为 `scripts/deploy-lightsail.ps1`：默认输出计划，确认参数后加 `-Execute`。脚本要求工作区已提交，使用当前 Git 提交生成源码包和同源 API 的前端构建，上传后准备新发布目录并执行健康检查；失败时恢复此前代码链接。
+仓库更新入口为 `scripts/deploy-ubuntu.ps1`：默认输出计划，确认参数后加 `-Execute`。脚本要求工作区已提交，使用当前 Git 提交生成源码包和同源 API 的前端构建，上传后按制品 SHA256 验证/准备发布目录并执行有超时的健康检查；启动或健康失败会尝试恢复此前代码与 service unit，再验证恢复健康。回滚失败会明确报错，不能视为已经恢复。相同 commit 已启用且健康时不重启。
 
 数据迁移使用 `scripts/package-server-data.py --output <绝对路径.tar.gz>`，接收端在启动服务前执行 `--verify-extracted <解包目录>`。SQLite 业务行完整保留，原图与所有 ready 任务的产物逐文件校验；临时传输包不作为长期备份。
+
+
+## Script-only validation
+
+`python -B -m unittest discover -s deploy/ubuntu/tests -v` checks archive identity,
+unsafe extraction, same-commit reuse/resume and command-stub activation failures.
+The activation tests substitute only filesystem root/root guard and OS commands;
+no real systemd, SSH or cloud calls occur. Also parse PowerShell and run `bash -n`.
+A successful internal health response is not final acceptance: verify the active
+commit, HTTP redirect, unauthenticated denial and authenticated HTTPS behavior.
+The code deployment does not make a data backup automatically; create/verify the
+consistent backup before a schema-changing deployment.
