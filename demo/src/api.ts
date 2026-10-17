@@ -1,6 +1,7 @@
 import { makeSeedData, markMigrationCompleted, readMigrationSource, validateData, type AppData, type MigrationSource } from './data';
 
-export const API_BASE = (import.meta.env?.VITE_API_BASE_URL || 'http://127.0.0.1:8000').replace(/\/$/, '');
+const configuredApiBase = import.meta.env?.VITE_API_BASE_URL;
+export const API_BASE = (configuredApiBase === '/' ? window.location.origin : configuredApiBase || 'http://127.0.0.1:8000').replace(/\/$/, '');
 export interface ServerState {
   initialized: boolean;
   serverId: string;

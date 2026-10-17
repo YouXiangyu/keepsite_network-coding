@@ -5,6 +5,7 @@ source-image XY/UV alignment and uses learned inverse depth for local parallax.
 """
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -13,20 +14,55 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / '.cache/anyimage-deps'), str(ROOT / '.cache/anyimage/src/anyimage')]
 
 
+def prepare_texture(source: Path):
+    """Bound texture copies before EXIF transforms and RGBA expansion.
+
+    JPEG can decode at reduced resolution. Other formats may still need their
+    full decoder buffer, so this is not a bound on total inference memory.
+    """
+    from PIL import Image, ImageOps
+
+    with Image.open(source) as opened:
+        if opened.format == 'JPEG':
+            opened.draft(opened.mode, (1536, 1536))
+        opened.thumbnail((1536, 1536))
+        return ImageOps.exif_transpose(opened).convert('RGBA')
+
+
+def create_cpu_session(model_directory: Path):
+    """Configure our CPU session; inference/postprocessing stays upstream.
+
+    The pinned AnyImage CPU factory has no SessionOptions parameter. Construct
+    the standard ORT session here rather than patching its factory globally.
+    """
+    threads = int(os.environ.get('MEMOVERSE_ORT_THREADS', '1'))
+    if not 1 <= threads <= 32:
+        raise ValueError('MEMOVERSE_ORT_THREADS must be between 1 and 32')
+    import onnxruntime
+
+    options = onnxruntime.SessionOptions()
+    options.intra_op_num_threads = threads
+    options.inter_op_num_threads = 1
+    options.execution_mode = onnxruntime.ExecutionMode.ORT_SEQUENTIAL
+    options.add_session_config_entry('session.intra_op.allow_spinning', '0')
+    options.add_session_config_entry('session.inter_op.allow_spinning', '0')
+    return onnxruntime.InferenceSession(
+        str(model_directory / 'model.onnx'), sess_options=options,
+        providers=['CPUExecutionProvider'], enable_fallback=False,
+    )
+
+
 def generate(source: Path, output: Path):
     started = time.monotonic()
     import numpy as np
     import trimesh
-    from PIL import Image, ImageOps
-    from server.models.onnx_moge2 import create_session, infer
+    from server.models.onnx_moge2 import infer
 
     output.mkdir(parents=True, exist_ok=True)
-    with Image.open(source) as opened:
-        texture = ImageOps.exif_transpose(opened).convert('RGBA')
-    texture.thumbnail((1536, 1536))
+    texture = prepare_texture(source)
     sample = texture.copy()
     sample.thumbnail((256, 256))
-    session = create_session(ROOT / '.cache/models/moge-2-vits-normal-onnx', 'cpu')
+    session = create_cpu_session(ROOT / '.cache/models/moge-2-vits-normal-onnx')
     result = infer(session, np.asarray(sample.convert('RGB'), dtype=np.float32) / 255.0, 0)
     depth = result['depth']
     valid = np.isfinite(depth) & (depth > 0) & (result['mask'] > 0.5)

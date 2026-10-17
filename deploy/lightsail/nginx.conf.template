@@ -1,0 +1,56 @@
+# Replace __DOMAIN__ with the validated hostname, then nginx -t before enabling.
+# Certificate and htpasswd must already exist. No plaintext application endpoint.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __DOMAIN__;
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/letsencrypt;
+        try_files $uri =404;
+    }
+    location / { return 301 https://__DOMAIN__$request_uri; }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name __DOMAIN__;
+    ssl_certificate /etc/letsencrypt/live/__DOMAIN__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__DOMAIN__/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    server_tokens off;
+    auth_basic "MemoVerse private trial";
+    auth_basic_user_file /etc/nginx/memoverse.htpasswd;
+    root /opt/memoverse/current/demo/dist/client;
+    index index.html;
+    # 12 MiB source image plus multipart envelope. Application still checks 12 MiB.
+    client_max_body_size 13m;
+    client_body_timeout 120s;
+    access_log /var/log/memoverse/nginx-access.log;
+    error_log /var/log/memoverse/nginx-error.log warn;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy same-origin always;
+
+    location = /api { return 308 /api/; }
+    location ^~ /api/ {
+        # No URI suffix: retain the original /api/... path for FastAPI.
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # BasicAuth terminates at nginx; don't pass reusable credentials upstream.
+        proxy_set_header Authorization "";
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 120s;
+        proxy_read_timeout 180s;
+        proxy_buffering off;
+        proxy_request_buffering on;
+        add_header Cache-Control "no-store" always;
+        add_header X-Content-Type-Options nosniff always;
+    }
+    location ~ /\. { deny all; }
+    location = /index.html { add_header Cache-Control "no-cache" always; }
+    location / { try_files $uri $uri/ /index.html; }
+}

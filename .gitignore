@@ -18,7 +18,6 @@ backend/data/
 *.pfx
 id_rsa
 id_ed25519
-samconfig.local.toml
 
 # Captured screens may contain imported personal photos.
 demo/qa/*.jpg
@@ -27,5 +26,4 @@ demo/qa/*.png
 demo/qa/*.webp
 
 # Local build artifacts and backup copies
-.aws-sam/
 backups/

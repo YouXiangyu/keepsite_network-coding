@@ -1,0 +1,37 @@
+[Unit]
+Description=MemoVerse API and serial local image generator
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=memoverse
+Group=memoverse
+WorkingDirectory=/opt/memoverse/current
+EnvironmentFile=/etc/memoverse.env
+Environment=TMPDIR=/opt/memoverse/shared/cache/tmp
+ExecStart=/opt/memoverse/current/backend/.venv/bin/python -B -m uvicorn backend.app:create_app --factory --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillMode=control-group
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/memoverse /opt/memoverse/shared/cache
+RestrictSUIDSGID=true
+MemoryAccounting=true
+MemoryHigh=700M
+MemoryMax=850M
+MemorySwapMax=2G
+TasksMax=128
+StandardOutput=journal
+StandardError=journal
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=500
+
+[Install]
+WantedBy=multi-user.target
