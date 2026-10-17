@@ -2,19 +2,19 @@
 
 验收日期：2026-10-18，北京时间。应用运行代码提交：`01677b2801828bf913c9f9592ac9de995decadd9`。后续纯文档提交不改变运行版本。
 
-当前状态（2026-10-18 00:46 核验）：用户已要求停止实例，并将 20 GB 根盘缩减为 10 GB。新盘恢复与验证完成，旧盘已删除，实例 `stopped`、无公网 IP，Cloudflare A 记录为空。下文早期 20 GB 验收数据作为过程证据保留。
+当前状态（2026-10-18 阶段收尾复核）：用户已要求停止实例，并将 20 GB 根盘缩减为 10 GB。新盘恢复与验证完成，旧盘已删除，实例 `stopped`、无公网 IP，Cloudflare A 记录为空。下文早期 20 GB 验收数据作为过程证据保留。
 
-## 部署结果
+## 初次部署验收（20 GB 阶段历史记录）
 
 | 项目 | 结果 |
 | --- | --- |
 | 实例 | `i-0e9ba9bc6f4b1c019`，`memoverse-keepsite` |
 | 区域 / 规格 | 东京 `ap-northeast-1a`，按需 `t3.small`，2 vCPU / 2 GB |
 | 系统 / 磁盘 | Ubuntu 24.04 x86_64，20 GB 加密 gp3 |
-| 公网 IP | 当前 `54.168.57.143`，自动分配，停机再启动可能变化 |
+| 公网 IP | 验收当时为 `54.168.57.143`，自动分配，现已释放 |
 | 网站 | `https://keepsite.space`，原 BasicAuth 账号与口令保留 |
 | 运行布局 | `/opt/memoverse/current` 指向发布目录；数据 `/var/lib/memoverse`；模型共享缓存 `/opt/memoverse/shared/cache` |
-| 服务 | `memoverse`、`nginx`、`memoverse-ddns`、`certbot.timer` 均 active / enabled |
+| 服务 | 验收当时 `memoverse`、`nginx`、`memoverse-ddns`、`certbot.timer` 均 active / enabled |
 | SSH | 当前管理网络 CIDR 限制；部署使用稳定 `HostKeyAlias` 并保持严格主机密钥校验 |
 
 ## 根盘缩减至 10 GB 与最终停机
@@ -37,7 +37,7 @@ EBS 不支持原地缩小。使用原始 8 GB Canonical AMI 快照创建 10 GB �
 
 恢复并验收：17 件收藏、4 条分享、6 条社区示例、3 张原图、3 个原 ready 模型任务。12 个原图及模型产物文件哈希与迁移清单一致。本机原始数据没有被覆盖。验收临时收藏、任务与产物已清理。
 
-## 发布与功能验证
+## 初次发布与功能验证记录
 
 - 通用 Ubuntu 发布流程通过 14 项故障/幂等测试，子代理独立重跑并复核。修复了首次缺失 current 链接的判断、启动失败回滚以及同提交重试时补做自启动的问题。
 - DDNS 通过 28 项离线测试及独立安全/健壮性复核；配置只接受 `api_token`，没有兼容字段回退。
@@ -51,12 +51,58 @@ EBS 不支持原地缩小。使用原始 8 GB Canonical AMI 快照创建 10 GB �
 
 EC2 启动后，`memoverse-ddns.service` 通过 IMDSv2 读取实例 ID 和当前公网 IPv4，用仅限本域名 DNS 编辑的 Cloudflare Token 更新精确的一条 A 记录。成功读回核验后，状态原子保存到 `/var/lib/memoverse-ddns/state.json`。配置和状态均为 root 所有、权限 600，Token 不写入 Git、命令参数或日志。
 
-已在真实服务器上验证：初次 `published_update`，重启 DDNS 服务时 `withdrawn`，随后 `published_create`；Cloudflare API 和公共 DNS 均返回新 IP `54.168.57.143`，DNS-only、TTL 60。Linux 文件锁、owner/mode 检查和 systemd 启停实际运行通过。
+初次部署时在真实服务器上验证：`published_update`，重启 DDNS 服务时 `withdrawn`，随后 `published_create`；当时 Cloudflare API 和公共 DNS 均返回 IP `54.168.57.143`，DNS-only、TTL 60。Linux 文件锁、owner/mode 检查和 systemd 启停实际运行通过。
 
-此流程只允许一个实例管理该域名。Cloudflare 的 DELETE 没有按当前内容的原子条件删除，检查与删除之间仍有很小的竞争窗口。强制关机或网络/Token 故障可能跳过撤回，因此关闭实例后仍需检查 DNS。当前没有为了验收执行 EC2 Stop/Start；服务器继续运行供用户测试，待用户确认通过后才正常 StopInstances。
+此流程只允许一个实例管理该域名。Cloudflare 的 DELETE 没有按当前内容的原子条件删除，检查与删除之间仍有很小的竞争窗口。强制关机或网络/Token 故障可能跳过撤回，因此关闭实例后仍需检查 DNS。初次验收仅重启 DDNS 服务，随后保持服务器运行供用户测试；之后按用户要求进行换盘和正常停机，真实 EC2 启停及 A 记录归零的结果见上文“根盘缩减至 10 GB 与最终停机”。
 
 ## 费用与清理
 
-2026-10-17 公开价格核验：实例 `0.0272 USD/运行小时`，动态公网 IPv4 `0.005 USD/使用小时`，合计 `0.0322 USD/运行小时`；20 GB gp3 约 `1.92 USD/月`，停机仍保留这项磁盘费用。税费、抵扣和额外流量以实际账单为准。
+2026-10-17 公开价格核验：实例 `0.0272 USD/运行小时`，动态公网 IPv4 `0.005 USD/使用小时`，合计 `0.0322 USD/运行小时`。初次部署的 20 GB gp3 历史费用口径为约 `1.92 USD/月`；当前已缩减为 10 GB，约 `0.96 USD/月`，停机仍保留磁盘费用，详见上文。税费、抵扣和额外流量以实际账单为准。
 
 服务器临时上传包和一次性恢复脚本已删除。本机保留当前 commit 的准确构建包与 SHA-256，用于同提交重试；保留密钥、访问配置及验收证据。迁移暂存目录 `.cache/migration-lightsail-ec2` 删除被自动审批拒绝（`blocked by policy`），已交用户手动清理。旧备份和 Lambda 缓存的历史清理限制见 Lightsail 退役记录，不能将未完成删除报告为已完成。
+
+## 阶段收尾与清理状态
+
+2026-10-18 用户结束本轮密集开发并要求停机、格式整理与清理。通过 AWS 实时查询确认指定 EC2 已为 `stopped`、无公网 IP，10 GB 加密根卷仍附着；Cloudflare API 确认本域名 A 记录数为 0。实例本已停止，本轮无需重复 StopInstances，也未启动或发布新应用版本，已部署源码仍为 `01677b2`。
+
+子代理独立复核本阶段 CPU 推理资源调整、Ubuntu 发布、DDNS 及相关调用链，未发现新增阻塞问题；另行完成格式检查和本机清理审计。仓库没有统一 formatter，本轮仅补齐 DDNS 测试方法间空行、整理部署文档标题和历史状态。28 项 DDNS 离线测试、28 个受保护运行时文件完整性检查、Git diff 空白检查均通过；修改前后测试 AST 一致，运行逻辑未改。
+
+本机 4173、8000、4174、4187、8080、8081、8443 均无监听，历史预览 PID 均不存在，无需再停进程。没有新建浏览器页面；用户现有 GitHub 页面保留。业务数据、模型与已安装依赖、私钥及认证配置、当前发布包及 SHA、备份和验收证据均保留。
+
+清理预检确认以下 22 个目录位于本仓库内、没有 Git 跟踪文件或重解析点，合计约 139.35 MiB。执行递归删除前，自动审批拒绝整条命令，仅返回 `blocked by policy`，删除没有执行；随后逐项确认目录仍在。未改用其他方式绕过，以下均为**待清理项**，路径相对本仓库：
+
+```text
+.cache/anyimage-smoke
+.cache/factory-smoke-84c7c4c8-6515-4edc-af91-44e627dd266a
+.cache/lightsail-tests-f335dec9-20af-4ae7-8dc2-cad7c1bd3ce3
+.cache/onegb-worker-smoke-21222bce727c43938dacf0790383dfe1
+.cache/onegb-worker-smoke-51d134f919564f90a15ebc7c81595b05
+.cache/pytest-2d4391d6-71a1-4e2d-a874-25be03d536cd
+.cache/pytest-317110bc-71ad-4051-96c5-52834ca41fa5
+.cache/pytest-a4b3fe68-8fee-4e56-b58e-80f9481e3d99
+.cache/pytest-fc1a4ba7-40b5-4794-b0b5-0c449c24e832
+.cache/pytest-api-e44aba01-fa47-45b5-b81d-a4f0330c9452
+.cache/pytest-anyimage-preparation-6fb5dc83ab9b4beba72770d3a07550c7
+.cache/pytest-anyimage-preparation-bfc9791c82f64bb7b93c0429e4e30228
+backend/cloud
+backend/__pycache__
+.pytest_cache
+.cache/deployment-tests
+.cache/ddns-unit-tests
+.cache/tmp
+demo/dist
+.cache/run
+.cache/npm
+.cache/pip
+```
+
+此前已被拒绝的以下 6 项仍在，本轮未重试删除：
+
+```text
+backups/local-baseline-20261017-213502
+.cache/iam
+.cache/uv
+.cache/pytest-cloud-generator
+backend/.pytest-repo-integration-20261017-a
+.cache/migration-lightsail-ec2
+```

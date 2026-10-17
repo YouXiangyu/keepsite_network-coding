@@ -187,14 +187,14 @@ need an operator-reviewed journald reload/restart to apply. Nginx's own logs hav
 daily/10 MB rotation, three old files and compression, without duplicating the
 distribution's `/var/log/nginx/*.log` rules. Inspect actual disk usage during the
 trial. Retaining data/backups across updates also requires monitoring free disk.
-# 当前部署入口
+
+## 当前部署入口
 
 仓库更新入口为 `scripts/deploy-ubuntu.ps1`：默认输出计划，确认参数后加 `-Execute`。脚本要求工作区已提交，使用当前 Git 提交生成源码包和同源 API 的前端构建，上传后按制品 SHA256 验证/准备发布目录并执行有超时的健康检查；启动或健康失败会尝试恢复此前代码与 service unit，再验证恢复健康。回滚失败会明确报错，不能视为已经恢复。相同 commit 已启用且健康时不重启。
 
 数据迁移使用 `scripts/package-server-data.py --output <绝对路径.tar.gz>`，接收端在启动服务前执行 `--verify-extracted <解包目录>`。SQLite 业务行完整保留，原图与所有 ready 任务的产物逐文件校验；临时传输包不作为长期备份。
 
-
-## Script-only validation
+### Script-only validation
 
 `python -B -m unittest discover -s deploy/ubuntu/tests -v` checks archive identity,
 unsafe extraction, same-commit reuse/resume and command-stub activation failures.
@@ -204,7 +204,8 @@ A successful internal health response is not final acceptance: verify the active
 commit, HTTP redirect, unauthenticated denial and authenticated HTTPS behavior.
 The code deployment does not make a data backup automatically; create/verify the
 consistent backup before a schema-changing deployment.
-# EC2 动态公网 IP 与 Cloudflare DDNS
+
+## EC2 动态公网 IP 与 Cloudflare DDNS
 
 本项目使用自动分配的公网 IPv4。实例停止后该地址释放，下次启动通过 `memoverse-ddns.service` 更新 `keepsite.space` 的 A 记录；不要将最近观测到的 IP 当作固定地址。通过 AWS MCP 按项目运行信息中的 instance ID 启动/停止，避免误操作账户中的其他实例。
 
@@ -224,6 +225,6 @@ sudo systemctl enable --now memoverse-ddns
 
 `publish` 默认仅预览；systemd 执行带 `--execute` 的操作。更新一个已经 active 的 DDNS 服务，需要有计划地重启该服务并检查 DNS；这会短暂撤回再发布记录。程序读取 IMDSv2，只修改指定 zone/name 的单一 A 记录，读回验证后将归属记录保存到 `/var/lib/memoverse-ddns/state.json`。正常关闭时仅撤回仍匹配本实例、IP、record ID 和 revision 的记录。
 
-只允许一个实例管理该域名。强制停机、Token 失效或并发 DNS 修改可能导致撤回跳过/失败；实例停机后应检查结果。当前已实测 DDNS 服务停止/启动，保持 EC2 运行供用户验收，用户确认测试通过后再停止实例。
+只允许一个实例管理该域名。强制停机、Token 失效或并发 DNS 修改可能导致撤回跳过/失败；实例停机后应检查结果。用户验收前保持 EC2 运行，用户确认测试通过或明确要求停机后正常停止实例。2026-10-18 已验证真实 EC2 停机后的 A 记录撤回；最近一次状态及验证范围见[EC2 部署验收](../../docs/EC2部署验收.md)。
 
 动态 IP 部署使用 `-HostKeyAlias memoverse-i-0e9ba9bc6f4b1c019`，known_hosts 中该别名已关联经 AWS 控制台输出核对的主机公钥。每次启动重新查询 IP，但保留 `StrictHostKeyChecking=yes`，不因地址变化跳过身份校验。

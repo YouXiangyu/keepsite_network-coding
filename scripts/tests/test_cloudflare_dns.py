@@ -324,10 +324,13 @@ class Response:
     def __init__(self, data):
         self.data = data
         self.closed = False
+
     def read(self, limit):
         return self.data[:limit]
+
     def __enter__(self):
         return self
+
     def __exit__(self, *args):
         self.closed = True
 
@@ -336,6 +339,7 @@ class Opener:
     def __init__(self, replies):
         self.replies = list(replies)
         self.calls = []
+
     def open(self, request, timeout):
         self.calls.append((request, timeout))
         reply = self.replies.pop(0)
