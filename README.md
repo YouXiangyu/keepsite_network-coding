@@ -40,7 +40,7 @@
 - [部署与更新脚本](scripts/deploy-lightsail.ps1)（默认仅显示计划，执行需要 `-Execute`）
 - [一次性数据迁移与完整性校验](scripts/package-server-data.py)
 
-1 GB 实例上的实际生成与内存验收以部署记录为准，不以本机性能代替。域名 `keepsite.space` 的 HTTPS 正在随 DNS 生效完成配置。
+已完成服务器数据迁移、实际生成和一次代码更新验收，详见 [部署验收记录](docs/Lightsail部署验收.md)。域名 `keepsite.space` 的 HTTPS 等待名称服务器切换生效；当前未开放明文应用入口。
 
 ## 验证
 
