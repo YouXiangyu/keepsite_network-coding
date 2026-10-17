@@ -20,9 +20,9 @@ cat <<PLAN
 Plan for Ubuntu 24.04:
   Host initialization requested: $INITIALIZE_HOST (apt/user/global logs only when 1).
   Prepare memoverse service user and $RELEASE Python 3.12 venv.
-  Link release .cache to /opt/memoverse/shared/cache; persist data in /var/lib/memoverse.
+  Link release .cache to /opt/memoverse/shared/cache; prepare separate account data at /var/lib/memoverse-v2; preserve old /var/lib/memoverse.
   Install pinned CPU inference dependencies and verify/download one MoGe2 model.
-  Initial host setup writes defaults/log limits; activation installs the release service unit.
+  Initial host setup writes log limits; no environment or authentication defaults are created.
   Do NOT change current symlink, start application, enable a public Nginx site,
   create credentials/TLS/swap, or modify DNS. Planned origin: https://$DOMAIN
 PLAN
@@ -52,9 +52,8 @@ if (( INITIALIZE_HOST )); then
   cleanup_policy
   POLICY_CREATED=0
   if ! id memoverse >/dev/null 2>&1; then
-    useradd --system --user-group --home-dir /var/lib/memoverse --shell /usr/sbin/nologin memoverse
+    useradd --system --user-group --home-dir /var/lib/memoverse-v2 --shell /usr/sbin/nologin memoverse
   fi
-  install -d -o memoverse -g memoverse -m 0750 /var/lib/memoverse
   install -d -o memoverse -g memoverse -m 0755 /opt/memoverse/shared /opt/memoverse/shared/cache
   install -d -o memoverse -g memoverse -m 0750 /opt/memoverse/shared/cache/tmp /opt/memoverse/shared/cache/pip
   install -d -o root -g root -m 0755 /var/www/letsencrypt
@@ -63,8 +62,10 @@ else
   id memoverse >/dev/null 2>&1 || { echo "Host not initialized; review --initialize-host." >&2; exit 1; }
   command -v python3.12 >/dev/null
   command -v nginx >/dev/null
-  [[ -d /var/lib/memoverse && -d /opt/memoverse/shared/cache && -f /etc/memoverse.env ]] || { echo "Host paths/environment are incomplete." >&2; exit 1; }
+  [[ -d /opt/memoverse/shared/cache ]] || { echo "Host paths/environment are incomplete." >&2; exit 1; }
 fi
+[[ ! -L /var/lib/memoverse-v2 ]] || { echo "Account data directory cannot be a symlink." >&2; exit 1; }
+install -d -o memoverse -g memoverse -m 0700 /var/lib/memoverse-v2
 if [[ -e "$RELEASE/.cache" || -L "$RELEASE/.cache" ]]; then
   [[ -L "$RELEASE/.cache" && "$(realpath "$RELEASE/.cache")" == /opt/memoverse/shared/cache ]] || { printf 'Release .cache exists and is not the expected shared link; nothing removed.\n' >&2; exit 1; }
 else
@@ -77,21 +78,6 @@ fi
 runuser -u memoverse -- env PIP_CACHE_DIR=/opt/memoverse/shared/cache/pip TMPDIR=/opt/memoverse/shared/cache/tmp \
   "$RELEASE/backend/.venv/bin/python" -B -m pip install --only-binary=:all: -r "$RELEASE/backend/requirements.txt"
 runuser -u memoverse -- bash "$RELEASE/scripts/setup-anyimage.sh" --execute --python "$RELEASE/backend/.venv/bin/python"
-if [[ ! -e /etc/memoverse.env ]]; then
-  umask 077
-  cat > /etc/memoverse.env <<ENV
-MEMOVERSE_DATA_DIR=/var/lib/memoverse
-MEMOVERSE_ALLOWED_ORIGINS=https://$DOMAIN,http://127.0.0.1:4173,http://localhost:4173
-ANYIMAGE_PYTHON=/opt/memoverse/current/backend/.venv/bin/python
-PYTHONDONTWRITEBYTECODE=1
-HF_HUB_OFFLINE=1
-OMP_NUM_THREADS=1
-OPENBLAS_NUM_THREADS=1
-MKL_NUM_THREADS=1
-ENV
-  chown root:memoverse /etc/memoverse.env
-  chmod 0640 /etc/memoverse.env
-fi
 if (( INITIALIZE_HOST )); then
   install -d -o root -g root -m 0755 /etc/systemd/journald.conf.d
   cat > /etc/systemd/journald.conf.d/60-memoverse-limits.conf <<'JOURNAL'
@@ -117,4 +103,4 @@ JOURNAL
 ROTATE
 fi
 printf 'Preparation complete. Review/activate current release separately. No site or application was started.\n'
-printf 'Existing environment was preserved. Journal limits apply after journald reload/restart; review this host-wide change before applying.\n'
+printf 'No environment was written; stage complete auth configuration separately. Existing environment was preserved. Journal limits apply after journald reload/restart; review this host-wide change before applying.\n'

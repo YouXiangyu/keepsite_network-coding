@@ -1,230 +1,70 @@
-# Ubuntu 24.04 single-server deployment
+# Ubuntu / EC2 部署
 
-This is the direct Linux deployment of the existing SQLite/FastAPI application.
-No container runtime or cloud SDK is required. Preparation scripts default to a
-printed plan; `--execute` is required for package installation or downloads.
-They do not create an AWS instance, request a certificate, change DNS, generate a
-default login password, create swap, start the app or publish the site.
+项目运行于东京的既有 `t3.small`（2 GB）EC2，应用单进程、单生成 worker，Nginx 提供 HTTPS。账号版使用新的 `/var/lib/memoverse-v2`、Cognito 和私有 S3。旧 `/var/lib/memoverse` 保留，绝不能把旧 schema 1 目录交给新版本自动升级。
 
-## Layout and ownership
+实时实例、域名、角色、用户池与配置位置见[项目运行信息](../../.agents/skills/memoverse-delivery/references/project-context.md)。操作前用 AWS MCP 查询明确实例 ID；启动后重新查询动态公网 IP，核对 DDNS 和 SSH 主机身份，不使用历史 IP。
 
-| Path | Purpose |
-| --- | --- |
-| `/opt/memoverse/releases/<git-commit>` | Release source and locally built `demo/dist/client` |
-| `/opt/memoverse/current` | Active release symlink, switched by the reviewed update procedure |
-| `/opt/memoverse/shared/cache` | Shared AnyImage source, CPU wheels, model, pip cache and temporary files |
-| `<release>/.cache` | Symlink to the shared cache; never a copy of Windows wheels |
-| `<release>/backend/.venv` | Per-release Ubuntu Python 3.12 virtual environment |
-| `/var/lib/memoverse` | Persistent SQLite, media, model outputs and temporary backup exports |
-| `/etc/memoverse.env` | Private service environment, root:memoverse 0640 |
-| `/etc/nginx/memoverse.htpasswd` | Operator-created BasicAuth password hashes, root:www-data 0640 |
-| `/var/log/memoverse` | Nginx application logs; separate from distro nginx logrotate wildcard |
+## 发布前提
 
-The `memoverse` system user has no login shell. Releases should be root-owned and
-readable/traversable by both `memoverse` and Nginx's `www-data`; executable/source
-directories need normal 0755 traversal and static files 0644 readability. The
-service can write only its persistent data/shared cache and private temporary
-directory. The installer does not recursively change ownership of uploaded user
-data or arbitrary existing release directories.
+- 源码完整提交，工作区干净，阶段独立审查与相关测试通过。
+- EC2 running 且状态检查通过，严格 SSH host key 验证可用。动态地址使用稳定 `-HostKeyAlias memoverse-i-0e9ba9bc6f4b1c019`。
+- Cognito 已配置邮箱验证、Google 提供方、授权码与令牌轮换；环境配置包含[后端列出的必需项](../../backend/README.md)。密钥只放受限文件，不输出或提交 Git。
+- 私有 S3 禁止公开访问，服务器通过实例角色获得临时凭据。角色策略见 `memoverse-s3-policy.json`：只允许目标桶 media/models 的 Get/Put，另允许该桶 ListBucket，使不存在对象的 HEAD 正确返回 404；没有对象删除、ACL、KMS 或其他桶权限。授权候选由 IAM Policy Autopilot 生成后按实际 SSE-S3 和前缀范围收紧，并经过 IAM 模拟验证。
+- `/opt/memoverse/shared/initial-template-v1` 是已核验、不可变的账号初始化模板。目录 root:memoverse 0750、文件 0640。分发只含 manifest 及引用媒体/模型，不能夹带审计快照 `source.sqlite3`。
+- `/var/lib/memoverse-v2` 属于 memoverse，0700；service 的写路径只包括新数据目录和共享模型缓存。旧数据库、证书、DDNS 与认证回退资料保持完整。
 
-## Initial preparation
+## 准备与候选验证
 
-Build the existing frontend on the development computer after its protected-runtime
-check, with the API base configured for the final HTTPS origin. Upload source and
-`demo/dist/client` into a commit-named release directory. Do not upload `.venv`,
-`node_modules`, secrets, Windows dependency caches or local user media implicitly.
+先执行计划模式；同一次发布始终使用同一 Git commit 及其已校验制品。
 
-```bash
-bash /opt/memoverse/releases/<commit>/deploy/ubuntu/install.sh \
-  --release /opt/memoverse/releases/<commit> --domain keepsite.space
-# After reviewing that plan:
-sudo bash /opt/memoverse/releases/<commit>/deploy/ubuntu/install.sh \
-  --release /opt/memoverse/releases/<commit> --domain keepsite.space --initialize-host --execute
+```powershell
+./scripts/deploy-ubuntu.ps1 -Server <本次IP> -HostKeyAlias memoverse-i-0e9ba9bc6f4b1c019 -PrepareOnly
+./scripts/deploy-ubuntu.ps1 -Server <本次IP> -HostKeyAlias memoverse-i-0e9ba9bc6f4b1c019 -PrepareOnly -Execute
 ```
 
-The installer checks Ubuntu 24.04 and the uploaded release before modifying it.
-Only explicit `--initialize-host` performs system package/user/global-log setup.
-Ordinary release preparation verifies the initialized host and installs only the
-release venv/model dependencies; it does not run apt or recreate the environment.
-Initial host setup installs Nginx, Python venv/pip, unzip/git/curl, CA certificates, apache2-utils,
-certbot, libgomp1, logrotate and GNU time. A temporary `policy-rc.d` prevents package
-installation from starting the default Nginx site; it is removed on exit. If an
-administrator already supplied that policy, the installer stops without replacing
-it. A force-killed installation can leave the temporary policy: inspect its content
-before removing it; do not delete an unrelated administrator policy.
+`-PrepareOnly` 构建同源前端、上传已提交源码和构建，校验 tar/文件哈希，准备独立 release 与 Python 依赖；不启动应用、不切换 current 或公开站点。相同提交只复用准确匹配的制品，目录或哈希冲突立即停止。`-InitializeHost` 仅用于已审查的新主机初始软件/用户配置，不在每次更新重复运行。
 
-The original `/etc/memoverse.env` is preserved on repeated runs. Check its allowed
-origins and data directory explicitly. Its default origins include the selected
-HTTPS domain and local port 4173 for SSH-tunnel tests. Only the operator writes
-BasicAuth credentials; never put them in source, shell command arguments or logs.
-Create/update the htpasswd interactively in the private server session, and check
-permissions before exposing TLS. Existing passwords must not be overwritten by a
-new deployment.
+新环境放 `/etc/memoverse.env.next`（root 0600 或 root:memoverse 0640），新站点放 `/etc/nginx/sites-available/memoverse.next`（root 0644）。候选文件必须是实际普通文件。环境中的 `MEMOVERSE_DATA_DIR` 必须为新目录，`MEMOVERSE_STORAGE=s3`，身份与模板配置必须齐全；不要从 shell 执行环境文件，也不要在命令行传密钥。
 
-## Model and native dependencies
+环境中的 `ANYIMAGE_PYTHON` 可省略，让生成任务使用当前进程解释器；如指定，必须对应新 release 的 venv。不能让候选版本调用旧 current 的解释器。
 
-`scripts/setup-anyimage.sh` can also be run independently as the service user:
+重大配置迁移先在服务器 `127.0.0.1` 的独立端口启动候选服务，使用相同新环境和实例角色检查真实对象读取、账号初始化、匿名拒绝与登录流程。候选检查不改域名入口，结束后停止候选服务；同一数据目录不要同时运行多个生成 worker。
 
-```bash
-sudo -u memoverse bash /opt/memoverse/releases/<commit>/scripts/setup-anyimage.sh \
-  --python /opt/memoverse/releases/<commit>/backend/.venv/bin/python
-# Add --execute only after reviewing its plan.
+## 正式切换
+
+```powershell
+./scripts/deploy-ubuntu.ps1 -Server <本次IP> -HostKeyAlias memoverse-i-0e9ba9bc6f4b1c019 -EnvironmentPath /etc/memoverse.env.next -NginxPath /etc/nginx/sites-available/memoverse.next
+./scripts/deploy-ubuntu.ps1 -Server <本次IP> -HostKeyAlias memoverse-i-0e9ba9bc6f4b1c019 -EnvironmentPath /etc/memoverse.env.next -NginxPath /etc/nginx/sites-available/memoverse.next -Execute
 ```
 
-It pins AnyImage to `2e2ab3eb9b5242deadca097c929c40329dbb5012`, skips unrelated
-Git LFS assets, and installs Linux CPU binary wheels into `.cache/anyimage-deps`:
-ONNXRuntime 1.24.4, trimesh 4.11.2 and NumPy 2.3.5, including their required
-dependencies. The base venv provides Pillow and API packages. No Blender, Torch,
-CUDA, background-removal model or upscaler is installed.
+激活脚本持互斥锁，保存实际旧环境、站点、unit 与 current 到 root-only 的 `/opt/memoverse/activation-backups/activation-*`。先预检候选权限、配置和 Nginx 语法；停止旧应用后切换环境、unit 和代码，再检查 health、匿名 state=401 和 session configured=true。
 
-Only `moge-2-vits-normal-onnx/model.onnx` is downloaded: 140,852,051 bytes,
-SHA256 `24eacb5dc7a2c54c7bc98f7de085ffbed79ad006ea5b664c2c2cdc02ff3a52f0`.
-Existing models are reused only after hashing them; downloads use the pinned
-official catalog/downloader and verify the result. Cached dependencies are tied
-to the Python ABI/platform; a mismatch stops instead of overwriting a live cache.
-Native imports and the CPU provider are checked before reporting preparation
-success. This does **not** establish that a 1 GB machine can run inference safely.
+站点配置变化时会短暂停止 Nginx，避免旧日志格式记录新 OAuth 回调。只有新后端访问控制通过，才安装并启动公开登录页配置。环境/站点变更即使使用相同 commit 也会正确应用；完全相同且健康时保持幂等。
 
-Keep AnyImage's licence in its cached source. Do not modify that source to tune
-the application; runtime knobs belong to the application's own adapter.
+失败回滚先彻底停止 Nginx 的新公开 worker，恢复并检查旧站点，再恢复实际旧环境、unit 和代码，最后启动旧应用。若恢复失败则保留停站/停应用状态并明确报告 `ROLLBACK FAILED`；不能把尝试回滚当作成功。保留备份直至新版本及数据验证通过，不盲删冲突 release。
 
-## Activation, TLS and authentication
+未来仅代码更新且现用配置已经完整时，可以省略两个候选路径参数。首次从 BasicAuth 单用户版本转到账号版本，必须一起切换环境和站点配置。
 
-1. Root separately prepares the planned 2 GB swap and verifies available memory
-   and disk space. Swap is a buffer, not proof of sufficient inference memory.
-2. Inspect the prepared release, dependencies and environment, then atomically set
-   `/opt/memoverse/current` to that release. The installer never changes that link.
-3. Start/enable `memoverse.service` deliberately. It binds only `127.0.0.1:8000`
-   with **one** Uvicorn worker, so there is one persistent local job worker.
-   Do not add reload, multiple Uvicorn workers or auto-sized Gunicorn workers.
-4. Before DNS/TLS is ready, test through an SSH tunnel to loopback and the local
-   frontend. Do not expose port 8000 or temporarily publish the application over
-   plaintext HTTP. A tunnel is transport, not a substitute for final BasicAuth.
-5. Once DNS is correct, the operator may configure a temporary port-80 server
-   that serves **only** `/.well-known/acme-challenge/` from `/var/www/letsencrypt`
-   and returns 404 elsewhere. Obtain the certificate with certbot's webroot mode.
-   This avoids configuring the final 443 server before its certificate exists,
-   and lets later renewals use the same challenge directory.
-6. Create the private htpasswd, replace `__DOMAIN__` in `nginx.conf.template`,
-   verify there are no placeholders, and install it as the site's config. Review
-   other enabled Nginx sites (including the distro default), run `nginx -t`, then
-   enable/reload Nginx. Do not remove an unrelated site's config automatically.
-   Certificates and password hashes must exist before this step. Arrange a
-   certificate renewal deploy hook that reloads Nginx after successful renewal.
+## 验收与运维
 
-The final template serves no application on port 80: ACME requests are files,
-everything else redirects to HTTPS. All 443 application/static/API requests use
-BasicAuth. `/api/...` is proxied with the original URI, no SPA fallback or access
-to data directories; Nginx strips Authorization after authenticating it. The
-frontend's local-client header remains in use but is not authentication itself.
-Static content comes only from `current/demo/dist/client`; other routes use the
-SPA's index. Photo uploads allow a 13 MiB HTTP body for a 12 MiB file plus multipart
-overhead; the backend retains its 12 MiB content limit. API responses disable
-proxy buffering and caching; long file downloads/backup responses are not loaded
-into the Nginx response cache.
+- 检查内部 health、HTTP→HTTPS、公开登录页、匿名 API/原图/模型/备份拒绝。
+- 实测邮箱/Google 身份、两账号隔离、模板首次初始化、上传生成、编辑复用、删除与导出；模拟提供方测试不能代替真实 Google 同意和邮件收件。
+- 验证 `/opt/memoverse/current` 实际提交、S3 对象完整性与私有性、原数据库仍保留；检查磁盘、内存和 OOM。
+- Nginx access 格式不含查询字符串，OAuth callback 的 access/error 日志单独关闭；Uvicorn 同样去除认证回调查询。应用日志不记录密码、验证码或令牌。
+- 应用依赖实例角色，不保存长期 AWS 访问密钥。按测试规模评估 S3 访问日志、CloudTrail 数据事件和 CloudWatch 指标的可观测性与额外费用，不默认启用与本轮无关的收费服务。
+- systemd 默认 MemoryHigh=1200M、MemoryMax=1500M、swap 上限 2 GB，针对当前 2 GB 测试机；更大图片/并发仍需实测。以应用行为判断容量，不把单样例当作压测结果。
+- 用户验收前保留服务器可访问；用户确认通过或明确要求后正常停止 EC2，核验 DDNS 撤回。停机仍保留磁盘及 S3 数据计费。
 
-The domain rollout and credentials are operator tasks, not default script actions.
-Only HTTP/HTTPS need public ingress; SSH should be scoped to the operator and
-port 8000 remains closed publicly. Verify unauthenticated requests cannot fetch
-the app, API, media or models, and authenticated HTTPS flows preserve images.
+## 自动 DNS
 
-## Updating and rollback
+`memoverse-ddns.service` 在 EC2 开机后读取 IMDSv2，更新 Cloudflare 精确 A 记录，正常关机撤回仍属于本实例的记录。配置和状态仅 root 可读。DDNS 是独立运维组件，普通应用发布不会自动替换 `/opt/memoverse/admin/sync-cloudflare-dns.py`。
 
-The update entry point is `scripts/deploy-ubuntu.ps1 -Server <verified-ip>`; the
-server is mandatory and has no historical IP fallback. It defaults to a plan.
-Use `-InitializeHost` only for a new host; `-Execute` authorizes the selected plan.
-SSH files and exact reusable release artifacts live in ignored `.cache/server/`.
-Existing authentication, DNS and certificates are preserved. Instance startup and
-provider checks remain separate operator actions. The release flow is:
+若明确修改 DDNS，先验证脚本与 unit，再同步两者、daemon-reload，并有计划地重启服务；重启会短暂撤回再发布 DNS。只允许单实例管理该域名。强制关机、网络故障或 Token 失效时不保证撤回，关机后必须读回核验。
 
-1. Upload a new commit-named release, including prebuilt `dist/client`; verify its
-   identity and frontend runtime checks. Never copy over the running release.
-2. Link `.cache` to the existing shared cache, create a new Python 3.12 venv and
-   install `backend/requirements.txt`; run the model setup's native import/hash
-   checks. Do not rerun system apt installation for a normal application update.
-   A model/dependency version change requires a separate reviewed cache migration.
-3. Take a consistent SQLite backup using SQLite's backup API (a raw copy while WAL
-   is active is insufficient) and preserve referenced media/model files. Keep
-   `/var/lib/memoverse` outside the release tree and never replace it from Git.
-4. Verify every source/static payload file against the SHA256-identified uploaded
-   archive. A matching `.artifact-sha256` permits resuming dependency preparation;
-   `.prepared-sha256` marks completed preparation. Unknown/conflicting directories
-   stop without deletion. Reuse the exact local cached tar for same-commit retries;
-   do not rebuild a different artifact under the same identity.
-5. Stop the service so its generator child is reaped, atomically switch `current`,
-   restart and verify loopback health plus an authenticated HTTPS smoke check.
-   `KillMode=control-group` and a 30-second stop window cover owned subprocesses.
-6. If acceptance fails, restore the previous link and restart. Schema-changing
-   updates need an explicit compatible rollback/data-restore decision. Do not
-   prune the prior release, backups or shared assets automatically.
+## 本地控制流测试
 
-## 1 GB acceptance and resource limits
-
-The unit requests `MemoryHigh=700M`, `MemoryMax=850M` and `MemorySwapMax=2G` to
-contain the API and its child process together, leaving room for the OS/Nginx.
-These conservative limits are retained until the operator chooses the new host
-budget; moving to a larger instance does not silently raise them. Configure a
-reviewed `/etc/systemd/system/memoverse.service.d/resources.conf` with `[Service]`
-and explicit `MemoryHigh`, `MemoryMax`, `MemorySwapMax` values, then daemon-reload
-and deliberately restart. Release installation preserves such drop-ins.
-These are initial safety limits, not measured sizing. Large image decode and
-model activations can exceed them; a 141 MB model file is not its peak RSS.
-The kernel may kill a worker under pressure and jobs must visibly fail/recover.
-Verify cgroup/swap availability rather than assuming the settings took effect.
-
-Measure the real inference worker with `/usr/bin/time -v`, then observe the full
-service via `systemctl show memoverse -p MemoryCurrent -p MemoryPeak -p Result`,
-the service cgroup's `memory.events`, `free -h`, and kernel OOM logs. Test small
-and large JPEG/PNG, alpha images, repeated jobs, upload during generation, backup,
-restart recovery and the generated GLB's embedded texture/non-flat geometry.
-Check responsiveness as well as successful completion. Do not claim this machine
-passes based on desktop timings; persistent swap thrashing or OOM means the
-selected workload/settings need adjustment before enabling normal generation.
-
-The service's stdout/stderr go to journald with rate limits. Installer writes
-host-wide journald bounds (100 MB persistent, 30 MB runtime, seven days), which
-need an operator-reviewed journald reload/restart to apply. Nginx's own logs have
-daily/10 MB rotation, three old files and compression, without duplicating the
-distribution's `/var/log/nginx/*.log` rules. Inspect actual disk usage during the
-trial. Retaining data/backups across updates also requires monitoring free disk.
-
-## 当前部署入口
-
-仓库更新入口为 `scripts/deploy-ubuntu.ps1`：默认输出计划，确认参数后加 `-Execute`。脚本要求工作区已提交，使用当前 Git 提交生成源码包和同源 API 的前端构建，上传后按制品 SHA256 验证/准备发布目录并执行有超时的健康检查；启动或健康失败会尝试恢复此前代码与 service unit，再验证恢复健康。回滚失败会明确报错，不能视为已经恢复。相同 commit 已启用且健康时不重启。
-
-数据迁移使用 `scripts/package-server-data.py --output <绝对路径.tar.gz>`，接收端在启动服务前执行 `--verify-extracted <解包目录>`。SQLite 业务行完整保留，原图与所有 ready 任务的产物逐文件校验；临时传输包不作为长期备份。
-
-### Script-only validation
-
-`python -B -m unittest discover -s deploy/ubuntu/tests -v` checks archive identity,
-unsafe extraction, same-commit reuse/resume and command-stub activation failures.
-The activation tests substitute only filesystem root/root guard and OS commands;
-no real systemd, SSH or cloud calls occur. Also parse PowerShell and run `bash -n`.
-A successful internal health response is not final acceptance: verify the active
-commit, HTTP redirect, unauthenticated denial and authenticated HTTPS behavior.
-The code deployment does not make a data backup automatically; create/verify the
-consistent backup before a schema-changing deployment.
-
-## EC2 动态公网 IP 与 Cloudflare DDNS
-
-本项目使用自动分配的公网 IPv4。实例停止后该地址释放，下次启动通过 `memoverse-ddns.service` 更新 `keepsite.space` 的 A 记录；不要将最近观测到的 IP 当作固定地址。通过 AWS MCP 按项目运行信息中的 instance ID 启动/停止，避免误操作账户中的其他实例。
-
-一次性配置位于本机 `.cache/server/cloudflare.json`，字段为 `zone_id`、`record_name`、`api_token`；Token 使用 Cloudflare **Edit zone DNS** 模板，资源限定 `keepsite.space`。该文件受本机权限保护并被 Git 忽略。将其安全传输到服务器 `/etc/memoverse/cloudflare.json`，目录 root:root 700、文件 root:root 600；不要将 Token 写入 shell 参数、user data、Git 或日志。
-
-首次配置及修改 DDNS 代码时，单独同步以下运维组件；普通应用发布不会静默替换它们：
-
-```bash
-sudo install -d -m 0755 /opt/memoverse/admin
-sudo install -m 0755 /opt/memoverse/current/scripts/sync-cloudflare-dns.py /opt/memoverse/admin/sync-cloudflare-dns.py
-sudo install -m 0644 /opt/memoverse/current/deploy/ubuntu/memoverse-ddns.service /etc/systemd/system/memoverse-ddns.service
-sudo systemctl daemon-reload
-sudo systemd-analyze verify /etc/systemd/system/memoverse-ddns.service
-sudo python3 /opt/memoverse/admin/sync-cloudflare-dns.py publish
-sudo systemctl enable --now memoverse-ddns
+```powershell
+backend/.venv/Scripts/python.exe -B -m unittest discover -s deploy/ubuntu/tests -v
 ```
 
-`publish` 默认仅预览；systemd 执行带 `--execute` 的操作。更新一个已经 active 的 DDNS 服务，需要有计划地重启该服务并检查 DNS；这会短暂撤回再发布记录。程序读取 IMDSv2，只修改指定 zone/name 的单一 A 记录，读回验证后将归属记录保存到 `/var/lib/memoverse-ddns/state.json`。正常关闭时仅撤回仍匹配本实例、IP、record ID 和 revision 的记录。
-
-只允许一个实例管理该域名。强制停机、Token 失效或并发 DNS 修改可能导致撤回跳过/失败；实例停机后应检查结果。用户验收前保持 EC2 运行，用户确认测试通过或明确要求停机后正常停止实例。2026-10-18 已验证真实 EC2 停机后的 A 记录撤回；最近一次状态及验证范围见[EC2 部署验收](../../docs/EC2部署验收.md)。
-
-动态 IP 部署使用 `-HostKeyAlias memoverse-i-0e9ba9bc6f4b1c019`，known_hosts 中该别名已关联经 AWS 控制台输出核对的主机公钥。每次启动重新查询 IP，但保留 `StrictHostKeyChecking=yes`，不因地址变化跳过身份校验。
+测试使用隔离路径及命令桩，覆盖制品身份、路径安全、幂等、配置更新与失败回滚；不调用真实 systemd、SSH 或 AWS。真实发布必须另行验收并维护[EC2 部署记录](../../docs/EC2部署验收.md)。

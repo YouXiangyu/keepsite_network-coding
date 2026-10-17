@@ -1,51 +1,48 @@
-# MemoVerse · 收藏与浮雕预览
+# MemoVerse · Web 收藏与浮雕应用
 
-用一张照片保存一件收藏，整理分类、标签和笔记，并通过 CPU 深度推理生成可交互的浮雕模型。
+用一张照片保存一件收藏，整理分类、标签和笔记，并通过 CPU 深度推理生成可交互的浮雕模型。本轮先完成响应式 Web App；Android APK 后续独立开发，网页不再套手机模拟器。
 
-## 当前功能
+## 当前实现
 
-- 收藏、分类、探索、好友与个人五个页面，保留手机预览框架。
-- 原图上传、编辑、删除、搜索与持久保存。
-- FastAPI + SQLite 保存元数据，磁盘保存原图和 GLB 模型。
-- 固定版本 AnyImage MoGe2 ONNX CPU 推理，加上本项目的浮雕网格与 GLB 导出。
-- Three.js 模型预览，总偏转角限制为 40°。
+- 桌面侧栏与响应式收藏布局，手机浏览器原生表单、滚动和导航。
+- Google 一键登录、邮箱密码注册、邮箱验证码和密码找回；未登录不能使用业务功能。
+- 服务端会话、CSRF 与账号数据隔离；退出和换号时取消旧请求，不串用用户状态。
+- FastAPI + SQLite schema 2 保存业务数据，私有 AWS S3 保存原图、GLB 与相关产物。
+- 新账户首次获得独立的初始收藏；当前模板包含 17 收藏、4 分享、6 社区内容，共 18 张图片和 18 个真实模型。后续登录不重置修改。
+- 原图上传、编辑删除、搜索、资料与本人完整 ZIP 导出。
+- 固定 AnyImage MoGe2 ONNX CPU 推理，加项目浮雕网格与 GLB 导出；Three.js 查看器总偏转上限 40°。
 
-探索和好友内容仍包含演示数据；正式多人账号、OCR、云端多人同步和 Android 近场分享尚未实现。当前生成流程不是 Blender 的 Bake Mesh 操作。
+探索和分享中的初始人物、推荐及互动数仍是测试内容。模型是带真实深度与纹理的浮雕，不是完整背面重建或 Blender Bake Mesh。OCR、Android 离线存储与原生近场分享另行开发。真实 Google 授权和邮件收件是否完成，以部署验收记录为准，不能由模拟接口测试代替。
 
 ## 技术栈与目录
 
 | 目录 | 内容 |
 | --- | --- |
-| `demo/` | React 19、TypeScript、Vite、Three.js 前端 |
-| `backend/` | FastAPI、SQLite、媒体存储与串行生成任务 |
-| `scripts/` | 本机启动、模型准备、服务器更新与数据迁移 |
-| `deploy/ubuntu/` | Ubuntu 安装、systemd、Nginx 和部署说明 |
-| `docs/` | 产品决策、设计参考、接口与验证记录 |
+| `demo/` | React、TypeScript、Vite、Three.js Web 前端 |
+| `backend/` | FastAPI、Cognito 会话、账号 SQLite、对象存储与串行生成任务 |
+| `scripts/` | 模型/模板准备、验证、构建发布与运维迁移 |
+| `deploy/ubuntu/` | EC2 安装、systemd、Nginx、角色权限和安全切换 |
+| `docs/` | 产品决定、设计参考、API 与验收证据 |
 
-## 本机运行
+## 服务器与运行
 
-已有依赖和模型的 Windows 开发环境：
+正式应用运行于 AWS 东京既有 EC2 `t3.small`（2 GB），Nginx 提供 [keepsite.space](https://keepsite.space) 的 HTTPS。Cognito 管理身份，S3 管理私有文件；Google Cloud 项目只用于 Google 登录配置，不承载应用或对象存储。前端在开发机打包后部署静态文件，正式环境不依赖开发机开机。
 
-```powershell
-./scripts/start-local.ps1
-```
+代码按 Git 提交部署到独立目录。新账号数据位于 `/var/lib/memoverse-v2`，旧 `/var/lib/memoverse` 保留；初始化模板经独立校验，不能自动把旧全局工作区归给首个注册人。环境和站点配置变化会与代码一起受控切换，失败时恢复实际旧配置与访问控制。
 
-前端默认 `http://127.0.0.1:4173`，API 默认 `http://127.0.0.1:8000`。首次安装及模型准备见 [后端说明](backend/README.md) 和 [前端说明](demo/README.md)。
+- [运行信息与实例定位](.agents/skills/memoverse-delivery/references/project-context.md)
+- [Ubuntu 发布与回滚](deploy/ubuntu/README.md)
+- [EC2 部署验收](docs/EC2部署验收.md)
+- [后端配置](backend/README.md) · [前端说明](demo/README.md) · [API 约定](docs/local-api-contract.md)
 
-## 服务器部署
+每次开机通过 Cloudflare DDNS 更新动态 IP，正常停机撤回记录。部署前按需启动，用户验收后按要求停止；停止 EC2 仍保留磁盘和 S3 数据费用。当前状态必须现场查询，不从历史 IP 或日志推断。
 
-运行于东京区域普通按需 EC2 `t3.small`（2 GB），Ubuntu 24.04，单进程 FastAPI + Nginx。代码按 Git 提交放在独立发布目录；SQLite、图片与模型保存在 `/var/lib/memoverse`，更新代码不覆盖数据。前端在本机构建，服务器不运行开发服务器。
+## 开发与验证
 
-- [安装、访问控制、HTTPS 与运维说明](deploy/ubuntu/README.md)
-- [部署与更新脚本](scripts/deploy-ubuntu.ps1)（默认仅显示计划，执行需要 `-Execute`）
-- [一次性数据迁移与完整性校验](scripts/package-server-data.py)
+本机开发需先按后端说明配置身份服务、模板和显式存储模式，然后使用 `scripts/start-local.ps1`；本机 origin 必须匹配配置，不能直接复用生产环境文件。旧 IndexedDB 保留，不再自动迁移。
 
-原 Lightsail 已删除，EC2 数据迁移、真实生成、HTTPS 和 DDNS 服务启停已验证，详见 [EC2 部署验收](docs/EC2部署验收.md)。访问 [keepsite.space](https://keepsite.space) 使用原测试账号与口令。实例每次开机通过 Cloudflare API 更新动态公网 IP，正常关机时撤回自身管理的记录。2026-10-18 已按用户要求将根盘改为 10 GB 并停止实例，当前网站暂不可访问；磁盘保留费约 $0.96/月，按保留时间折算。原环境的历史证据见 [Lightsail 退役记录](docs/Lightsail部署验收.md)。
-
-## 验证
-
-应用已有 43 项后端和 18 项前端检查通过；本次 EC2 迁移额外通过 14 项部署恢复测试、28 项 DDNS 测试，以及真实服务器验收。28 个受保护运行时文件检查与前端生产构建通过。迁移脚本另有 3 项合成数据自测。
+阶段检查涵盖后端身份/账户/对象存储与组合测试，Web 请求和运行约束、响应式浏览器交互、生产构建、初始化模板完整性以及配置切换/回滚控制流。真实服务器再验收访问控制、数据隔离、S3 文件、上传生成和 HTTPS 行为。
 
 ## 数据与第三方组件
 
-仓库不包含 `backend/data`、个人照片、生成模型、模型权重、Python/Node 环境、访问口令或 SSH 私钥。服务器数据通过独立的 SSH 传输包迁移。第三方来源与许可见 [THIRD_PARTY.md](THIRD_PARTY.md)。
+Git 不包含原数据库、新账号数据库、用户照片、生成模型、模型权重、依赖环境或凭据。会话密钥和 Google OAuth 密钥只保存在受限配置中。第三方来源与许可见 [THIRD_PARTY.md](THIRD_PARTY.md)。

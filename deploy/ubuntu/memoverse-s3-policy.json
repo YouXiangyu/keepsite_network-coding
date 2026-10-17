@@ -1,0 +1,27 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadAndCreateMediaObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:PutObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::memoverse-media-125647512944-apne1/media/*",
+        "arn:aws:s3:::memoverse-media-125647512944-apne1/models/*"
+      ]
+    },
+    {
+      "Sid": "DistinguishMissingObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::memoverse-media-125647512944-apne1"
+      ]
+    }
+  ]
+}

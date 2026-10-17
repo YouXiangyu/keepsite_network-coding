@@ -16,12 +16,17 @@
 | 实例 ID / 名称 / 可用区 | `i-0e9ba9bc6f4b1c019` / `memoverse-keepsite` / `ap-northeast-1a` |
 | 规格 | `t3.small`：x86_64、2 vCPU、2 GB RAM；CPU credits 为 standard，避免 surplus credit 费用 |
 | 系统与磁盘 | Canonical Ubuntu 24.04；10 GB 加密 gp3 根卷 `vol-0bb6aa01805d28c75`，旧 20 GB 卷已删除 |
-| 最近运行状态 | 2026-10-18 阶段收尾再次核验为 `stopped`，业务数据保留；操作前仍须实时查询 |
-| 公网 IPv4 | 自动分配；停机后无公网 IP，上次 `18.183.236.78` 已释放，启动前必须查询新值 |
+| 最近运行状态 | 2026-10-18 新一轮 Web/鉴权联调按用户要求启动，`running` 且系统、实例、EBS 检查通过；正在准备新版本，操作前仍须实时查询 |
+| 公网 IPv4 | 本轮启动查询为 `13.230.191.15`，自动分配；每次启动仍必须重新查询 |
 | Launch template / 新建默认版本 | `lt-016bca8507ac81480` / `2`，根盘默认 10 GB |
 | 安全组 / SSH key pair | `sg-0f472ac3891c65681` / `memoverse-ec2-20261017` |
 | SSH 用户 | `ubuntu` |
-| DNS | Cloudflare，`memoverse-ddns.service` 每次启动更新 A 记录，正常关闭时撤回；当前停机 A 记录为空，发布时 DNS-only、TTL 60 |
+| DNS | Cloudflare，`memoverse-ddns.service` 每次启动更新 A 记录，正常关闭时撤回；本轮 A 已核验为 `13.230.191.15`，DNS-only、TTL 60 |
+| S3 | 东京私有桶 `memoverse-media-125647512944-apne1`，Block Public Access、BucketOwnerEnforced、AES256、版本控制已启用 |
+| EC2 实例角色 / profile | `memoverse-ec2-app-20261018`，只附着本项目实例；Get/Put 限定桶内 `media/*`、`models/*`，另允许该桶 ListBucket，未授权删除、ACL、其他桶或 `ops/*` 读取 |
+| Cognito | `ap-northeast-1_02QmwLnbG`（`memoverse-test-users`），Essentials，小范围测试 MFA OFF；邮箱验证码、短效令牌、刷新轮换与撤销已配置 |
+| Cognito 网站客户端 / 登录域名 | `4eitpctiqil0pjgv0no8j1i8if` / `https://keepsite-125647512944.auth.ap-northeast-1.amazoncognito.com`；无客户端密钥，Google 与 COGNITO 已启用 |
+| Google 登录项目 | `keepsite-auth-20261018`（MemoVerse Login）；Web OAuth 只回调 Cognito 的 `/oauth2/idpresponse`，应用保持外部测试模式 |
 
 管理端公网 IP 受 EC2 安全组 SSH 规则限制。连接失败先核对当前规则和管理端 IP，不直接放宽到所有来源。账户原有另外两台停止的测试实例不属于本项目，不得顺手启动、改规格或清理。
 
@@ -32,11 +37,15 @@
 | 用途 | 路径 |
 | --- | --- |
 | 本机正在使用的数据 | `backend/data` |
+| 新账号业务目录 | 本机 `backend/data-v2`、服务器 `/var/lib/memoverse-v2`；旧 schema 1 目录保留，禁止新版本自动覆盖 |
+| 初始化模板 | 本机 `.cache/initial-template-v1`，服务器 `/opt/memoverse/shared/initial-template-v1`；18 张图、18 个模型，17 收藏、4 分享、6 社区内容 |
 | 本机网页 / API | `http://127.0.0.1:4173` / `http://127.0.0.1:8000` |
 | SSH 私钥 / 已知主机 | `.cache/server/ssh/id_rsa` / `.cache/server/ssh/known_hosts` |
 | SSH 主机身份别名 | `memoverse-i-0e9ba9bc6f4b1c019`；部署传 `-HostKeyAlias`，保持动态 IP 变化时的密钥校验 |
 | 站点测试账号与口令 | `.cache/server/access.json`，只记录位置，不读取或输出明文来做一般巡检 |
 | Cloudflare DDNS 配置 | 本机 `.cache/server/cloudflare.json`；安装目标 `/etc/memoverse/cloudflare.json`，Token 只允许本域名 DNS 编辑 |
+| Google OAuth 凭据 | 本机 `.cache/server/google-oauth.json`，仅本机用户可读；已安全配置到 Cognito，临时 S3 传输副本已按版本删除并核验为空 |
+| 新鉴权环境候选 | 本机 `.cache/server/account.env.next`、服务器 `/etc/memoverse.env.next`；含会话加密密钥，不输出或纳入 Git |
 | DDNS 服务 / 程序 / 状态 | `memoverse-ddns.service` / `/opt/memoverse/admin/sync-cloudflare-dns.py` / `/var/lib/memoverse-ddns/state.json` |
 | 本机模型与推理依赖 | `.cache/models`、`.cache/anyimage`、`.cache/anyimage-deps` |
 | 部署入口 | `scripts/deploy-ubuntu.ps1`，`Server` 必填，默认计划模式，`-Execute` 执行；新机另加 `-InitializeHost` |
@@ -53,9 +62,9 @@
 | TLS 配置脚本 | `deploy/ubuntu/enable-https.sh` |
 | 日志 | `journalctl -u memoverse`；`/var/log/memoverse/`；本机 `.cache/server/` |
 
-HTTPS 由源站 Nginx 使用 Let's Encrypt 证书提供，`certbot.timer` 续期并重载 Nginx。迁移保留现有认证与证书；整个站点与 API 由 BasicAuth 保护。自动 DDNS 只修改指定 A 记录，不擅自改变 Cloudflare 代理模式。
+HTTPS 由源站 Nginx 使用 Let's Encrypt 证书提供，`certbot.timer` 续期并重载 Nginx。新账户版本尚未正式切换时，旧运行提交 `01677b2` 仍由整站 BasicAuth 保护。正式切换须在新后端的匿名拒绝和已配置会话检查通过后再启用应用登录入口，并一起切换环境、service unit、代码与 Nginx；回滚必须恢复旧环境和访问控制。自动 DDNS 只修改指定 A 记录，不擅自改变 Cloudflare 代理模式。
 
-当前数据库是 SQLite，原图和模型存磁盘。当前生成流程是官方 AnyImage MoGe2 CPU 推理加项目网格/GLB 导出；不是 Blender Bake Mesh，也不是 Lambda。2 GB 实例配置了 2 GB swap，应用 drop-in 设置 MemoryHigh=1200M、MemoryMax=1500M。新机功能样例通过，详细证据见 EC2 验收记录，不能把单样例等同所有负载保证。
+旧运行版本的 SQLite、原图和模型仍完整保留在原目录；本轮新账号版本使用 SQLite schema 2 与私有 S3，经鉴权后端代理文件访问。初始化模板已传至服务器并逐文件核验，模板上传 S3 和新版本接管须在发布验收记录中确认。当前生成流程是官方 AnyImage MoGe2 CPU 推理加项目网格/GLB 导出；不是 Blender Bake Mesh，也不是 Lambda。2 GB 实例配置了 2 GB swap，应用 drop-in 设置 MemoryHigh=1200M、MemoryMax=1500M。
 
 ## 启停与计费决策
 
