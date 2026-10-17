@@ -1,31 +1,37 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
+import logging
 import os
 import re
+import tempfile
 import unicodedata
 import uuid
 import zipfile
 from collections import Counter
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from datetime import date as Date
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
 
 from .jobs import JobWorker, engine_status
-from .media import MAX_IMAGE_BYTES, import_data_url, persist_image
-from .store import Store, encode, now_ms
+from .media import MAX_IMAGE_BYTES, persist_image
+from .object_storage import ObjectMissing, StorageError, configured_store, object_key
+from .store import Store, StoreError, encode, now_ms, require_schema2_root
+from .template import InitialTemplate
 
 ROOT = Path(__file__).resolve().parents[1]
+log = logging.getLogger(__name__)
+
 Category = Literal["movie", "travel", "daily", "exhibition"]
 Identifier = Annotated[str, Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9_-]+$")]
 Tags = Annotated[list[Annotated[str, Field(min_length=1, max_length=100)]], Field(max_length=30)]
@@ -87,75 +93,20 @@ class Like(Model):
     liked: bool
 
 
-class LegacyItem(CollectionFields):
-    id: Identifier
-    version: Annotated[int, Field(ge=1)] = 1
-    tags: Tags
-    addedAt: Annotated[int, Field(ge=0)]
-    source: Literal["mine", "friend"]
-    sender: Annotated[str, Field(max_length=100)] | None = None
-    customImage: str | None = None
-    generation: Literal["reference", "pending"]
+
+def current_user(request: Request):
+    user = getattr(request.state, "user", None)
+    if not isinstance(user, dict) or not isinstance(user.get("id"), str):
+        raise StoreError(401, "请先登录。")
+    return user["id"]
 
 
-class LegacyShare(Model):
-    id: Identifier
-    item: LegacyItem
-    sender: Annotated[str, Field(min_length=1, max_length=100)]
-    receivedAt: str
-    unread: bool
-
-
-class Community(Model):
-    id: Identifier
-    title: Annotated[str, Field(min_length=1, max_length=70)]
-    category: Category
-    art: Annotated[str, Field(min_length=1, max_length=80)]
-    author: Annotated[str, Field(max_length=100)]
-    description: Annotated[str, Field(max_length=1000)]
-    exposures: Annotated[int, Field(ge=0)]
-    saves: Annotated[int, Field(ge=0)]
-    likes: Annotated[int, Field(ge=0)]
-
-
-class LegacyData(Model):
-    collections: list[LegacyItem]
-    shares: list[LegacyShare]
-    community: list[Community]
-    profile: Profile
-    likedCommunityIds: list[Identifier]
-
-
-class Bootstrap(Model):
-    migrationId: Identifier
-    data: LegacyData
-
-
-def require_initialized(store, db):
-    if store.meta(db, "initialized") != "1":
-        raise HTTPException(409, "本机工作区尚未完成初始化。")
-
-
-def require_item(db, identifier):
-    row = db.execute("SELECT * FROM collections WHERE id=?", (identifier,)).fetchone()
-    if not row:
-        raise HTTPException(404, "这件收藏已不存在，请刷新列表。")
-    return row
-
-
-def require_asset(db, identifier):
-    row = db.execute("SELECT * FROM assets WHERE id=?", (identifier,)).fetchone()
-    if not row:
-        raise HTTPException(404, "图片尚未上传或已不存在，请重新选择图片。")
-    return row
-
-
-def infer_tag(db, title):
+def infer_tag(db, user_id, title):
     normalize = lambda value: unicodedata.normalize("NFKC", value).strip().lower()
     query = normalize(title)
     keywords = [part for part in re.split(r"[\W_]+", query) if part]
     counts = Counter()
-    for row in db.execute("SELECT payload FROM collections ORDER BY rowid"):
+    for row in db.execute("SELECT payload FROM collections WHERE user_id=? ORDER BY rowid", (user_id,)):
         item = json.loads(row[0])
         name = normalize(item["title"])
         if name and (query in name or name in query or any(part in name for part in keywords)):
@@ -163,12 +114,17 @@ def infer_tag(db, title):
     return [counts.most_common(1)[0][0]] if counts else []
 
 
-def create_app(data_dir: Path | None = None, run_worker: bool = True) -> FastAPI:
-    store = Store(data_dir or Path(os.environ.get("MEMOVERSE_DATA_DIR", ROOT / "backend" / "data")))
+def create_app(data_dir: Path | None = None, run_worker: bool = True, *, auth_provider=None, object_store=None, template_dir: Path | None = None) -> FastAPI:
+    root = Path(data_dir or os.environ.get("MEMOVERSE_DATA_DIR", ROOT / "backend/data-v2"))
+    require_schema2_root(root)
+    template = InitialTemplate(Path(template_dir or os.environ.get("MEMOVERSE_TEMPLATE_DIR", ROOT / ".cache/initial-template-v1")))
+    storage = object_store if object_store is not None else configured_store(root)
+    store = Store(root, storage=storage, template=template)
     worker = JobWorker(store)
 
     @asynccontextmanager
     async def lifespan(app):
+        await run_in_threadpool(template.prepare_objects, storage)
         if run_worker:
             worker.start()
         try:
@@ -177,352 +133,314 @@ def create_app(data_dir: Path | None = None, run_worker: bool = True) -> FastAPI
             if run_worker:
                 worker.stop()
 
-    app = FastAPI(title="MemoVerse Local API", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="MemoVerse Account API", version="0.3.0", lifespan=lifespan)
     app.state.store, app.state.worker = store, worker
-    origins = os.environ.get("MEMOVERSE_ALLOWED_ORIGINS", "http://127.0.0.1:4173,http://localhost:4173").split(",")
-    app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"], allow_headers=["Content-Type", "X-MemoVerse-Client"])
+
+    @app.exception_handler(StoreError)
+    async def business_error(request, error):
+        return JSONResponse({"detail": error.message}, status_code=error.status_code)
+
+    @app.exception_handler(StorageError)
+    async def storage_error(request, error):
+        log.warning("Object storage operation failed: %s", type(error).__name__)
+        return JSONResponse({"detail": "媒体暂时无法读取，记录仍保留，请稍后重试。"}, status_code=404 if isinstance(error, ObjectMissing) else 503)
 
     @app.exception_handler(RequestValidationError)
-    async def invalid_request(request: Request, exc: RequestValidationError):
-        return JSONResponse({"detail": "提交的信息不完整或格式不正确，请检查图片、名称、标签和日期。"}, status_code=422)
+    async def invalid_request(request, error):
+        return JSONResponse({"detail": "提交的信息不完整或格式不正确。"}, status_code=422)
 
     @app.middleware("http")
-    async def local_guard(request: Request, call_next):
-        origin = request.headers.get("origin")
-        if origin and origin not in origins:
-            return JSONResponse({"detail": "当前来源不允许访问本机工作区。"}, status_code=403)
+    async def request_limits(request: Request, call_next):
         if request.method in {"POST", "PATCH", "PUT", "DELETE"}:
-            if request.headers.get("X-MemoVerse-Client") != "local":
-                return JSONResponse({"detail": "缺少本机客户端请求标识。"}, status_code=403)
             length = request.headers.get("content-length", "0")
-            maximum = MAX_IMAGE_BYTES + 1024 * 1024 if request.url.path == "/api/media" else 128 * 1024 * 1024
+            maximum = MAX_IMAGE_BYTES + 1024 * 1024 if request.url.path == "/api/media" else 2 * 1024 * 1024
             if length.isdigit() and int(length) > maximum:
                 return JSONResponse({"detail": "请求内容过大，原数据未修改。"}, status_code=413)
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         if request.url.path.startswith("/api/"):
-            response.headers["Cache-Control"] = "no-store"
+            response.headers["Cache-Control"] = "no-store, private"
         return response
 
-    def mutation_state(db):
-        store.bump(db)
-        return store.state(db)
+    def state_for(db, user_id, *, changed=False):
+        if changed:
+            store.bump(db, user_id)
+        response = store.state(db, user_id)
+        response["generationEngine"] = engine_status()
+        return response
 
     @app.get("/api/health")
     def health():
-        status = engine_status()
-        return {"status": "ok", "mode": "local", "database": "sqlite", "storage": "local-files", "generation": {"engine": "AnyImage", **status}}
+        return {"status": "ok"}
 
     @app.get("/api/state")
-    def state():
+    def state(request: Request):
         with store.transaction() as db:
-            return store.state(db)
-
-    @app.post("/api/bootstrap")
-    def bootstrap(body: Bootstrap):
-        with store.transaction(True) as db:
-            if db.execute("SELECT 1 FROM migrations WHERE id=?", (body.migrationId,)).fetchone():
-                return store.state(db)
-            if store.meta(db, "initialized") == "1":
-                raise HTTPException(409, "后端已有数据，此浏览器的旧收藏尚未迁移。两份数据均已保留，请先核对，不能直接覆盖。")
-            old = body.data
-            for entries in (old.collections, old.shares, old.community):
-                ids = [entry.id for entry in entries]
-                if len(ids) != len(set(ids)):
-                    raise HTTPException(422, "旧数据含重复标识，未导入任何收藏。")
-            community_ids = {entry.id for entry in old.community}
-            if any(key not in community_ids for key in old.likedCommunityIds):
-                raise HTTPException(422, "喜欢记录引用了不存在的内容。")
-
-            def migrate_item(item):
-                payload = item.model_dump(exclude_none=True)
-                image = payload.pop("customImage", None)
-                payload.pop("generation", None)
-                payload.pop("version", None)
-                asset_id = import_data_url(store, db, image)["assetId"] if image else None
-                return payload, asset_id
-
-            for original in old.collections:
-                payload, asset_id = migrate_item(original)
-                db.execute("INSERT INTO collections(id,payload,asset_id) VALUES (?,?,?)", (original.id, encode(payload), asset_id))
-                if asset_id:
-                    store.enqueue(db, original.id, asset_id, 1)
-            for original in old.shares:
-                payload = original.model_dump(exclude_none=True)
-                item, asset_id = migrate_item(original.item)
-                item["generation"], item["version"] = "reference", 1
-                if asset_id:
-                    item["assetId"] = asset_id
-                    item["customImage"] = f"/api/media/{asset_id}"
-                payload["item"] = item
-                db.execute("INSERT INTO shares VALUES (?,?)", (original.id, encode(payload)))
-            for original in old.community:
-                db.execute("INSERT INTO community VALUES (?,?)", (original.id, encode(original.model_dump())))
-            for identifier in set(old.likedCommunityIds):
-                db.execute("INSERT INTO likes VALUES (?)", (identifier,))
-            db.execute("INSERT OR REPLACE INTO meta VALUES ('profile',?)", (encode(old.profile.model_dump()),))
-            db.execute("UPDATE meta SET value='1' WHERE key='initialized'")
-            db.execute("INSERT INTO migrations VALUES (?,?)", (body.migrationId, now_ms()))
-            result = mutation_state(db)
-        worker.wake()
-        return result
+            return state_for(db, current_user(request))
 
     @app.post("/api/media")
-    async def upload(file: UploadFile = File()):
+    async def upload(request: Request, file: UploadFile = File()):
+        user_id = current_user(request)
         try:
             raw = await file.read(MAX_IMAGE_BYTES + 1)
-            def persist():
-                with store.transaction(True) as db:
-                    require_initialized(store, db)
-                    return persist_image(store, db, raw)
-            return await run_in_threadpool(persist)
+            return await run_in_threadpool(persist_image, store, user_id, raw)
         finally:
             await file.close()
 
+    def stream_object(key, content_type):
+        reader = storage.open(key)
+        return StreamingResponse(reader.chunks(), media_type=content_type,
+                                 headers={"Content-Length": str(reader.size), "Cache-Control": "no-store, private"},
+                                 background=BackgroundTask(reader.close))
+
     @app.get("/api/media/{asset_id}")
-    def media(asset_id: str):
+    def media(request: Request, asset_id: str):
         with store.transaction() as db:
-            row = require_asset(db, asset_id)
-        path = store.root / "media" / row["filename"]
-        if not path.is_file():
-            raise HTTPException(404, "本地图片文件缺失，收藏记录仍保留。")
-        return FileResponse(path, media_type=row["mime"])
+            asset = dict(store.asset(db, current_user(request), asset_id))
+        return stream_object(asset["object_key"], asset["mime"])
+
+    @app.get("/api/models/{identifier}/model.glb")
+    def model(request: Request, identifier: str):
+        with store.transaction() as db:
+            row = dict(store.model(db, current_user(request), identifier))
+        return stream_object(row["model_key"], "model/gltf-binary")
 
     @app.post("/api/collections")
-    def create(body: CreateCollection):
+    def create(request: Request, body: CreateCollection):
+        user_id = current_user(request)
         fingerprint = hashlib.sha256(encode(body.model_dump()).encode()).hexdigest()
         with store.transaction(True) as db:
-            require_initialized(store, db)
-            existing = db.execute("SELECT * FROM collections WHERE id=?", (body.id,)).fetchone()
+            existing = db.execute("SELECT * FROM collections WHERE user_id=? AND id=?", (user_id, body.id)).fetchone()
             if existing:
                 if existing["create_fingerprint"] == fingerprint:
-                    return store.state(db)
-                raise HTTPException(409, "这件收藏已创建且内容不同，请刷新后编辑。")
-            require_asset(db, body.assetId)
+                    return state_for(db, user_id)
+                raise StoreError(409, "这件收藏已创建且内容不同，请刷新后编辑。")
+            store.asset(db, user_id, body.assetId)
             payload = body.model_dump(exclude={"assetId"})
-            payload["tags"] = list(dict.fromkeys(body.tags)) if body.tags is not None else infer_tag(db, body.title)
+            payload["tags"] = list(dict.fromkeys(body.tags)) if body.tags is not None else infer_tag(db, user_id, body.title)
             payload.update(addedAt=now_ms(), source="mine")
-            input_revision = db.execute("SELECT COALESCE(MAX(input_revision),0)+1 FROM jobs WHERE collection_id=?", (body.id,)).fetchone()[0]
-            db.execute("INSERT INTO collections(id,payload,asset_id,create_fingerprint,input_revision) VALUES (?,?,?,?,?)", (body.id, encode(payload), body.assetId, fingerprint, input_revision))
-            store.enqueue(db, body.id, body.assetId, input_revision)
-            result = mutation_state(db)
+            revision = db.execute("SELECT COALESCE(MAX(input_revision),0)+1 FROM jobs WHERE user_id=? AND collection_id=?", (user_id, body.id)).fetchone()[0]
+            db.execute("INSERT INTO collections(user_id,id,payload,asset_id,create_fingerprint,input_revision) VALUES (?,?,?,?,?,?)", (user_id, body.id, encode(payload), body.assetId, fingerprint, revision))
+            store.enqueue(db, user_id, body.id, body.assetId, revision)
+            result = state_for(db, user_id, changed=True)
         worker.wake()
         return result
 
     @app.patch("/api/collections/{identifier}")
-    def update(identifier: str, body: UpdateCollection):
+    def update(request: Request, identifier: str, body: UpdateCollection):
+        user_id = current_user(request)
         with store.transaction(True) as db:
-            row = require_item(db, identifier)
+            row = store.collection(db, user_id, identifier)
             if row["version"] != body.version:
-                raise HTTPException(409, "这件收藏已在其他页面更新，草稿仍保留，请重新读取后再编辑。")
+                raise StoreError(409, "这件收藏已更新，草稿仍保留，请重新读取。")
             asset_id = row["asset_id"]
             if "assetId" in body.model_fields_set:
                 if not body.assetId:
-                    raise HTTPException(422, "收藏必须保留图片。")
-                require_asset(db, body.assetId)
+                    raise StoreError(422, "收藏必须保留图片。")
+                store.asset(db, user_id, body.assetId)
                 asset_id = body.assetId
             payload = json.loads(row["payload"])
             regenerate = asset_id != row["asset_id"] or body.art != payload["art"]
             changes = body.model_dump(exclude={"version", "assetId"}, exclude_none=True)
             changes["tags"] = list(dict.fromkeys(changes["tags"]))
             payload.update(changes)
-            input_revision = row["input_revision"] + int(regenerate)
-            db.execute("UPDATE collections SET payload=?,asset_id=?,version=version+1,input_revision=? WHERE id=?", (encode(payload), asset_id, input_revision, identifier))
-            if regenerate and asset_id:
+            revision = row["input_revision"] + int(regenerate)
+            db.execute("UPDATE collections SET payload=?,asset_id=?,version=version+1,input_revision=?,model_id=? WHERE user_id=? AND id=?", (encode(payload), asset_id, revision, None if regenerate else row["model_id"], user_id, identifier))
+            if regenerate:
                 if row["job_id"]:
-                    db.execute("UPDATE jobs SET status='cancelled',updated_at=? WHERE id=? AND status!='ready'", (now_ms(), row["job_id"]))
-                store.enqueue(db, identifier, asset_id, input_revision)
-            result = mutation_state(db)
+                    db.execute("UPDATE jobs SET status='cancelled',updated_at=? WHERE user_id=? AND id=? AND status!='ready'", (now_ms(), user_id, row["job_id"]))
+                store.enqueue(db, user_id, identifier, asset_id, revision)
+            result = state_for(db, user_id, changed=True)
         worker.wake()
         return result
 
     @app.delete("/api/collections/{identifier}")
-    def delete(identifier: str, body: Version):
+    def delete(request: Request, identifier: str, body: Version):
+        user_id = current_user(request)
         with store.transaction(True) as db:
-            row = require_item(db, identifier)
+            row = store.collection(db, user_id, identifier)
             if row["version"] != body.version:
-                raise HTTPException(409, "收藏已更新，请刷新后再删除。")
-            db.execute("DELETE FROM collections WHERE id=?", (identifier,))
-            db.execute("UPDATE jobs SET status='cancelled',updated_at=? WHERE collection_id=? AND status!='ready'", (now_ms(), identifier))
-            # Media are content-addressed and may be shared by independent received copies.
-            return mutation_state(db)
+                raise StoreError(409, "收藏已更新，请刷新后再删除。")
+            db.execute("DELETE FROM collections WHERE user_id=? AND id=?", (user_id, identifier))
+            db.execute("UPDATE jobs SET status='cancelled',updated_at=? WHERE user_id=? AND collection_id=? AND status!='ready'", (now_ms(), user_id, identifier))
+            return state_for(db, user_id, changed=True)
 
     @app.post("/api/collections/{identifier}/retry-generation")
-    def retry(identifier: str):
+    def retry(request: Request, identifier: str):
+        user_id = current_user(request)
         with store.transaction(True) as db:
-            row = require_item(db, identifier)
+            row = store.collection(db, user_id, identifier)
             if not row["job_id"]:
-                raise HTTPException(422, "示例图片没有生成任务，请先导入真实图片。")
-            job = db.execute("SELECT * FROM jobs WHERE id=?", (row["job_id"],)).fetchone()
-            if job["status"] in {"failed", "blocked"}:
-                db.execute("UPDATE jobs SET status='queued',error='',updated_at=? WHERE id=?", (now_ms(), job["id"]))
-                result = mutation_state(db)
-            else:
-                result = store.state(db)
+                raise StoreError(422, "此模板模型已经就绪，无需重新生成。")
+            job = store.job(db, user_id, row["job_id"])
+            changed = job["status"] in {"failed", "blocked"}
+            if changed:
+                db.execute("UPDATE jobs SET status='queued',error='',updated_at=? WHERE user_id=? AND id=?", (now_ms(), user_id, job["id"]))
+            result = state_for(db, user_id, changed=changed)
         worker.wake()
         return result
 
     @app.get("/api/jobs/{identifier}")
-    def job_detail(identifier: str):
+    def job_detail(request: Request, identifier: str):
+        user_id = current_user(request)
         with store.transaction() as db:
-            job = db.execute("SELECT * FROM jobs WHERE id=?", (identifier,)).fetchone()
-            if not job:
-                raise HTTPException(404, "生成任务不存在。")
+            job = store.job(db, user_id, identifier)
             result = {"id": job["id"], "collectionId": job["collection_id"], "status": job["status"], "error": job["error"], "createdAt": job["created_at"], "updatedAt": job["updated_at"], "inputRevision": job["input_revision"]}
-            if job["status"] == "ready":
-                result["modelUrl"] = f"/api/models/{identifier}/model.glb"
+            if job["status"] == "ready" and job["model_id"]:
+                store.model(db, user_id, job["model_id"])
+                result["modelUrl"] = f"/api/models/{job['model_id']}/model.glb"
             return result
 
-    @app.get("/api/models/{identifier}/model.glb")
-    def model(identifier: str):
-        with store.transaction() as db:
-            job = db.execute("SELECT * FROM jobs WHERE id=? AND status='ready'", (identifier,)).fetchone()
-            if not job:
-                raise HTTPException(404, "模型尚未生成完成。")
-        path = store.root / "models" / job["id"] / "model.glb"
-        if not path.is_file():
-            raise HTTPException(404, "本地模型文件缺失，原图已保留。")
-        return FileResponse(path, media_type="model/gltf-binary")
-
     @app.patch("/api/profile")
-    def profile(body: Profile):
+    def profile(request: Request, body: Profile):
+        user_id = current_user(request)
         with store.transaction(True) as db:
-            require_initialized(store, db)
-            db.execute("INSERT OR REPLACE INTO meta VALUES ('profile',?)", (encode(body.model_dump()),))
-            return mutation_state(db)
+            store.require_user(db, user_id)
+            db.execute("UPDATE profiles SET payload=? WHERE user_id=?", (encode(body.model_dump()), user_id))
+            return state_for(db, user_id, changed=True)
 
     @app.post("/api/shares/read-all")
-    def read_all():
+    def read_all(request: Request):
+        user_id = current_user(request)
         with store.transaction(True) as db:
-            require_initialized(store, db)
             changed = False
-            for row in db.execute("SELECT * FROM shares").fetchall():
+            for row in db.execute("SELECT * FROM shares WHERE user_id=?", (user_id,)).fetchall():
                 payload = json.loads(row["payload"])
                 if payload["unread"]:
                     payload["unread"] = False
-                    db.execute("UPDATE shares SET payload=? WHERE id=?", (encode(payload), row["id"]))
+                    db.execute("UPDATE shares SET payload=? WHERE user_id=? AND id=?", (encode(payload), user_id, row["id"]))
                     changed = True
-            return mutation_state(db) if changed else store.state(db)
+            return state_for(db, user_id, changed=changed)
+
+    def share_record(db, user_id, identifier):
+        row = db.execute("SELECT payload FROM shares WHERE user_id=? AND id=?", (user_id, identifier)).fetchone()
+        if not row:
+            raise StoreError(404, "分享不存在或无权访问。")
+        return json.loads(row[0])
 
     @app.post("/api/shares/{identifier}/read")
-    def read_share(identifier: str):
+    def read_share(request: Request, identifier: str):
+        user_id = current_user(request)
         with store.transaction(True) as db:
-            row = db.execute("SELECT * FROM shares WHERE id=?", (identifier,)).fetchone()
-            if not row:
-                raise HTTPException(404, "分享不存在。")
-            payload = json.loads(row["payload"])
-            if not payload["unread"]:
-                return store.state(db)
-            payload["unread"] = False
-            db.execute("UPDATE shares SET payload=? WHERE id=?", (encode(payload), identifier))
-            return mutation_state(db)
+            payload = share_record(db, user_id, identifier)
+            changed = payload["unread"]
+            if changed:
+                payload["unread"] = False
+                db.execute("UPDATE shares SET payload=? WHERE user_id=? AND id=?", (encode(payload), user_id, identifier))
+            return state_for(db, user_id, changed=changed)
 
-    def collect_item(db, item):
-        if db.execute("SELECT 1 FROM collections WHERE id=?", (item["id"],)).fetchone():
+    def collect_item(db, user_id, item):
+        if db.execute("SELECT 1 FROM collections WHERE user_id=? AND id=?", (user_id, item["id"])).fetchone():
             return False
-        payload = dict(item)
-        asset_id = payload.pop("assetId", None)
-        for field in ("customImage", "version", "generation", "generationJobId", "modelUrl", "generationError"):
-            payload.pop(field, None)
-        payload["addedAt"] = now_ms()
-        input_revision = db.execute("SELECT COALESCE(MAX(input_revision),0)+1 FROM jobs WHERE collection_id=?", (payload["id"],)).fetchone()[0]
-        db.execute("INSERT INTO collections(id,payload,asset_id,input_revision) VALUES (?,?,?,?)", (payload["id"], encode(payload), asset_id, input_revision))
-        if asset_id:
-            store.enqueue(db, payload["id"], asset_id, input_revision)
+        store.asset(db, user_id, item["assetId"])
+        model_id = item.get("modelId")
+        if model_id and store.model(db, user_id, model_id)["asset_id"] != item["assetId"]:
+            raise StoreError(409, "分享模型与原图不一致。")
+        payload = {key: copy.deepcopy(value) for key, value in item.items() if key not in {"assetId", "modelId", "customImage", "version", "generation", "generationJobId", "modelUrl", "generationError", "modelCamera"}}
+        payload.update(addedAt=now_ms(), source="friend")
+        revision = db.execute("SELECT COALESCE(MAX(input_revision),0)+1 FROM jobs WHERE user_id=? AND collection_id=?", (user_id, payload["id"])).fetchone()[0]
+        db.execute("INSERT INTO collections(user_id,id,payload,asset_id,model_id,input_revision) VALUES (?,?,?,?,?,?)", (user_id, payload["id"], encode(payload), item["assetId"], model_id, revision))
+        if not model_id:
+            store.enqueue(db, user_id, payload["id"], item["assetId"], revision)
         return True
 
     @app.post("/api/shares/{identifier}/collect")
-    def collect_share(identifier: str):
+    def collect_share(request: Request, identifier: str):
+        user_id = current_user(request)
         with store.transaction(True) as db:
-            row = db.execute("SELECT payload FROM shares WHERE id=?", (identifier,)).fetchone()
-            if not row:
-                raise HTTPException(404, "分享不存在。")
-            changed = collect_item(db, json.loads(row[0])["item"])
-            result = mutation_state(db) if changed else store.state(db)
+            changed = collect_item(db, user_id, share_record(db, user_id, identifier)["item"])
+            result = state_for(db, user_id, changed=changed)
         worker.wake()
         return result
 
-    def require_community(db, identifier):
-        row = db.execute("SELECT payload FROM community WHERE id=?", (identifier,)).fetchone()
+    def community_record(db, user_id, identifier):
+        row = db.execute("SELECT payload FROM community WHERE user_id=? AND id=?", (user_id, identifier)).fetchone()
         if not row:
-            raise HTTPException(404, "示例内容不存在。")
+            raise StoreError(404, "社区示例不存在或无权访问。")
         return json.loads(row[0])
 
     @app.post("/api/community/{identifier}/view")
-    def view_community(identifier: str):
+    def view_community(request: Request, identifier: str):
+        user_id = current_user(request)
         with store.transaction(True) as db:
-            payload = require_community(db, identifier)
+            payload = community_record(db, user_id, identifier)
             payload["exposures"] += 1
-            db.execute("UPDATE community SET payload=? WHERE id=?", (encode(payload), identifier))
-            return mutation_state(db)
+            db.execute("UPDATE community SET payload=? WHERE user_id=? AND id=?", (encode(payload), user_id, identifier))
+            return state_for(db, user_id, changed=True)
 
     @app.put("/api/community/{identifier}/like")
-    def like_community(identifier: str, body: Like):
+    def like_community(request: Request, identifier: str, body: Like):
+        user_id = current_user(request)
         with store.transaction(True) as db:
-            payload = require_community(db, identifier)
-            liked = bool(db.execute("SELECT 1 FROM likes WHERE id=?", (identifier,)).fetchone())
+            payload = community_record(db, user_id, identifier)
+            liked = bool(db.execute("SELECT 1 FROM likes WHERE user_id=? AND id=?", (user_id, identifier)).fetchone())
             if liked == body.liked:
-                return store.state(db)
+                return state_for(db, user_id)
             if body.liked:
-                db.execute("INSERT INTO likes VALUES (?)", (identifier,))
+                db.execute("INSERT INTO likes VALUES (?,?)", (user_id, identifier))
             else:
-                db.execute("DELETE FROM likes WHERE id=?", (identifier,))
+                db.execute("DELETE FROM likes WHERE user_id=? AND id=?", (user_id, identifier))
             payload["likes"] = max(0, payload["likes"] + (1 if body.liked else -1))
-            db.execute("UPDATE community SET payload=? WHERE id=?", (encode(payload), identifier))
-            return mutation_state(db)
+            db.execute("UPDATE community SET payload=? WHERE user_id=? AND id=?", (encode(payload), user_id, identifier))
+            return state_for(db, user_id, changed=True)
 
     @app.post("/api/community/{identifier}/collect")
-    def collect_community(identifier: str):
+    def collect_community(request: Request, identifier: str):
+        user_id = current_user(request)
         with store.transaction(True) as db:
-            payload = require_community(db, identifier)
-            item = {"id": f"community-{identifier}", "title": payload["title"], "category": payload["category"], "art": payload["art"], "tags": [], "note": payload["description"][:500], "source": "friend", "sender": payload["author"], "date": Date.today().isoformat()}
-            changed = collect_item(db, item)
+            payload = community_record(db, user_id, identifier)
+            item = {"id": f"community-{identifier}", "title": payload["title"], "category": payload["category"], "art": payload["art"], "tags": [], "note": payload["description"][:500], "source": "friend", "sender": payload["author"], "date": Date.today().isoformat(), "assetId": payload["assetId"], "modelId": payload.get("modelId")}
+            changed = collect_item(db, user_id, item)
             if changed:
                 payload["saves"] += 1
-                db.execute("UPDATE community SET payload=? WHERE id=?", (encode(payload), identifier))
-            return mutation_state(db) if changed else store.state(db)
+                db.execute("UPDATE community SET payload=? WHERE user_id=? AND id=?", (encode(payload), user_id, identifier))
+            return state_for(db, user_id, changed=changed)
 
     @app.get("/api/backup")
-    def backup():
-        archive = store.root / "exports" / f"backup-{uuid.uuid4()}.zip"
+    def backup(request: Request):
+        user_id = current_user(request)
+        snapshot, assets, models, collection_rows, job_rows = store.archive_snapshot(user_id)
+        descriptor, name = tempfile.mkstemp(prefix="account-backup-", suffix=".zip", dir=store.root / "exports")
+        os.close(descriptor)
+        archive = Path(name)
         try:
-            with store.transaction() as db:
-                require_initialized(store, db)
-                snapshot = store.state(db)
+            files = {}
+            for asset in assets.values():
+                files[object_key(asset["object_key"])] = {"path": object_key(asset["object_key"]), "sha256": asset["id"], "size": asset["size"]}
+            for model in models.values():
+                for file in json.loads(model["files"]):
+                    key = object_key(file["path"])
+                    files[key] = {"path": key, "size": file["size"], "sha256": file["sha256"]}
+            # SQL transaction has already closed. All object reads are private,
+            # streamed and closed, including failures while constructing the ZIP.
+            with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+                for key, record in sorted(files.items()):
+                    digest, size = hashlib.sha256(), 0
+                    with closing(storage.open(key)) as incoming, bundle.open(record["path"], "w") as outgoing:
+                        while chunk := incoming.read():
+                            outgoing.write(chunk)
+                            digest.update(chunk)
+                            size += len(chunk)
+                    if size != record["size"] or digest.hexdigest() != record["sha256"]:
+                        raise StorageError("Backup object integrity check failed")
                 data = snapshot["data"]
-                items = data["collections"] + [share["item"] for share in data["shares"]]
-                asset_ids = {item["assetId"] for item in items if item.get("assetId")}
-                asset_paths = {}
-                for identifier in asset_ids:
-                    row = require_asset(db, identifier)
-                    path = store.root / "media" / row["filename"]
-                    if not path.is_file():
-                        raise HTTPException(409, "原图文件缺失，无法导出完整备份。")
-                    asset_paths[identifier] = path
-                with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-                    for identifier, path in asset_paths.items():
-                        bundle.write(path, f"media/{path.name}")
-                    for item in items:
-                        if item.get("assetId"):
-                            item["customImage"] = f"media/{asset_paths[item['assetId']].name}"
-                        if item.get("modelUrl"):
-                            job_id = item["generationJobId"]
-                            folder = store.root / "models" / job_id
-                            if not (folder / "model.glb").is_file():
-                                raise HTTPException(409, "模型文件缺失，无法导出完整备份。原图仍保留。")
-                            for path in folder.iterdir():
-                                if path.is_file() and path.suffix in {".glb", ".json", ".npz", ".npy", ".png"}:
-                                    bundle.write(path, f"models/{job_id}/{path.name}")
-                            item["modelUrl"] = f"models/{job_id}/model.glb"
-                    references = ROOT / "demo" / "public" / "assets" / "reference"
-                    if references.is_dir() and any(not item.get("assetId") for item in items):
-                        for path in references.glob("*.png"):
-                            bundle.write(path, f"reference/{path.name}")
-                    bundle.writestr("manifest.json", encode({"format": "memoverse-local-backup", "version": 1, "createdAt": now_ms(), **snapshot}))
-                    bundle.writestr("README.txt", "MemoVerse 本地完整备份。manifest.json 保存元数据；media 为原图；models 为模型和深度产物；reference 为示例图片来源。当前尚无备份导入界面。\n")
+                for item in [*data["collections"], *[share["item"] for share in data["shares"]], *data["community"]]:
+                    if item.get("assetId"):
+                        item["customImage"] = assets[item["assetId"]]["object_key"]
+                    if item.get("modelId") and item.get("generation") == "ready":
+                        item["modelUrl"] = models[item["modelId"]]["model_key"]
+                bundle.writestr("manifest.json", encode({"format": "memoverse-account-backup", "version": 2, "createdAt": now_ms(), **snapshot,
+                                                        "files": list(files.values()), "collections": collection_rows, "jobs": job_rows,
+                                                        "assets": list(assets.values()), "models": list(models.values())}))
         except BaseException:
             archive.unlink(missing_ok=True)
             raise
-        return FileResponse(archive, media_type="application/zip", filename="memoverse-local-backup.zip", background=BackgroundTask(archive.unlink, missing_ok=True))
+        return FileResponse(archive, media_type="application/zip", filename="memoverse-account-backup.zip", background=BackgroundTask(archive.unlink, missing_ok=True))
 
+    if auth_provider is None:
+        from .auth import install_auth
+        auth_provider = install_auth
+    # No runtime flag disables authentication. Tests explicitly supply a named
+    # factory which implements authenticated sessions, not arbitrary user headers.
+    app.state.auth = auth_provider(app, root, on_authenticated=lambda user: store.ensure_account(user["id"], user["email"], user.get("name", "")))
     return app

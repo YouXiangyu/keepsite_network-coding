@@ -4,3 +4,6 @@ pydantic==2.12.4
 Pillow==12.1.0
 python-multipart==0.0.32
 numpy==2.3.5
+boto3==1.43.114
+PyJWT[crypto]==2.15.1
+cryptography==50.0.2

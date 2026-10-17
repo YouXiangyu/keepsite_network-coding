@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import base64
 import hashlib
 import io
-import os
-import tempfile
 import warnings
 
 from fastapi import HTTPException
@@ -39,33 +36,22 @@ def image_info(raw: bytes):
     return {"assetId": digest, "url": f"/api/media/{digest}", "sha256": digest, "size": len(raw), "width": width, "height": height, "mimeType": mime, "filename": digest + suffix}
 
 
-def persist_image(store, db, raw: bytes):
-    from .store import now_ms
+
+def persist_image(store, user_id: str, raw: bytes):
+    """Validate and store bytes before a short account-grant transaction."""
+    with store.transaction() as db:
+        store.require_user(db, user_id)
     info = image_info(raw)
-    path = store.root / "media" / info["filename"]
-    if not path.exists():
-        fd, temporary = tempfile.mkstemp(prefix="upload-", dir=store.root / "media")
-        try:
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(raw)
-                stream.flush()
-                os.fsync(stream.fileno())
-            os.replace(temporary, path)
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
-    db.execute("INSERT OR IGNORE INTO assets VALUES (?,?,?,?,?,?,?)", (info["assetId"], info["mimeType"], info["filename"], info["size"], info["width"], info["height"], now_ms()))
+    descriptor = {
+        "id": info["assetId"], "path": "media/" + info["filename"],
+        "mimeType": info["mimeType"], "size": info["size"],
+        "width": info["width"], "height": info["height"], "sha256": info["sha256"],
+    }
+    store.storage.put_bytes(descriptor["path"], raw, descriptor["sha256"], descriptor["mimeType"])
+    with store.transaction(True) as db:
+        store.require_user(db, user_id)
+        store.register_asset(db, descriptor)
+        changed = db.execute("INSERT OR IGNORE INTO asset_grants VALUES (?,?)", (user_id, descriptor["id"])).rowcount
+        if changed:
+            store.bump(db, user_id)
     return {key: value for key, value in info.items() if key != "filename"}
-
-
-def import_data_url(store, db, value: str):
-    if not value.startswith(("data:image/png;base64,", "data:image/jpeg;base64,", "data:image/webp;base64,")):
-        raise HTTPException(422, "旧图片必须是本地 JPG、PNG 或 WebP 数据，未读取外部图片地址。")
-    encoded = value.split(",", 1)[1]
-    if len(encoded) > ((MAX_IMAGE_BYTES + 2) // 3) * 4:
-        raise HTTPException(413, "旧图片超过 12 MB，未覆盖原收藏。")
-    try:
-        raw = base64.b64decode(encoded, validate=True)
-    except (ValueError, base64.binascii.Error):
-        raise HTTPException(422, "旧图片编码损坏，未覆盖原收藏。")
-    return persist_image(store, db, raw)

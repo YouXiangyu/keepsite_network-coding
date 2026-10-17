@@ -1,197 +1,224 @@
-"""Task-state tests use dummy GLB bytes, never claim to validate real geometry."""
+"""Owned job-state tests use a tiny test GLB, not real AnyImage inference."""
 from __future__ import annotations
 
 import io
-import struct
+import json
+import sqlite3
 import zipfile
 
 import pytest
 from fastapi.testclient import TestClient
 
 from backend import jobs, relief_engine
-from backend.app import create_app
-from test_api import (WRITE_HEADERS, bootstrap, create_collection, edit_payload,
-                      get_item, image_bytes, state, upload)
+from backend.object_storage import StorageError
+from account_fixtures import ORIGIN, WRITE_HEADERS, image_bytes, signed_in, write_model
+from test_api import build_app, create_collection, create_payload, edit_payload, get_item, state, upload
 
 
-DUMMY_GLB = b"glTF" + struct.pack("<II", 2, 12)
-
-
-def write_dummy_model(input_path, output_dir, **_kwargs):
+def fixture_generate(input_path, output_dir, **_kwargs):
     assert input_path.is_file()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    model = output_dir / "model.glb"
-    model.write_bytes(DUMMY_GLB)
-    return {"model_path": model, "test_only": True}
+    return write_model(output_dir)
 
 
 @pytest.fixture
 def workspace(tmp_path, monkeypatch):
     monkeypatch.setattr(jobs, "engine_status", lambda: {"available": True, "reason": "test engine"})
-    monkeypatch.setattr(relief_engine, "generate_relief", write_dummy_model)
-    app = create_app(data_dir=tmp_path, run_worker=False)
-    with TestClient(app) as client:
-        state(bootstrap(client))
-        yield client, app.state.worker
+    monkeypatch.setattr(relief_engine, "generate_relief", fixture_generate)
+    app, auth = build_app(tmp_path)
+    with TestClient(app, base_url=ORIGIN) as client:
+        signed_in(client)
+        state(client.get("/api/state"))
+        yield client, app.state.worker, app, auth
 
 
 def current(client, item):
-    return get_item(client.get("/api/state").json(), item["id"])
+    return get_item(state(client.get("/api/state")), item["id"])
 
 
-def test_success_publishes_model_only_after_job_finishes(workspace, monkeypatch):
-    client, worker = workspace
+def test_model_is_published_only_after_all_files_are_stored(workspace, monkeypatch):
+    client, worker, app, _ = workspace
     item = create_collection(client)
-    before = client.get("/api/state").json()["revision"]
-
-    def generate(input_path, output_dir, **kwargs):
-        assert kwargs["cancel_event"] is worker.stop_event
-        in_progress = current(client, item)
-        assert in_progress["generation"] == "processing"
-        assert "modelUrl" not in in_progress
-        return write_dummy_model(input_path, output_dir)
-
-    monkeypatch.setattr(relief_engine, "generate_relief", generate)
-    assert worker.run_one() is True
+    put = app.state.store.storage.put_file
+    calls = []
+    def observe(key, path, digest, mime):
+        assert current(client, item)["generation"] == "processing"
+        assert "modelUrl" not in current(client, item)
+        with app.state.store.transaction(True):
+            pass
+        calls.append(key)
+        return put(key, path, digest, mime)
+    monkeypatch.setattr(app.state.store.storage, "put_file", observe)
+    assert worker.run_one()
     ready = current(client, item)
     assert ready["generation"] == "ready"
-    assert client.get(ready["modelUrl"]).content == DUMMY_GLB
-    assert client.get("/api/state").json()["revision"] > before
+    assert len(calls) == 3
+    assert client.get(ready["modelUrl"]).status_code == 200
+    assert list((app.state.store.root / "tmp").iterdir()) == []
     assert worker.run_one() is False
 
 
-def test_generation_failure_keeps_original_and_reports_failure(workspace, monkeypatch):
-    client, worker = workspace
+def test_generated_model_is_private_to_its_account(workspace):
+    client, worker, _, _ = workspace
+    item = create_collection(client)
+    worker.run_one()
+    ready = current(client, item)
+    signed_in(client, "bob")
+    state(client.get("/api/state"))
+    assert client.get(ready["modelUrl"]).status_code == 404
+    assert client.get(f"/api/jobs/{ready['generationJobId']}").status_code == 404
+    assert client.get(ready["customImage"]).status_code == 404
+
+
+def test_inference_failure_preserves_original_and_records_failure(workspace, monkeypatch):
+    client, worker, app, _ = workspace
     item = create_collection(client)
     original = client.get(item["customImage"]).content
-
-    def fail(*_args, **_kwargs):
-        raise RuntimeError("fixture generation failure")
-
+    def fail(*args, **kwargs):
+        raise RuntimeError("fixture inference error")
     monkeypatch.setattr(relief_engine, "generate_relief", fail)
-    assert worker.run_one() is True
+    worker.run_one()
     failed = current(client, item)
     assert failed["generation"] == "failed"
-    assert "fixture generation failure" in failed["generationError"]
+    assert "fixture inference error" in failed["generationError"]
     assert "modelUrl" not in failed
     assert client.get(failed["customImage"]).content == original
-    assert worker.run_one() is False
+    assert list((app.state.store.root / "tmp").iterdir()) == []
 
 
-def test_blocked_task_automatically_runs_after_service_recovers(workspace, monkeypatch):
-    client, worker = workspace
+def test_upload_failure_never_marks_partial_model_ready_and_can_retry(workspace, monkeypatch):
+    client, worker, app, _ = workspace
     item = create_collection(client)
-    monkeypatch.setattr(jobs, "engine_status", lambda: {"available": False, "reason": "test service offline"})
+    put = app.state.store.storage.put_file
+    def fail_depth(key, *args):
+        if key.endswith("depth.npy"):
+            raise StorageError("fixture output upload failure")
+        return put(key, *args)
+    monkeypatch.setattr(app.state.store.storage, "put_file", fail_depth)
+    worker.run_one()
+    assert current(client, item)["generation"] == "failed"
+    with app.state.store.transaction() as db:
+        assert db.execute("SELECT COUNT(*) FROM models").fetchone()[0] == 1
+    monkeypatch.setattr(app.state.store.storage, "put_file", put)
+    state(client.post(f"/api/collections/{item['id']}/retry-generation", headers=WRITE_HEADERS))
+    worker.run_one()
+    assert current(client, item)["generation"] == "ready"
+
+
+def test_blocked_jobs_recover_without_touching_other_accounts_revision(workspace, monkeypatch):
+    client, worker, _, _ = workspace
+    item = create_collection(client)
+    signed_in(client, "bob")
+    before_b = state(client.get("/api/state"))
+    signed_in(client, "alice")
+    monkeypatch.setattr(jobs, "engine_status", lambda: {"available": False, "reason": "offline"})
     assert worker.run_one() is False
-    blocked = current(client, item)
-    assert blocked["generation"] == "blocked"
-    assert "test service offline" in blocked["generationError"]
-    assert blocked["generationJobId"] == item["generationJobId"]
-    assert client.get(blocked["customImage"]).status_code == 200
-    monkeypatch.setattr(jobs, "engine_status", lambda: {"available": True, "reason": "recovered"})
-    assert worker.run_one() is True
+    assert current(client, item)["generation"] == "blocked"
+    signed_in(client, "bob")
+    assert state(client.get("/api/state"))["revision"] == before_b["revision"]
+    signed_in(client, "alice")
+    monkeypatch.setattr(jobs, "engine_status", lambda: {"available": True, "reason": "restored"})
+    assert worker.run_one()
+    assert current(client, item)["generation"] == "ready"
+
+
+def test_start_recovers_interrupted_processing_by_owner(workspace, monkeypatch):
+    client, worker, app, _ = workspace
+    item = create_collection(client)
+    with app.state.store.transaction(True) as db:
+        db.execute("UPDATE jobs SET status='processing' WHERE id=?", (item["generationJobId"],))
+    # Exercise startup transition without launching a real background thread.
+    monkeypatch.setattr(worker.thread, "start", lambda: None)
+    worker.start()
+    assert current(client, item)["generation"] == "queued"
+
+
+def test_replaced_image_cannot_receive_old_result(workspace, monkeypatch):
+    client, worker, app, _ = workspace
+    item = create_collection(client)
+    replacement = upload(client, image_bytes("green"))
+    def replace(input_path, output_dir, **kwargs):
+        state(client.patch(f"/api/collections/{item['id']}", headers=WRITE_HEADERS, json=edit_payload(item, assetId=replacement["assetId"])))
+        return fixture_generate(input_path, output_dir, **kwargs)
+    monkeypatch.setattr(relief_engine, "generate_relief", replace)
+    worker.run_one()
+    updated = current(client, item)
+    assert updated["assetId"] == replacement["assetId"]
+    assert updated["generation"] == "queued"
+    assert updated["generationJobId"] != item["generationJobId"]
+    with app.state.store.transaction() as db:
+        assert db.execute("SELECT COUNT(*) FROM models").fetchone()[0] == 1
+
+
+def test_deleted_collection_cannot_be_revived(workspace, monkeypatch):
+    client, worker, app, _ = workspace
+    item = create_collection(client)
+    def remove(input_path, output_dir, **kwargs):
+        state(client.request("DELETE", f"/api/collections/{item['id']}", headers=WRITE_HEADERS, json={"version": item["version"]}))
+        return fixture_generate(input_path, output_dir, **kwargs)
+    monkeypatch.setattr(relief_engine, "generate_relief", remove)
+    worker.run_one()
+    assert not any(row["id"] == item["id"] for row in state(client.get("/api/state"))["data"]["collections"])
+    with app.state.store.transaction() as db:
+        assert db.execute("SELECT status FROM jobs WHERE id=?", (item["generationJobId"],)).fetchone()[0] == "cancelled"
+
+
+def test_same_collection_id_in_two_accounts_does_not_confuse_worker(workspace):
+    client, worker, _, _ = workspace
+    a = create_collection(client, create_payload(upload(client)["assetId"], identifier="same-id"))
+    signed_in(client, "bob")
+    b = create_collection(client, create_payload(upload(client, image_bytes("green"))["assetId"], identifier="same-id"))
+    signed_in(client, "alice")
+    state(client.request("DELETE", "/api/collections/same-id", headers=WRITE_HEADERS, json={"version": a["version"]}))
+    worker.run_one()
+    signed_in(client, "bob")
+    assert current(client, b)["generation"] == "ready"
+
+
+def test_foreign_key_prevents_cross_account_asset_job_reference(workspace):
+    client, _, app, _ = workspace
+    item = create_collection(client)
+    signed_in(client, "bob")
+    state(client.get("/api/state"))
+    with pytest.raises(sqlite3.IntegrityError):
+        with app.state.store.transaction(True) as db:
+            db.execute("INSERT INTO jobs(id,user_id,collection_id,asset_id,input_revision,status,created_at,updated_at) VALUES ('bad','user-bob','bad',?,1,'queued',0,0)", (item["assetId"],))
+
+
+def test_account_backup_preserves_generated_depth_geometry_and_owner(workspace):
+    client, worker, app, _ = workspace
+    item = create_collection(client)
+    worker.run_one()
     ready = current(client, item)
-    assert ready["generation"] == "ready"
-    assert ready["generationJobId"] == item["generationJobId"]
-    assert not ready.get("generationError")
-
-
-def test_interrupted_processing_job_is_recovered_after_reopen(tmp_path, monkeypatch):
-    monkeypatch.setattr(jobs, "engine_status", lambda: {"available": True, "reason": "test engine"})
-    monkeypatch.setattr(relief_engine, "generate_relief", write_dummy_model)
-    original_app = create_app(data_dir=tmp_path, run_worker=False)
-    with TestClient(original_app) as client:
-        state(bootstrap(client))
-        item = create_collection(client)
-        with original_app.state.store.transaction(True) as db:
-            db.execute("UPDATE jobs SET status='processing' WHERE id=?", (item["generationJobId"],))
-    reopened_app = create_app(data_dir=tmp_path, run_worker=False)
-    with TestClient(reopened_app) as client:
-        assert current(client, item)["generation"] == "processing"
-        worker = reopened_app.state.worker
-        # Exercise startup recovery synchronously; do not start its real background thread.
-        monkeypatch.setattr(worker.thread, "start", lambda: None)
-        worker.start()
-        recovered = current(client, item)
-        assert recovered["generation"] == "queued"
-        assert recovered["generationJobId"] == item["generationJobId"]
-        assert worker.run_one() is True
-        assert current(client, item)["generation"] == "ready"
-
-
-def test_replaced_image_rejects_old_running_result(workspace, monkeypatch):
-    client, worker = workspace
-    item = create_collection(client)
-    replacement = upload(client, image_bytes("blue"))
-
-    def generate_and_replace(input_path, output_dir, **_kwargs):
-        state(client.patch(f"/api/collections/{item['id']}", headers=WRITE_HEADERS,
-                           json=edit_payload(item, assetId=replacement["assetId"])))
-        return write_dummy_model(input_path, output_dir)
-
-    monkeypatch.setattr(relief_engine, "generate_relief", generate_and_replace)
-    assert worker.run_one() is True
-    changed = current(client, item)
-    assert changed["assetId"] == replacement["assetId"]
-    assert changed["generationJobId"] != item["generationJobId"]
-    assert changed["generation"] != "ready"
-    assert "modelUrl" not in changed
-    assert client.get(f"/api/jobs/{item['generationJobId']}").json()["status"] == "cancelled"
-    monkeypatch.setattr(relief_engine, "generate_relief", write_dummy_model)
-    assert worker.run_one() is True
-    assert current(client, item)["generation"] == "ready"
-
-
-def test_deleted_collection_cannot_be_revived_by_running_job(workspace, monkeypatch):
-    client, worker = workspace
-    item = create_collection(client)
-
-    def generate_and_delete(input_path, output_dir, **_kwargs):
-        state(client.request("DELETE", f"/api/collections/{item['id']}",
-                             headers=WRITE_HEADERS, json={"version": item["version"]}))
-        return write_dummy_model(input_path, output_dir)
-
-    monkeypatch.setattr(relief_engine, "generate_relief", generate_and_delete)
-    assert worker.run_one() is True
-    assert client.get("/api/state").json()["data"]["collections"] == []
-    job = client.get(f"/api/jobs/{item['generationJobId']}").json()
-    assert job["status"] == "cancelled"
-    assert "modelUrl" not in job
-    assert client.get(f"/api/models/{item['generationJobId']}/model.glb").status_code == 404
-
-
-def test_backup_preserves_generated_model_and_depth_array(workspace, monkeypatch):
-    client, worker = workspace
-    item = create_collection(client)
-    depth_bytes = b"dummy depth file for archive state test only"
-
-    def generate(input_path, output_dir, **kwargs):
-        result = write_dummy_model(input_path, output_dir, **kwargs)
-        (output_dir / "depth.npy").write_bytes(depth_bytes)
-        return result
-
-    monkeypatch.setattr(relief_engine, "generate_relief", generate)
-    worker.run_one()
     response = client.get("/api/backup")
-    assert response.status_code == 200, response.text
-    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
-        prefix = f"models/{item['generationJobId']}/"
-        assert archive.read(prefix + "model.glb") == DUMMY_GLB
-        assert archive.read(prefix + "depth.npy") == depth_bytes
+    assert response.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
+        manifest = json.loads(bundle.read("manifest.json"))
+        assert manifest["userId"] == "user-alice"
+        names = bundle.namelist()
+        assert f"models/{ready['modelId']}/model.glb" in names
+        assert f"models/{ready['modelId']}/depth.npy" in names
+        assert f"models/{ready['modelId']}/geometry.json" in names
+        assert any(job["id"] == item["generationJobId"] and job["user_id"] == "user-alice" for job in manifest["jobs"])
+        assert not any("source.sqlite3" in name or "reference/" in name for name in names)
+    assert list((app.state.store.root / "exports").iterdir()) == []
 
 
-def test_backup_rejects_missing_ready_model_without_losing_original(workspace):
-    client, worker = workspace
-    item = create_collection(client)
-    original = client.get(item["customImage"]).content
-    worker.run_one()
-    assert current(client, item)["generation"] == "ready"
-    # Remove only this test's generated fixture to simulate an interrupted/missing asset.
-    model = worker.store.root / "models" / item["generationJobId"] / "model.glb"
-    assert model.resolve().is_relative_to(worker.store.root.resolve())
-    model.unlink()
-    response = client.get("/api/backup")
-    assert response.status_code == 409, response.text
-    assert isinstance(response.json().get("detail"), str)
-    assert client.get(item["customImage"]).content == original
-    assert list((worker.store.root / "exports").glob("*.zip")) == []
+def test_missing_ready_object_aborts_backup_and_removes_partial_zip(workspace):
+    client, _, app, _ = workspace
+    item = state(client.get("/api/state"))["data"]["collections"][0]
+    with app.state.store.transaction() as db:
+        model = app.state.store.model(db, "user-alice", item["modelId"])
+    (app.state.store.storage.root / model["model_key"]).unlink()
+    assert client.get("/api/backup").status_code == 404
+    assert list((app.state.store.root / "exports").iterdir()) == []
+
+
+def test_template_edit_keeps_model_and_replacing_image_enqueues_owned_job(workspace):
+    client, _, _, _ = workspace
+    item = state(client.get("/api/state"))["data"]["collections"][0]
+    edited = get_item(state(client.patch("/api/collections/initial-collection", headers=WRITE_HEADERS, json=edit_payload(item, note="文字修改"))), item["id"])
+    assert edited["modelId"] == item["modelId"] and edited["generation"] == "ready"
+    replacement = upload(client)
+    changed = get_item(state(client.patch("/api/collections/initial-collection", headers=WRITE_HEADERS, json=edit_payload(edited, assetId=replacement["assetId"]))), item["id"])
+    assert changed["generation"] == "queued" and "modelUrl" not in changed
+    assert client.get(f"/api/jobs/{changed['generationJobId']}").json()["inputRevision"] == 2
