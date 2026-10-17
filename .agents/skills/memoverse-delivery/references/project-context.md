@@ -1,6 +1,6 @@
 # 项目运行信息
 
-核验基准：2026-10-17，北京时间。以下是定位信息，不能替代操作前的实时查询。
+核验基准：2026-10-18，北京时间。以下是定位信息，不能替代操作前的实时查询。
 
 ## 位置与入口
 
@@ -20,7 +20,7 @@
 | Launch template / 版本 | `lt-016bca8507ac81480` / `1` |
 | 安全组 / SSH key pair | `sg-0f472ac3891c65681` / `memoverse-ec2-20261017` |
 | SSH 用户 | `ubuntu` |
-| DNS | Cloudflare，计划通过实例启动服务自动更新 `keepsite.space` 的 A 记录；配置/验收尚在进行 |
+| DNS | Cloudflare，`memoverse-ddns.service` 每次启动更新 `keepsite.space` 的 A 记录，正常关闭时撤回自身管理记录；当前 DNS-only、TTL 60 |
 
 管理端公网 IP 受 EC2 安全组 SSH 规则限制。连接失败先核对当前规则和管理端 IP，不直接放宽到所有来源。账户原有另外两台停止的测试实例不属于本项目，不得顺手启动、改规格或清理。
 
@@ -36,6 +36,7 @@
 | SSH 主机身份别名 | `memoverse-i-0e9ba9bc6f4b1c019`；部署传 `-HostKeyAlias`，保持动态 IP 变化时的密钥校验 |
 | 站点测试账号与口令 | `.cache/server/access.json`，只记录位置，不读取或输出明文来做一般巡检 |
 | Cloudflare DDNS 配置 | 本机 `.cache/server/cloudflare.json`；安装目标 `/etc/memoverse/cloudflare.json`，Token 只允许本域名 DNS 编辑 |
+| DDNS 服务 / 程序 / 状态 | `memoverse-ddns.service` / `/opt/memoverse/admin/sync-cloudflare-dns.py` / `/var/lib/memoverse-ddns/state.json` |
 | 本机模型与推理依赖 | `.cache/models`、`.cache/anyimage`、`.cache/anyimage-deps` |
 | 部署入口 | `scripts/deploy-ubuntu.ps1`，`Server` 必填，默认计划模式，`-Execute` 执行；新机另加 `-InitializeHost` |
 | 一次性数据迁移 | `scripts/package-server-data.py`，SQLite backup API + 文件 SHA-256 清单 |
@@ -53,7 +54,7 @@
 
 HTTPS 由源站 Nginx 使用 Let's Encrypt 证书提供，`certbot.timer` 续期并重载 Nginx。迁移保留现有认证与证书；整个站点与 API 由 BasicAuth 保护。自动 DDNS 只修改指定 A 记录，不擅自改变 Cloudflare 代理模式。
 
-当前数据库是 SQLite，原图和模型存磁盘。当前生成流程是官方 AnyImage MoGe2 CPU 推理加项目网格/GLB 导出；不是 Blender Bake Mesh，也不是 Lambda。新 2 GB 实例配置了 2 GB swap；需重新验证内存与功能，不能把旧机计时视作新机性能。
+当前数据库是 SQLite，原图和模型存磁盘。当前生成流程是官方 AnyImage MoGe2 CPU 推理加项目网格/GLB 导出；不是 Blender Bake Mesh，也不是 Lambda。2 GB 实例配置了 2 GB swap，应用 drop-in 设置 MemoryHigh=1200M、MemoryMax=1500M。新机功能样例通过，详细证据见 EC2 验收记录，不能把单样例等同所有负载保证。
 
 ## 启停与计费决策
 
@@ -61,7 +62,7 @@ HTTPS 由源站 Nginx 使用 Let's Encrypt 证书提供，`certbot.timer` 续期
 - 发布前始终查询上述明确 instance ID 的状态和当次公网 IP；启动后等待状态检查及 DDNS 就绪。停机后确认 `stopped` 与 DNS 关机清理结果。不要用历史状态或 IP 驱动操作。
 - 普通按需 EC2 停止后不再计计算费，自动公网 IPv4 随停止释放；EBS 磁盘继续保留和计费。不得把停机说成完全零费用。
 - 2026-10-17 AWS Pricing API 核验：`t3.small` 计算费 `0.0272 USD/小时`，动态公网 IPv4 `0.005 USD/使用小时`，20 GB gp3 磁盘约 `1.92 USD/月`。实例与 IP 运行时合计 `0.0322 USD/小时`；这些是税费、抵扣和额外流量之前的基础费用，未来报价重新查询。
-- 旧 Lightsail `memoverse-keepsite`、`memoverse-keepsite-ip` 和部署公钥已删除；旧 IP `52.196.70.26` 已释放。数据、认证、证书在 D 盘受限目录 `.cache/migration-lightsail-ec2` 中校验保全，EC2 完整验收前不得清理这份迁移来源。
+- 旧 Lightsail `memoverse-keepsite`、`memoverse-keepsite-ip` 和部署公钥已删除；旧 IP `52.196.70.26` 已释放。新 EC2 已验收迁移完整性；本机 `.cache/migration-lightsail-ec2` 暂存目录删除被自动审批拦截，已交用户手动清理。
 - 账户既有 5 USD 月预算提醒不等于金额硬上限，不自动调整预算。
 
 来源：[EC2 状态与计费](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-lifecycle.html)、[公网 IPv4 计费](https://aws.amazon.com/vpc/pricing/)。
@@ -72,5 +73,7 @@ HTTPS 由源站 Nginx 使用 Let's Encrypt 证书提供，`certbot.timer` 续期
 - `docs/项目定义与决策主文档.md`：产品决策。
 - `deploy/ubuntu/README.md`：安装、发布与恢复流程。
 - `docs/Lightsail部署验收.md`：旧环境历史证据与退役说明，不能用于定位当前实例。
+- `docs/EC2部署验收.md`：当前环境验收与 DDNS 验证范围。
 - 通用 Ubuntu 发布脚本会核验制品哈希与准备状态后复用同一 commit；未知目录或内容冲突停止，不自动删除。激活失败后依旧要核对回滚输出与真实运行状态，不能将尝试回滚等同成功。
 - 当前没有统一 formatter。遵循现有风格，格式整理不能触碰受保护运行时或扩散到无关代码。
+- DDNS 限定一个实例管理一个域名。正常服务停止会撤回自己确认过的 A 记录；强制关机、Token 失效或并发改 DNS 时不保证撤回，停机后应读回确认。当前已测试 DDNS 服务的真实停止/启动，尚未为验收提前停止 EC2 实例；待用户确认测试通过后再执行实例停机。

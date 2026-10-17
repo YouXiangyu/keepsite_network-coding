@@ -34,13 +34,13 @@
 
 ## 服务器部署
 
-迁移至东京区域普通按需 EC2 `t3.small`（2 GB），Ubuntu 24.04，单进程 FastAPI + Nginx。代码按 Git 提交放在独立发布目录；SQLite、图片与模型保存在 `/var/lib/memoverse`，更新代码不覆盖数据。前端在本机构建，服务器不运行开发服务器。
+运行于东京区域普通按需 EC2 `t3.small`（2 GB），Ubuntu 24.04，单进程 FastAPI + Nginx。代码按 Git 提交放在独立发布目录；SQLite、图片与模型保存在 `/var/lib/memoverse`，更新代码不覆盖数据。前端在本机构建，服务器不运行开发服务器。
 
 - [安装、访问控制、HTTPS 与运维说明](deploy/ubuntu/README.md)
 - [部署与更新脚本](scripts/deploy-ubuntu.ps1)（默认仅显示计划，执行需要 `-Execute`）
 - [一次性数据迁移与完整性校验](scripts/package-server-data.py)
 
-原 Lightsail 已删除，数据、认证和证书已校验保全，EC2 部署与自动 DNS 更新正在准备。访问 [keepsite.space](https://keepsite.space) 需要测试账号与口令；认证保持不变。原环境的历史验收见 [Lightsail 退役记录](docs/Lightsail部署验收.md)。
+原 Lightsail 已删除，EC2 数据迁移、真实生成、HTTPS 和 DDNS 服务启停已验证，详见 [EC2 部署验收](docs/EC2部署验收.md)。访问 [keepsite.space](https://keepsite.space) 使用原测试账号与口令。实例每次开机通过 Cloudflare API 更新动态公网 IP，正常关机时撤回自身管理的记录。服务器保持运行供用户验收，用户确认通过后正常停机；磁盘费用仍会保留。原环境的历史证据见 [Lightsail 退役记录](docs/Lightsail部署验收.md)。
 
 ## 验证
 
