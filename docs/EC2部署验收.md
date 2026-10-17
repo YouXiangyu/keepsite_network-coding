@@ -1,8 +1,42 @@
 # EC2 部署验收
 
-验收日期：2026-10-18，北京时间。应用运行代码提交：`01677b2801828bf913c9f9592ac9de995decadd9`。后续纯文档提交不改变运行版本。
+验收日期：2026-10-18，北京时间。当前应用运行提交：`61e6bd2787d286736e21b703ee3dcecea528538e`，已推送 GitHub；后续纯文档提交不改变运行版本。
 
-当前状态（2026-10-18 阶段收尾复核）：用户已要求停止实例，并将 20 GB 根盘缩减为 10 GB。新盘恢复与验证完成，旧盘已删除，实例 `stopped`、无公网 IP，Cloudflare A 记录为空。下文早期 20 GB 验收数据作为过程证据保留。
+当前状态：新 Web / 账号版本已正式切换，EC2 `i-0e9ba9bc6f4b1c019` 为 `running`，系统、实例及 EBS 状态检查通过，公网 IPv4 与 DDNS A 记录均为 `13.230.191.15`。应用和 Nginx active，10 GB 根盘配置保持。服务器继续运行供用户醒来验收；下文停机、BasicAuth 和旧运行时记录均为此前阶段历史，不能用于判断当前状态。
+
+## Web / 账号 / 私有 S3 发布验收
+
+本轮四个逻辑提交已推送：`95cae17` 初始化模板、`96e23d2` 账号后端、`7535cfd` 响应式 Web、`61e6bd2` 安全部署。先以 `-PrepareOnly` 准备准确制品，再在 `127.0.0.1:8001` 候选服务验证真实 Cognito 与 S3；停止候选后正式激活，`/opt/memoverse/current` 指向上述完整运行提交。
+
+服务器以同 commit、相同环境和站点配置重复激活，返回 `Already active`，MainPID 保持 `2314`，未重启应用；新增备份 `/opt/memoverse/activation-backups/activation-WKPhdvkQ` 记录重复激活时状态。真正切换前的原始回滚备份仍为 `activation-m1rFC4fz`，不可混用。
+
+- `https://keepsite.space` 登录首页 HTTP 200，匿名业务 API 401；公网 TLS 下登录和访问控制再次通过。新 Nginx 在后端健康、匿名拒绝及会话配置检查通过后启用，OAuth 查询参数不进入访问日志。原 BasicAuth 站点、环境、service unit 和旧 release 定位保存在 root-only 的 `/opt/memoverse/activation-backups/activation-m1rFC4fz`。
+- 旧 `/var/lib/memoverse` 未覆盖；新账号目录为 `/var/lib/memoverse-v2`。本机与旧服务器 collections、shares、community、assets 内容指纹均为 `24f1d86f40fc1df3ab9e9d71a276e438a91c6fdf31ab2b307172de82525fa4c2`。
+- 模板版本 `efc6dc4631e0466ed4de23463deb73a3b8e3b6f3af2bda57d7bf3e314dc14b5e`：18 张图、18 个模型（15 个补齐、3 个旧模型），17 收藏、4 分享、6 社区示例，全部 ready。服务器 73 个文件 SHA-256 核验通过，目录 `/opt/memoverse/shared/initial-template-v1` 为 root:memoverse、目录 0750 / 文件 0640；不分发审计用 `source.sqlite3`。
+- S3 私有桶 `memoverse-media-125647512944-apne1` 已读回验证 Block Public Access 全 true、SSE-S3 AES256、BucketOwnerEnforced、Versioning Enabled、IsPublic=false。实例角色仅关联本项目 EC2，允许该桶 `media/*`、`models/*` 的 Get/Put 和单桶 ListBucket；删除、ACL、`ops/*` 和其他桶访问未授权。
+- Cognito Essentials 已启用 Google + COGNITO、刷新令牌轮换与撤销。Google 控制台 UI 已核验应用为 Testing，测试名单含 1 个当前用户账号，邮箱及密钥不入 Git；凭据位置见项目运行信息，临时 S3 凭据转运副本已删除。
+
+本地验证：后端 125 项、模板 10 项、部署 23 项、Web 单元 24 项、原 Chromium 17 项及同用户 CSRF 更新窗口回归 2 项、打包 4 项通过；最新生产构建、Web 运行契约（14 个可达模块）和交付技能 quick_validate 通过。旧版本“28 个受保护运行时文件”不是本次 Web 契约。独立审查已关闭旧 SQLite 只读 WAL、S3 传输异常、HTTPError 资源关闭、模板路径穿越及同账号 CSRF 更新首屏挂起等问题；部署失败回滚、配置切换与 S3 权限复核无剩余 P1/P2。
+
+真实服务器候选验证使用临时 Cognito A/B 和未验证账号，设置 `MessageAction=SUPPRESS`，因此不代表邮件投递验收。实际登录、邮箱验证状态拦截、双账号独立初始化、CSRF、私有 S3 图片/GLB SHA、上传、真实 AnyImage 生成、仅改文字复用模型、备份不串号、删除和退出后原图片/模型 401 全部通过。生成等待时间 48.878 秒（非纯推理分段计时），GLB 2,586,268 字节，健康查询最大观测 0.0045 秒；候选 MemoryPeak=820,273,152 字节、Swap=0、OOM/max=0、NRestarts=0，未作负载压测。强制 QA 会话 refresh_at 后，真实 Cognito 刷新令牌变更及版本递增通过，退出后该令牌被上游拒绝。
+
+真实 HTTPS 浏览器登录后显示 17 件收藏，新生成“雨夜列车”GLB 加载和方向按钮操作通过；本机截图证据为 `.cache/qa-auth/web-login-live.png`、`web-collection-live.png`、`web-relief-live.png`，私有图片不提交。Cognito authorize 实际 302 到已登记 Google client 的 `accounts.google.com` 通过；**用户本人 Google consent 完成和真实邮件收件仍待用户验收**，不能宣称认证全链路已完成。
+
+浏览器补充验收发现主动退出尚未跳转 Cognito `/logout`；独立复核同时发现旧退出响应的清 cookie 可能影响另一标签页的新登录。这两个退出时序问题正在作最小修复，尚未包含在上述 `61e6bd2` 运行版本中。
+
+本轮 QA 清理尚在进行：3 个临时 Cognito 账号、测试业务账号/会话、额外私有上传/模型及 S3 ops QA 凭据待最终核验。历史 22 + 6 项拒绝清理记录继续保留；本轮下列 9 个合成测试目录删除被自动审批拒绝（`blocked by policy`），未绕过，仍为待清理项。保留当前准确发布制品、回滚备份、业务数据、模板、凭据及验收证据。
+
+```text
+.cache/initial-template-tests/tmp_tz77sg4
+.cache/initial-template-tests/tmp4eou7n76
+.cache/initial-template-tests/tmp6rezcqq7
+.cache/initial-template-tests/tmp847tjs92
+.cache/initial-template-tests/tmpdme40_tl
+.cache/initial-template-tests/tmpgu4oisr4
+.cache/initial-template-tests/tmphkzv0ps5
+.cache/initial-template-tests/tmpls0nshho
+.cache/initial-template-tests/tmpwziybpwf
+```
 
 ## 初次部署验收（20 GB 阶段历史记录）
 
@@ -61,7 +95,7 @@ EC2 启动后，`memoverse-ddns.service` 通过 IMDSv2 读取实例 ID 和当前
 
 服务器临时上传包和一次性恢复脚本已删除。本机保留当前 commit 的准确构建包与 SHA-256，用于同提交重试；保留密钥、访问配置及验收证据。迁移暂存目录 `.cache/migration-lightsail-ec2` 删除被自动审批拒绝（`blocked by policy`），已交用户手动清理。旧备份和 Lambda 缓存的历史清理限制见 Lightsail 退役记录，不能将未完成删除报告为已完成。
 
-## 阶段收尾与清理状态
+## 此前阶段收尾与清理状态（历史记录）
 
 2026-10-18 用户结束本轮密集开发并要求停机、格式整理与清理。通过 AWS 实时查询确认指定 EC2 已为 `stopped`、无公网 IP，10 GB 加密根卷仍附着；Cloudflare API 确认本域名 A 记录数为 0。实例本已停止，本轮无需重复 StopInstances，也未启动或发布新应用版本，已部署源码仍为 `01677b2`。
 

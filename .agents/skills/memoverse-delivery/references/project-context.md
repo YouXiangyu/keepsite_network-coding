@@ -16,7 +16,8 @@
 | 实例 ID / 名称 / 可用区 | `i-0e9ba9bc6f4b1c019` / `memoverse-keepsite` / `ap-northeast-1a` |
 | 规格 | `t3.small`：x86_64、2 vCPU、2 GB RAM；CPU credits 为 standard，避免 surplus credit 费用 |
 | 系统与磁盘 | Canonical Ubuntu 24.04；10 GB 加密 gp3 根卷 `vol-0bb6aa01805d28c75`，旧 20 GB 卷已删除 |
-| 最近运行状态 | 2026-10-18 新一轮 Web/鉴权联调按用户要求启动，`running` 且系统、实例、EBS 检查通过；正在准备新版本，操作前仍须实时查询 |
+| 最近运行状态 | 2026-10-18 Web / 账号版本已正式发布，`running` 且系统、实例、EBS 检查通过；应用与 Nginx active，保持运行待用户验收，操作前仍须实时查询 |
+| 当前运行提交 | `61e6bd2787d286736e21b703ee3dcecea528538e`，四个逻辑提交已推送 GitHub；纯文档提交不改变运行版本 |
 | 公网 IPv4 | 本轮启动查询为 `13.230.191.15`，自动分配；每次启动仍必须重新查询 |
 | Launch template / 新建默认版本 | `lt-016bca8507ac81480` / `2`，根盘默认 10 GB |
 | 安全组 / SSH key pair | `sg-0f472ac3891c65681` / `memoverse-ec2-20261017` |
@@ -36,7 +37,7 @@
 
 | 用途 | 路径 |
 | --- | --- |
-| 本机正在使用的数据 | `backend/data` |
+| 本机旧业务数据 | `backend/data`，保留不覆盖；新账号版本使用下行 schema 2 目录 |
 | 新账号业务目录 | 本机 `backend/data-v2`、服务器 `/var/lib/memoverse-v2`；旧 schema 1 目录保留，禁止新版本自动覆盖 |
 | 初始化模板 | 本机 `.cache/initial-template-v1`，服务器 `/opt/memoverse/shared/initial-template-v1`；18 张图、18 个模型，17 收藏、4 分享、6 社区内容 |
 | 本机网页 / API | `http://127.0.0.1:4173` / `http://127.0.0.1:8000` |
@@ -48,23 +49,26 @@
 | 新鉴权环境候选 | 本机 `.cache/server/account.env.next`、服务器 `/etc/memoverse.env.next`；含会话加密密钥，不输出或纳入 Git |
 | DDNS 服务 / 程序 / 状态 | `memoverse-ddns.service` / `/opt/memoverse/admin/sync-cloudflare-dns.py` / `/var/lib/memoverse-ddns/state.json` |
 | 本机模型与推理依赖 | `.cache/models`、`.cache/anyimage`、`.cache/anyimage-deps` |
-| 部署入口 | `scripts/deploy-ubuntu.ps1`，`Server` 必填，默认计划模式，`-Execute` 执行；新机另加 `-InitializeHost` |
+| 部署入口 | `scripts/deploy-ubuntu.ps1`，`Server` 必填，默认计划模式，`-Execute` 执行；`-PrepareOnly` 只准备，`-EnvironmentPath /etc/memoverse.env.next` 与 `-NginxPath /etc/nginx/sites-available/memoverse.next` 指定候选配置；新机另加 `-InitializeHost` |
 | 一次性数据迁移 | `scripts/package-server-data.py`，SQLite backup API + 文件 SHA-256 清单 |
 | Linux 安装 / 模型准备 | `deploy/ubuntu/install.sh` / `scripts/setup-anyimage.sh` |
 | 发布目录 / 当前链接 | `/opt/memoverse/releases/<完整commit>` / `/opt/memoverse/current` |
-| 服务器持久数据 | `/var/lib/memoverse` |
+| 服务器持久数据 | 新账号 `/var/lib/memoverse-v2`；旧 `/var/lib/memoverse` 保留 |
 | 服务器共享模型缓存 | `/opt/memoverse/shared/cache` |
 | 应用环境 | `/etc/memoverse.env` |
 | 应用服务 | `memoverse.service`，单 Uvicorn worker，`127.0.0.1:8000` |
 | Nginx 配置 | `/etc/nginx/sites-available/memoverse` |
-| Nginx BasicAuth 哈希 | `/etc/nginx/memoverse.htpasswd` |
+| 旧 Nginx BasicAuth 哈希 | `/etc/nginx/memoverse.htpasswd`，当前网站使用应用账号登录 |
+| 本轮激活回滚备份 | `/opt/memoverse/activation-backups/activation-m1rFC4fz`，root-only，保存切换前旧环境、站点、unit 与 release；同版本重复激活另存 `activation-WKPhdvkQ`，不能代替原始回滚备份 |
 | TLS 证书与私钥目录 | `/etc/letsencrypt/live/keepsite.space` |
 | TLS 配置脚本 | `deploy/ubuntu/enable-https.sh` |
 | 日志 | `journalctl -u memoverse`；`/var/log/memoverse/`；本机 `.cache/server/` |
 
-HTTPS 由源站 Nginx 使用 Let's Encrypt 证书提供，`certbot.timer` 续期并重载 Nginx。新账户版本尚未正式切换时，旧运行提交 `01677b2` 仍由整站 BasicAuth 保护。正式切换须在新后端的匿名拒绝和已配置会话检查通过后再启用应用登录入口，并一起切换环境、service unit、代码与 Nginx；回滚必须恢复旧环境和访问控制。自动 DDNS 只修改指定 A 记录，不擅自改变 Cloudflare 代理模式。
+HTTPS 由源站 Nginx 使用 Let's Encrypt 证书提供，`certbot.timer` 续期并重载 Nginx。本轮先 prepare-only，再以 127.0.0.1:8001 候选验证真实 Cognito/S3，停止候选后已正式切换环境、unit、代码与 Nginx。当前公开登录页 HTTP 200、匿名业务 API 401；旧 BasicAuth 配置保存在回滚备份。后续激活仍须先验证新后端匿名拒绝和会话配置；回滚应先停止公共 Nginx、恢复并验证旧访问控制，再启动旧应用。自动 DDNS 只修改指定 A 记录，不擅自改变 Cloudflare 代理模式。
 
-旧运行版本的 SQLite、原图和模型仍完整保留在原目录；本轮新账号版本使用 SQLite schema 2 与私有 S3，经鉴权后端代理文件访问。初始化模板已传至服务器并逐文件核验，模板上传 S3 和新版本接管须在发布验收记录中确认。当前生成流程是官方 AnyImage MoGe2 CPU 推理加项目网格/GLB 导出；不是 Blender Bake Mesh，也不是 Lambda。2 GB 实例配置了 2 GB swap，应用 drop-in 设置 MemoryHigh=1200M、MemoryMax=1500M。
+旧运行版本的 SQLite、原图和模型仍完整保留在原目录；新账号版本已使用 SQLite schema 2 与私有 S3，经鉴权后端代理文件访问。模板版本 `efc6dc4631e0466ed4de23463deb73a3b8e3b6f3af2bda57d7bf3e314dc14b5e`，73 个服务器文件逐一 SHA 验证通过（不含 source.sqlite3），权限 root:memoverse、目录 0750 / 文件 0640；18 图 / 18 模型与全部初始内容 ready。真实双账号隔离、私有文件、CPU 生成、备份、退出及刷新轮换均已验证。当前生成流程是官方 AnyImage MoGe2 CPU 推理加项目网格/GLB 导出；不是 Blender Bake Mesh，也不是 Lambda。2 GB 实例配置了 2 GB swap，应用 drop-in 设置 MemoryHigh=1200M、MemoryMax=1500M。
+
+相同 commit、环境和站点配置重复激活已返回 `Already active`，MainPID 保持 `2314`，没有重启应用。Google 控制台 UI 已核验应用为 Testing、测试名单含 1 个当前用户账号（个人邮箱不入 Git），Cognito authorize 到已登记 Google client 的跳转通过；本人 Google consent 与真实邮件收件仍待用户验收。QA 使用的临时 Cognito 账号设置 MessageAction=SUPPRESS，不作为邮件投递证据。详细验证与当前 QA 清理进度见 `docs/EC2部署验收.md`。
 
 ## 启停与计费决策
 
@@ -79,12 +83,12 @@ HTTPS 由源站 Nginx 使用 Let's Encrypt 证书提供，`certbot.timer` 续期
 
 ## 现有约束与文档
 
-- 根 `AGENTS.md` 与 `demo/AGENTS.md`：一般工作规则与受保护前端运行时。
+- 根 `AGENTS.md` 与 `demo/AGENTS.md`：一般工作规则、响应式 Web 运行契约和账号隔离要求。
 - `docs/项目定义与决策主文档.md`：产品决策。
 - `deploy/ubuntu/README.md`：安装、发布与恢复流程。
 - `docs/Lightsail部署验收.md`：旧环境历史证据与退役说明，不能用于定位当前实例。
 - `docs/EC2部署验收.md`：当前环境验收与 DDNS 验证范围。
 - 通用 Ubuntu 发布脚本会核验制品哈希与准备状态后复用同一 commit；未知目录或内容冲突停止，不自动删除。激活失败后依旧要核对回滚输出与真实运行状态，不能将尝试回滚等同成功。
-- 当前没有统一 formatter。遵循现有风格，格式整理不能触碰受保护运行时或扩散到无关代码。
-- 2026-10-18 阶段收尾只整理测试格式与文档，未改变已部署的应用代码，也未重新开机。本机预览已停止；缓存删除被自动审批拒绝，未完成清单集中在 `docs/EC2部署验收.md` 的“阶段收尾与清理状态”。保留业务数据、模型、凭据、当前发布制品和验收证据。
+- 当前没有统一 formatter。遵循现有风格，不放宽 Web 运行契约或扩散到无关代码。
+- 2026-10-18 最新阶段已发布 Web / 账号版本；此前“未开机、只改文档”属于历史收尾记录。用户尚未验收，保持服务器运行。本轮 QA 清理仍在进行，历史 22 + 6 项及新增 9 个模板合成测试目录删除被自动审批拒绝，未绕过；清单与状态集中在 `docs/EC2部署验收.md`。保留业务数据、模型、模板、凭据、当前准确发布制品、回滚备份和验收证据。
 - DDNS 限定一个实例管理一个域名。正常服务停止会撤回自己确认过的 A 记录；强制关机、Token 失效或并发改 DNS 时不保证撤回，停机后应读回确认。2026-10-18 换盘后已验证新公网 IP 发布，以及最终真实 EC2 停机后 A 记录归零。
