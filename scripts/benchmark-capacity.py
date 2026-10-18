@@ -267,7 +267,8 @@ def run_benchmark(temp_root: Path, *, counts=(100, 1000), profiles=PROFILES, war
                         "fastapi": version("fastapi"), "httpx": version("httpx")},
         "method": {"endpoint": "GET /api/state", "transport": "in-process TestClient", "concurrency": 1,
                    "p95_method": "nearest rank", "timing": "client.get through complete response body; validation occurs after the timer",
-                   "sql_in_timing": False, "synthetic_image_dimensions": [9, 7], "temporary_data_cleaned": True},
+                   "sql_work_in_timing": True, "sql_trace_in_timing": False,
+                   "synthetic_image_dimensions": [9, 7], "temporary_data_cleaned": True},
         "limitations": LIMITATIONS,
         "cases": results,
     }

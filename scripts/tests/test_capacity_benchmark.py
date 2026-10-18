@@ -32,7 +32,9 @@ class CapacityBenchmarkTests(unittest.TestCase):
                                      "MEMOVERSE_TEMPLATE_DIR": str(self.root / "must-not-open-template")}):
             report = benchmark.run_benchmark(self.root, counts=(4, 8), warmup=1, samples=2, sql_samples=2)
         self.assertEqual(len(report["cases"]), 4)
-        self.assertFalse(report["method"]["sql_in_timing"])
+        self.assertTrue(report["method"]["sql_work_in_timing"])
+        self.assertFalse(report["method"]["sql_trace_in_timing"])
+        self.assertNotIn("sql_in_timing", report["method"])
         self.assertTrue(report["method"]["temporary_data_cleaned"])
         for case in report["cases"]:
             count = case["collections"]
