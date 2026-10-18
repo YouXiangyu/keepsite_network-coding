@@ -106,13 +106,22 @@ async function request<T>(path: string, options: RequestOptions, consume: (respo
   }
   const controller = new AbortController();
   pending.add(controller);
+  let rejectAborted: () => void = () => {};
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectAborted = () => reject(new DOMException('请求已取消。', 'AbortError'));
+    controller.signal.addEventListener('abort', rejectAborted, { once: true });
+  });
   const abort = () => controller.abort();
   init.signal?.addEventListener('abort', abort, { once: true });
   if (init.signal?.aborted) abort();
   const timeout = setTimeout(abort, path === '/api/media' || path === '/api/backup' ? 120000 : 30000);
-  try {
-    const response = await fetch(path, { ...init, headers, credentials: 'same-origin', signal: controller.signal });
+  const checkActive = () => {
     if (started !== epoch || controller.signal.aborted) staleRequest();
+  };
+  const consumeRequest = async () => {
+    checkActive();
+    const response = await fetch(path, { ...init, headers, credentials: 'same-origin', signal: controller.signal });
+    checkActive();
     if (!response.ok) {
       let detail = `请求未成功（${response.status}），请重试。`;
       let code: string | undefined;
@@ -121,20 +130,29 @@ async function request<T>(path: string, options: RequestOptions, consume: (respo
         if (typeof body.detail === 'string') detail = body.detail;
         if (typeof body.code === 'string') code = body.code;
       } catch { /* Preserve the HTTP status when an error body is unavailable. */ }
-      if (started !== epoch) staleRequest();
-      if (response.status === 401 && (authenticated || activeSession)) expireSession();
+      checkActive();
+      if (response.status === 401 && (authenticated || activeSession)) {
+        // This request has a definitive response; cancel the other requests only.
+        pending.delete(controller);
+        expireSession();
+      }
       throw new ApiError(detail, response.status, code);
     }
     const value = await consume(response);
-    if (started !== epoch || controller.signal.aborted) staleRequest();
+    checkActive();
     return value;
+  };
+  try {
+    // The deadline includes body consumption, even if a consumer ignores abort.
+    return await Promise.race([consumeRequest(), aborted]);
   } catch (error) {
     if (error instanceof ApiError) throw error;
     if (started !== epoch || init.signal?.aborted) staleRequest();
-    throw new ApiError(controller.signal.aborted ? '请求超时，未提交内容仍保留，请重试。' : '暂时无法连接服务，请稍后重试。');
+    throw new ApiError(controller.signal.aborted ? '请求超时，结果尚未确认，当前草稿仍保留，请重试。' : '暂时无法连接服务，请稍后重试。');
   } finally {
     clearTimeout(timeout);
     pending.delete(controller);
+    controller.signal.removeEventListener('abort', rejectAborted);
     init.signal?.removeEventListener('abort', abort);
   }
 }

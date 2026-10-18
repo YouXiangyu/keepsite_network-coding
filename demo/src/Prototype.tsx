@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Plus, Bell, MagnifyingGlass, CaretRight, CaretDown, ArrowLeft, BookmarkSimple, Cloud, GearSix, Camera, PencilSimple, Trash, Check, Heart, Export, WarningCircle, SignOut } from '@phosphor-icons/react';
 import { Art } from './art';
 import { Brand } from './AuthGate';
@@ -14,8 +14,8 @@ import { categories, catName, dateLabel } from './features/collections/presentat
 import { communityItem } from './features/explore/communityItem';
 import ExplorePage from './features/explore/ExplorePage';
 import SharesPage from './features/shares/SharesPage';
+import ReliefPreview from './features/relief/ReliefPreview';
 
-const ReliefViewer = lazy(() => import('./ReliefViewer'));
 type Sheet = 'profile' | 'sync' | 'settings' | 'sort' | 'delete' | 'share' | null;
 const emptyData = (): AppData => ({ collections: [], shares: [], community: [], profile: { name: '', bio: '' }, likedCommunityIds: [] });
 const encoded = encodeURIComponent;
@@ -248,7 +248,7 @@ export default function Prototype({ session }: { session: SignedInSession }) {
     if (!currentItem) return <>{backBar()}<Empty title="这件收藏已不存在" text="请返回收藏列表查看其他内容。" /></>;
     const statusText = { reference: '图片收藏', queued: '图片已保存，正在排队生成', processing: '正在生成立体效果', blocked: '图片已保存，生成服务暂不可用', ready: '立体效果已准备好', failed: '生成未完成，原图仍保留' }[currentItem.generation];
     return <>{backBar()}<div className="detail-layout"><div className="detail-stage" data-model-url={currentItem.generation === 'ready' ? currentItem.modelUrl : undefined}>
-      {currentItem.generation === 'ready' && currentItem.modelUrl ? <Suspense fallback={<p role="status">正在打开浮雕…</p>}><ReliefViewer key={currentItem.modelUrl} modelUrl={currentItem.modelUrl} title={currentItem.title} imageUrl={currentItem.customImage} /></Suspense>
+      {currentItem.generation === 'ready' && currentItem.modelUrl ? <ReliefPreview modelUrl={currentItem.modelUrl} title={currentItem.title} imageUrl={currentItem.customImage} art={currentItem.art} />
         : <Art name={currentItem.art} src={currentItem.customImage} alt={currentItem.title} />}</div>
       <section className="detail-information"><span className="eyebrow">{catName(currentItem.category)} · {community ? '社区推荐' : currentItem.source === 'friend' ? '朋友推荐' : '我的经历'}</span><h1>{currentItem.title}</h1>{currentItem.date && <p className="card-meta">{dateLabel(currentItem.date)}</p>}
         <div className="detail-tags">{currentItem.tags.map(tag => <span key={tag}>{tag}</span>)}</div>{currentItem.note && <p className="detail-note">{currentItem.note}</p>}{currentItem.sender && <p className="card-meta">来自 {currentItem.sender} 的分享</p>}

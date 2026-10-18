@@ -257,3 +257,63 @@ test('conflict and network errors do not turn into fake successful state', async
   globalThis.fetch = async () => { throw new TypeError('network failed'); };
   await assert.rejects(api.getState(), /暂时无法连接服务/);
 });
+
+for (const [label, consume, start, limit] of [
+  ['JSON save', 'json', () => api.mutate('/api/collections/item-1', 'PATCH', { version: 1 }), 30000],
+  ['backup', 'blob', () => api.downloadBackup(), 120000],
+  ['model', 'arrayBuffer', () => api.fetchModel('/api/models/model/model.glb', new AbortController().signal), 30000],
+]) {
+  test(`${label} expires even when successful response body ignores cancellation`, async context => {
+    context.mock.timers.enable({ apis: ['setTimeout'] });
+    api.installSession(signedSession());
+    let bodyStarted;
+    const consuming = new Promise(resolve => { bodyStarted = resolve; });
+    let signal;
+    globalThis.fetch = async (_path, options) => {
+      signal = options.signal;
+      return { ok: true, [consume]: () => { bodyStarted(); return new Promise(() => {}); } };
+    };
+    const request = start();
+    const rejected = assert.rejects(request, error => error instanceof api.ApiError && /请求超时/.test(error.message));
+    await consuming;
+    context.mock.timers.tick(limit);
+    await rejected;
+    assert.equal(signal.aborted, true);
+    globalThis.fetch = async () => Response.json(serverState());
+    assert.equal((await api.getState()).revision, 7);
+  });
+}
+
+test('expired error-body consumption cannot later invalidate a new session', async context => {
+  context.mock.timers.enable({ apis: ['setTimeout'] });
+  api.installSession(signedSession('a'));
+  let resolveBody;
+  let bodyStarted;
+  const consuming = new Promise(resolve => { bodyStarted = resolve; });
+  globalThis.fetch = async () => ({ ok: false, status: 401, json: () => {
+    bodyStarted();
+    return new Promise(resolve => { resolveBody = resolve; });
+  } });
+  const request = api.getState();
+  const rejected = assert.rejects(request, /请求超时/);
+  await consuming;
+  context.mock.timers.tick(30000);
+  await rejected;
+  api.installSession(signedSession('b'));
+  resolveBody({ detail: 'expired' });
+  await Promise.resolve();
+  globalThis.fetch = async () => Response.json(serverState('b'));
+  assert.equal((await api.getState()).userId, 'b');
+});
+
+test('account cancellation promptly rejects a body that never finishes', async () => {
+  api.installSession(signedSession('a'));
+  let bodyStarted;
+  const consuming = new Promise(resolve => { bodyStarted = resolve; });
+  globalThis.fetch = async () => ({ ok: true, json: () => { bodyStarted(); return new Promise(() => {}); } });
+  const request = api.getState();
+  const rejected = assert.rejects(request, error => error.name === 'AbortError');
+  await consuming;
+  api.installSession(signedSession('b'));
+  await rejected;
+});
