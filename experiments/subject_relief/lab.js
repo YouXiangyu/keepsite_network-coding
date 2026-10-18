@@ -822,7 +822,7 @@ function acceptFinishedRun(job) {
   if (job.status === 'ready' && job.files?.model) {
     refreshEntries();
     void selectResult('right', `run:${job.id}`);
-    notice(`“${job.title || '新模型'}”已生成，正在载入右侧。${cacheSummary(job.report)}`);
+    notice(`“${job.title || '新模型'}”已生成。${cacheSummary(job.report)}`);
   }
 }
 
