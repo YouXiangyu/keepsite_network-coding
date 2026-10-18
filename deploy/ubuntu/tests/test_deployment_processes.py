@@ -100,13 +100,14 @@ mv() {
                 os.killpg(process.pid, signal.SIGKILL)
             process.communicate(timeout=5)
 
-    def launch(self, stage='', mode='success', hold=False):
+    def launch(self, stage='', mode='success', hold=False, release=None):
+        release = self.new if release is None else release
         environment = {**os.environ, 'MODE': mode, 'TEST_LOG': str(self.log),
-                       'TEST_CURRENT': str(self.current), 'TEST_NEW': str(self.new),
+                       'TEST_CURRENT': str(self.current), 'TEST_NEW': str(release),
                        'TEST_SITE': str(self.site), 'TEST_PYTHON': sys.executable,
                        'TEST_ROOT': str(self.root), 'TEST_STAGE': stage,
                        'TEST_HOLD_ROLLBACK': '1' if hold else '0'}
-        process = subprocess.Popen([self.bash, str(self.script), str(self.new),
+        process = subprocess.Popen([self.bash, str(self.script), str(release),
                                     '--environment', str(self.next_env), '--nginx', str(self.next_site)],
                                    env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    text=True, start_new_session=True)
@@ -127,6 +128,10 @@ mv() {
         self.assertEqual(process.returncode, 143, out + err)
         self.assertEqual(err.count('Activation failed; rollback evidence:'), 1)
         self.assert_restored()
+        retry = self.launch()
+        out, err = retry.communicate(timeout=10)
+        self.assertEqual(retry.returncode, 0, out + err)
+        self.assertEqual(self.current.resolve(), self.new)
 
     def test_term_after_stop_restores(self):
         self.interrupt_stage('stop')
@@ -136,6 +141,48 @@ mv() {
 
     def test_term_after_link_switch_restores(self):
         self.interrupt_stage('link')
+
+    def competing_releases(self, interrupt):
+        third = self.root / 'releases' / ('c' * 40)
+        # Copy a complete valid fixture, retaining payload and preparation
+        # identity checks rather than bypassing the release preconditions.
+        shutil.copytree(self.new, third)
+        first = self.launch('link')
+        wait_file(self.root / 'reached', first)
+        before_link = self.current.resolve()
+        before_configs = [path.read_bytes() for path in (self.env, self.site, self.unit)]
+        before_commands = [line for line in self.log.read_text().splitlines() if line.startswith('systemctl ')]
+        competing = self.launch(release=third)
+        out, err = competing.communicate(timeout=10)
+        self.assertEqual(competing.returncode, 2, out + err)
+        self.assertIn('Another preparation or activation', err)
+        self.assertEqual(self.current.resolve(), before_link)
+        self.assertEqual([path.read_bytes() for path in (self.env, self.site, self.unit)], before_configs)
+        self.assertEqual([line for line in self.log.read_text().splitlines() if line.startswith('systemctl ')], before_commands)
+        if interrupt:
+            first.send_signal(signal.SIGTERM)
+        else:
+            (self.root / 'release').touch()
+        out, err = first.communicate(timeout=10)
+        self.assertEqual(first.returncode, 143 if interrupt else 0, out + err)
+        if interrupt:
+            self.assert_restored()
+        else:
+            self.assertEqual(self.current.resolve(), self.new)
+        # The rejected distinct release can proceed after the first owner has
+        # completed either normal activation or signal-driven recovery.
+        retry = self.launch(release=third)
+        out, err = retry.communicate(timeout=10)
+        self.assertEqual(retry.returncode, 0, out + err)
+        self.assertEqual(self.current.resolve(), third)
+        self.assertEqual(self.env.read_bytes(), self.next_env.read_bytes())
+        self.assertEqual(self.site.read_text(), 'PUBLIC_SESSION')
+
+    def test_different_releases_serialize_then_retry_after_success(self):
+        self.competing_releases(interrupt=False)
+
+    def test_different_releases_serialize_then_retry_after_interruption(self):
+        self.competing_releases(interrupt=True)
 
     def test_term_keeps_previously_stopped_services_stopped(self):
         process = self.launch('unit', mode='stopped_signal')
@@ -184,6 +231,8 @@ mv() {
         out, err = process.communicate(timeout=10)
         self.assertEqual(process.returncode, 2, out + err)
         self.assertIn('ROLLBACK FAILED', err)
+        with prepare.deployment_lock(self.root / 'activation-backups/.lock'):
+            pass
 
     def test_success_and_same_commit_do_not_rollback_or_restart(self):
         first = self.launch()
