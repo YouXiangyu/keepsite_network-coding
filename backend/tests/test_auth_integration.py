@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from backend.app import create_app
+from backend import accounts
 from backend.auth import AuthConfig, hashed, install_auth
 from backend.object_storage import LocalObjectStore
 from account_fixtures import image_bytes, template_fixture
@@ -128,7 +129,7 @@ def test_failed_workspace_initialization_does_not_leave_authenticated_session(in
     client, app, provider, _ = integrated
     def unavailable(*args):
         raise RuntimeError("fixture workspace unavailable")
-    monkeypatch.setattr(app.state.store, "ensure_account", unavailable)
+    monkeypatch.setattr(accounts, "ensure_account", unavailable)
     response = client.post("/api/auth/login", headers=HEADERS,
                            json={"email": provider.email, "password": "StrongPassword!123"})
     assert response.status_code == 503 and response.json()["code"] == "workspace_unavailable"

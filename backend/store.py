@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import json
 import sqlite3
 import time
@@ -33,6 +32,8 @@ def require_schema2_root(root: Path):
     the base file is confirmed as schema 2, normal owned connections may recover
     that database's WAL. No checkpoint is performed on an unrecognized source.
     """
+    if (root / "RESTORE_INCOMPLETE").exists():
+        raise RuntimeError("Incomplete account restoration: do not start this data directory.")
     database = root / "memoverse.sqlite3"
     if not database.exists():
         return
@@ -46,7 +47,7 @@ def require_schema2_root(root: Path):
 
 
 class Store:
-    def __init__(self, root: Path, *, storage: ObjectStore, template: InitialTemplate):
+    def __init__(self, root: Path, *, storage: ObjectStore, template: InitialTemplate | None):
         require_schema2_root(root)
         self.root = root.resolve()
         self.storage, self.template = storage, template
@@ -198,106 +199,3 @@ class Store:
                 raise StoreError(409, "不可变模型元数据冲突，未覆盖已有模型。")
             return
         db.execute("INSERT INTO models VALUES (?,?,?,?,?,?,?)", (*values, now_ms()))
-
-    def ensure_account(self, user_id, email, name):
-        if not isinstance(user_id, str) or not user_id or len(user_id) > 512:
-            raise StoreError(401, "认证身份无效。")
-        with self.transaction() as db:
-            if db.execute("SELECT 1 FROM users WHERE id=?", (user_id,)).fetchone():
-                return
-        # Potentially slow object transfer is outside the SQL write transaction.
-        self.template.prepare_objects(self.storage)
-        with self.transaction(True) as db:
-            if db.execute("SELECT 1 FROM users WHERE id=?", (user_id,)).fetchone():
-                return
-            display_name = (name or email.partition("@")[0] or "新朋友").strip()[:24] or "新朋友"
-            db.execute("INSERT INTO users VALUES (?,?,?,?,?,?)", (user_id, email, name, 1, self.template.version, now_ms()))
-            for asset in self.template.assets.values():
-                self.register_asset(db, asset)
-                db.execute("INSERT INTO asset_grants VALUES (?,?)", (user_id, asset["id"]))
-            for model in self.template.models.values():
-                self.register_model(db, model)
-                db.execute("INSERT INTO model_grants VALUES (?,?)", (user_id, model["id"]))
-            initial = copy.deepcopy(self.template.data)
-            initial["profile"]["name"] = display_name
-            db.execute("INSERT INTO profiles VALUES (?,?)", (user_id, encode(initial["profile"])))
-            for item in initial["collections"]:
-                payload = {key: value for key, value in item.items() if key not in {"assetId", "modelId", "generation", "version"}}
-                db.execute("INSERT INTO collections(user_id,id,payload,asset_id,model_id,version) VALUES (?,?,?,?,?,?)", (user_id, item["id"], encode(payload), item["assetId"], item["modelId"], item.get("version", 1)))
-            for share in initial["shares"]:
-                db.execute("INSERT INTO shares VALUES (?,?,?)", (user_id, share["id"], encode(share)))
-            for item in initial["community"]:
-                db.execute("INSERT INTO community VALUES (?,?,?)", (user_id, item["id"], encode(item)))
-            for identifier in initial["likedCommunityIds"]:
-                db.execute("INSERT INTO likes VALUES (?,?)", (user_id, identifier))
-
-    def decorate_content(self, db, user_id, original):
-        item = copy.deepcopy(original)
-        for key in ("customImage", "modelUrl", "modelCamera", "generationJobId", "generationError"):
-            item.pop(key, None)
-        if item.get("assetId"):
-            self.asset(db, user_id, item["assetId"])
-            item["customImage"] = f"/api/media/{item['assetId']}"
-        if item.get("modelId"):
-            model = self.model(db, user_id, item["modelId"])
-            if model["asset_id"] != item.get("assetId"):
-                raise StoreError(409, "模型与图片引用不一致。")
-            item["generation"] = "ready"
-            item["modelUrl"] = f"/api/models/{model['id']}/model.glb"
-            item["modelCamera"] = json.loads(model["camera"])
-        return item
-
-    def present_item(self, db, user_id, row):
-        item = json.loads(row["payload"])
-        item.update(version=row["version"], assetId=row["asset_id"], generation="queued")
-        item.pop("modelId", None)
-        if row["model_id"]:
-            item["modelId"] = row["model_id"]
-        item = self.decorate_content(db, user_id, item)
-        if row["job_id"]:
-            job = self.job(db, user_id, row["job_id"])
-            item["generation"] = job["status"]
-            item["generationJobId"] = job["id"]
-            if job["error"]:
-                item["generationError"] = job["error"]
-            if job["status"] != "ready":
-                item.pop("modelUrl", None)
-                item.pop("modelCamera", None)
-        return item
-
-    def state(self, db, user_id):
-        user = self.require_user(db, user_id)
-        server = db.execute("SELECT value FROM meta WHERE key='server_id'").fetchone()[0]
-        collections = [self.present_item(db, user_id, row) for row in db.execute("SELECT * FROM collections WHERE user_id=? ORDER BY rowid", (user_id,))]
-        shares = []
-        for row in db.execute("SELECT payload FROM shares WHERE user_id=? ORDER BY rowid", (user_id,)):
-            share = json.loads(row[0])
-            share["item"] = self.decorate_content(db, user_id, share["item"])
-            shares.append(share)
-        community = [self.decorate_content(db, user_id, json.loads(row[0])) for row in db.execute("SELECT payload FROM community WHERE user_id=? ORDER BY rowid", (user_id,))]
-        profile = db.execute("SELECT payload FROM profiles WHERE user_id=?", (user_id,)).fetchone()
-        return {"initialized": True, "serverId": server, "userId": user_id, "revision": user["revision"], "data": {
-            "collections": collections, "shares": shares, "community": community,
-            "profile": json.loads(profile[0]),
-            "likedCommunityIds": [row[0] for row in db.execute("SELECT id FROM likes WHERE user_id=? ORDER BY rowid", (user_id,))],
-        }}
-
-    def enqueue(self, db, user_id, collection_id, asset_id, revision):
-        self.asset(db, user_id, asset_id)
-        job_id = str(uuid.uuid4())
-        stamp = now_ms()
-        db.execute("INSERT INTO jobs(id,user_id,collection_id,asset_id,input_revision,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)", (job_id, user_id, collection_id, asset_id, revision, "queued", stamp, stamp))
-        if db.execute("UPDATE collections SET job_id=? WHERE user_id=? AND id=?", (job_id, user_id, collection_id)).rowcount != 1:
-            raise StoreError(404, "生成任务没有对应的账号收藏。")
-        return job_id
-
-    def archive_snapshot(self, user_id):
-        with self.transaction() as db:
-            state = self.state(db, user_id)
-            data = state["data"]
-            items = [*data["collections"], *[share["item"] for share in data["shares"]], *data["community"]]
-            assets = {item["assetId"]: dict(self.asset(db, user_id, item["assetId"])) for item in items if item.get("assetId")}
-            models = {item["modelId"]: dict(self.model(db, user_id, item["modelId"])) for item in items if item.get("modelId") and item.get("generation") == "ready"}
-            collections = [dict(row) for row in db.execute("SELECT * FROM collections WHERE user_id=? ORDER BY rowid", (user_id,))]
-            jobs = [dict(self.job(db, user_id, row["job_id"])) for row in collections if row["job_id"]]
-        return state, assets, models, collections, jobs

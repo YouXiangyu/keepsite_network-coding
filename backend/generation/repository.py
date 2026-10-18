@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import uuid
 
-from ..store import Store, encode, now_ms
+from ..store import Store, StoreError, encode, now_ms
 
 
 @dataclass(frozen=True)
@@ -98,3 +99,13 @@ def finalize(store: Store, job, model, error: str, is_stopping: Callable[[], boo
             db.execute("UPDATE jobs SET status='ready',error='',model_id=?,result=?,updated_at=? WHERE user_id=? AND id=?", (model["id"], encode({"modelId": model["id"], "camera": model["camera"]}), now_ms(), job["user_id"], job["id"]))
             db.execute("UPDATE collections SET model_id=? WHERE user_id=? AND id=? AND job_id=? AND input_revision=?", (model["id"], job["user_id"], job["collection_id"], job["id"], job["input_revision"]))
             store.bump(db, job["user_id"])
+
+
+def enqueue(store: Store, db, user_id, collection_id, asset_id, revision):
+    store.asset(db, user_id, asset_id)
+    job_id = str(uuid.uuid4())
+    stamp = now_ms()
+    db.execute("INSERT INTO jobs(id,user_id,collection_id,asset_id,input_revision,status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)", (job_id, user_id, collection_id, asset_id, revision, "queued", stamp, stamp))
+    if db.execute("UPDATE collections SET job_id=? WHERE user_id=? AND id=?", (job_id, user_id, collection_id)).rowcount != 1:
+        raise StoreError(404, "生成任务没有对应的账号收藏。")
+    return job_id
