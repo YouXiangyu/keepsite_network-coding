@@ -1,10 +1,20 @@
 # EC2 部署验收
 
-验收日期：2026-10-18，北京时间。最近应用运行提交：`80d7681556823f81372b9c6cc5d32450ddc7961f`；主机自动关机配置提交：`902d3ee`，没有重新发布应用。
+验收日期：2026-10-18，北京时间。最近应用运行提交：`80d7681556823f81372b9c6cc5d32450ddc7961f`；当前主机自动关机配置提交：`622486b`（58 分钟），没有重新发布应用。
 
-当前状态：用户简单测试后明确要求停机，并追加“每次开机一小时后自动关机”。2026-10-18 12:11 已核验 EC2 `i-0e9ba9bc6f4b1c019` 为 `stopped`、无公网 IP，Cloudflare A 记录数为 0，网站暂不可访问。10 GB 加密根卷仍附着，业务数据、S3 和账号配置保留。下文发布时 active 等表述均为当时验收事实。
+当前状态：用户简单测试后明确要求停机，随后将自动关机规则从一小时改为开机后 58 分钟。2026-10-18 12:19 已核验 EC2 `i-0e9ba9bc6f4b1c019` 为 `stopped`、无公网 IP，Cloudflare A 记录数为 0，网站暂不可访问。10 GB 加密根卷仍附着，业务数据、S3 和账号配置保留。下文发布时 active 等表述均为当时验收事实。
 
 ## 用户测试后停机与自动关机配置
+
+### 58 分钟配置（当前）
+
+为给正常关机预留约两分钟，用户要求将 timer 改为 `OnBootSec=58min`。短暂维护开机后的 IP 为 `43.207.114.190`；修改前先确认此前安装的 timer 已随这次系统启动自动进入 enabled/active。只更新 timer 的说明和时长，service 的正常 poweroff 路径保持不变。
+
+新配置经独立复核、服务器 `systemd-analyze verify` 检查和源码/安装文件 SHA-256 对照通过。daemon-reload 并重启 timer 后，`TimersMonotonic` 和 `NextElapseUSecMonotonic` 均为 58min，AccuracyUSec=1s，仍 enabled/active；uptime 44.55 秒，计划触发时间为当日 13:15:04 北京时间。这次没有等待 58 分钟；确认没有生成或传输任务后正常 StopInstances，12:19 读回 stopped、IP 已释放，DNS A 为零。临时上传文件已删除，记录见 `.cache/server/auto-stop-58-install.log`、`auto-stop-58-acceptance.json`。
+
+58 分钟是发起正常关机的时点；约两分钟缓冲不构成严格在 60 分钟内到达 stopped 的保证。下列一小时设置保留为历史证据，不再是当前配置。
+
+### 原一小时配置（历史）
 
 首次检查没有待处理生成任务或传输进程，以正常 `StopInstances` 停机，确认 stopped、动态 IP `13.230.191.15` 释放、DNS A 为零。随后按用户新增要求短暂维护开机，读取新 IP `18.181.150.249`，严格校验既有 SSH host key，安装已审查的 `memoverse-auto-stop.timer` 和同名 service，之后恢复关机。
 
