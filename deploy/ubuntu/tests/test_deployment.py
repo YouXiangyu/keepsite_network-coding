@@ -144,6 +144,7 @@ class ActivationTests(unittest.TestCase):
 systemctl() {
   printf 'systemctl %s\n' "$*" >> "$TEST_LOG"
   current=$(cat "$TEST_CURRENT" 2>/dev/null || true)
+  if [[ "$1" == is-active && "$MODE" == stopped_* ]]; then return 1; fi
   if [[ "$1" == stop && "$MODE" == stop_fail ]]; then return 1; fi
   if [[ "$1" == enable && "$MODE" == enable_fail ]]; then return 1; fi
   if [[ "$1" == is-active && "$3" == memoverse && ! -f "$TEST_CURRENT" ]]; then return 1; fi
@@ -154,6 +155,7 @@ systemctl() {
     if [[ "$MODE" == rollback_nginx_fail || ( "$MODE" == nginx_reload_fail && "$(cat "$TEST_SITE")" == PUBLIC_SESSION ) ]]; then return 1; fi
   fi
   if [[ "$1" == restart ]]; then
+    if [[ "$MODE" == stopped_restart_fail ]]; then return 1; fi
     if [[ "$MODE" == rollback_fail || ( "$MODE" == restart_fail_new && "$current" == "$TEST_NEW" ) ]]; then return 1; fi
   fi
   return 0
@@ -235,8 +237,23 @@ sleep() { :; }
 
     def test_stop_failure_keeps_old_link(self):
         result = self.run_activation('stop_fail')
+        # A failed stop may have had side effects; guarded recovery also fails
+        # in this fixture, so report the stronger incomplete-recovery status.
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn('ROLLBACK FAILED', result.stderr)
+        self.assertEqual(self.current.read_text(), self.old.as_posix())
+
+    def test_failure_restores_previously_stopped_services_without_starting_them(self):
+        result = self.run_activation('stopped_restart_fail', configuration=True)
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertEqual(self.current.read_text(), self.old.as_posix())
+        self.assertEqual(self.env.read_text(), self.environment)
+        self.assertEqual(self.site.read_text(), 'PRIVATE_BASIC')
+        commands = self.log.read_text()
+        # Only the failed new-version start was attempted, never the old one.
+        self.assertEqual(commands.count('systemctl restart memoverse'), 1)
+        self.assertNotIn('systemctl start nginx', commands)
+        self.assertIn('application active=0; nginx active=0', result.stderr)
 
     def test_first_deploy_starts_without_existing_unit(self):
         self.current.unlink()

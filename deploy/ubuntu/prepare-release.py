@@ -1,17 +1,98 @@
 #!/usr/bin/env python3
 """Verify an uploaded artifact, resume only matching releases, prepare dependencies."""
 import argparse
+from contextlib import contextmanager
 import hashlib
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
+import signal
 import subprocess
 import tarfile
+import tempfile
+import time
 
 
 def digest_file(path):
     with path.open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def atomic_text(path, value):
+    temporary = path.with_name(path.name + f'.{os.getpid()}.next')
+    try:
+        temporary.write_text(value)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+@contextmanager
+def deployment_lock(path):
+    # The same inode is locked by activate.sh, including its rollback.
+    import fcntl
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with path.open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError('Another preparation or activation is running') from None
+        yield
+
+
+def interrupted(signum, frame):
+    raise SystemExit(128 + signum)
+
+
+def group_has_live_processes(group):
+    # Ubuntu /proc distinguishes dead orphan zombies from running descendants.
+    # killpg(..., 0) alone can report a zombie-only group indefinitely.
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            fields = (entry / 'stat').read_text().rpartition(')')[2].split()
+            if int(fields[2]) == group and fields[0] not in {'Z', 'X'}:
+                return True
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+    return False
+
+
+def run_installer(command):
+    child = None
+    try:
+        child = subprocess.Popen(command, start_new_session=True)
+        if child.wait() != 0:
+            raise RuntimeError('Dependency preparation failed')
+    finally:
+        if child is not None:
+            # A shell can exit before its descendants. Always clean its owned
+            # group, even when poll() says the leader has already exited.
+            handlers = {sig: signal.getsignal(sig) for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
+            for sig in handlers:
+                signal.signal(sig, signal.SIG_IGN)
+            try:
+                try:
+                    os.killpg(child.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                deadline = time.monotonic() + 2
+                while group_has_live_processes(child.pid) and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                child.wait()
+                # Retain the deployment lock until no descendant can continue
+                # installing; uninterruptible kernel I/O may delay this wait.
+                while group_has_live_processes(child.pid):
+                    time.sleep(0.02)
+            finally:
+                for sig, handler in handlers.items():
+                    signal.signal(sig, handler)
 
 
 def prepare_artifact(archive, release, expected_hash):
@@ -35,22 +116,39 @@ def prepare_artifact(archive, release, expected_hash):
             if member.isfile() and member.name in seen:
                 raise ValueError('Duplicate archive file')
             seen.add(member.name)
-        if not existing:
-            release.mkdir(parents=True, mode=0o755)
-            bundle.extractall(release, members=members, filter='data')
-        for member in members:
-            path = release.joinpath(*PurePosixPath(member.name).parts)
-            parts = path.relative_to(release).parts
-            if any(release.joinpath(*parts[:index]).is_symlink() for index in range(1, len(parts) + 1)):
-                raise ValueError('Release payload contains a symlink')
-            if member.isfile():
-                if not path.is_file() or path.stat().st_size != member.size:
-                    raise ValueError('Release payload is incomplete')
-                with bundle.extractfile(member) as source:
-                    expected = hashlib.file_digest(source, 'sha256').hexdigest()
-                if digest_file(path) != expected:
-                    raise ValueError('Release file differs from verified artifact')
-        marker.write_text(expected_hash + '\n')
+        staging = None
+        try:
+            target = release
+            if not existing:
+                release.parent.mkdir(parents=True, exist_ok=True)
+                staging = Path(tempfile.mkdtemp(prefix=f'.{release.name}.extract-', dir=release.parent))
+                target = staging
+                bundle.extractall(target, members=members, filter='data')
+            for member in members:
+                path = target.joinpath(*PurePosixPath(member.name).parts)
+                parts = path.relative_to(target).parts
+                if any(target.joinpath(*parts[:index]).is_symlink() for index in range(1, len(parts) + 1)):
+                    raise ValueError('Release payload contains a symlink')
+                if member.isfile():
+                    if not path.is_file() or path.stat().st_size != member.size:
+                        raise ValueError('Release payload is incomplete')
+                    with bundle.extractfile(member) as source:
+                        expected = hashlib.file_digest(source, 'sha256').hexdigest()
+                    if digest_file(path) != expected:
+                        raise ValueError('Release file differs from verified artifact')
+            if staging is not None:
+                atomic_text(target / '.artifact-sha256', expected_hash + '\n')
+                target.chmod(0o755)
+                target.rename(release)
+                staging = None
+        finally:
+            if staging is not None:
+                try:
+                    shutil.rmtree(staging)
+                except FileNotFoundError:
+                    # A signal can arrive after rename but before clearing the
+                    # local staging variable. The verified release is retained.
+                    pass
     return (release / '.prepared-sha256').is_file() and (release / '.prepared-sha256').read_text().strip() == expected_hash
 
 
@@ -67,12 +165,15 @@ def main():
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}', args.domain):
         raise SystemExit('Invalid domain')
     release = Path('/opt/memoverse/releases') / args.commit
-    if not prepare_artifact(args.archive, release, args.sha256):
-        command = ['bash', str(release / 'deploy/ubuntu/install.sh'), '--release', str(release), '--domain', args.domain, '--execute']
-        if args.initialize_host:
-            command.append('--initialize-host')
-        subprocess.run(command, check=True)
-        (release / '.prepared-sha256').write_text(args.sha256 + '\n')
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, interrupted)
+    with deployment_lock(Path('/opt/memoverse/activation-backups/.lock')):
+        if not prepare_artifact(args.archive, release, args.sha256):
+            command = ['bash', str(release / 'deploy/ubuntu/install.sh'), '--release', str(release), '--domain', args.domain, '--execute']
+            if args.initialize_host:
+                command.append('--initialize-host')
+            run_installer(command)
+            atomic_text(release / '.prepared-sha256', args.sha256 + '\n')
     print(f'Verified and prepared: {release}')
 
 

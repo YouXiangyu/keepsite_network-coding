@@ -27,7 +27,7 @@ LIVE_UNIT=/etc/systemd/system/memoverse.service
 umask 077
 install -d -o root -g root -m 0700 /opt/memoverse/activation-backups
 exec 9>/opt/memoverse/activation-backups/.lock
-flock -n 9 || { echo 'Another activation is running.' >&2; exit 2; }
+flock -n 9 || { echo 'Another preparation or activation is running.' >&2; exit 2; }
 check_file() {
   local path="$1" kind="$2" mode group
   [[ -f "$path" && ! -L "$path" && "$(realpath "$path")" == "$path" ]] || { echo 'Configuration must be a regular, non-symlink file.' >&2; return 1; }
@@ -129,6 +129,11 @@ auth_health() {
     python3 -c 'import json,sys; s=json.load(sys.stdin); assert s.get("authenticated") is False and s.get("configured") is True and s.get("providers",{}).get("email") is True and "user" not in s and "csrfToken" not in s'
 }
 configs_same=1
+PREVIOUS_APP_ACTIVE=0
+PREVIOUS_NGINX_ACTIVE=0
+if systemctl is-active --quiet memoverse; then PREVIOUS_APP_ACTIVE=1; fi
+if systemctl is-active --quiet nginx; then PREVIOUS_NGINX_ACTIVE=1; fi
+printf 'memoverse=%s\nnginx=%s\n' "$PREVIOUS_APP_ACTIVE" "$PREVIOUS_NGINX_ACTIVE" > "$BACKUP/service-state"
 cmp -s "$LIVE_UNIT" "$RELEASE/deploy/ubuntu/memoverse.service" || configs_same=0
 if [[ -n "$ENVIRONMENT" ]]; then cmp -s "$LIVE_ENV" "$BACKUP/environment.next" || configs_same=0; fi
 if [[ -n "$NGINX" ]]; then cmp -s "$LIVE_SITE" "$BACKUP/nginx.next" || configs_same=0; fi
@@ -150,21 +155,57 @@ rollback() {
   if (( NGINX_CHANGED || NGINX_STOPPED )); then
     # A graceful reload can leave public workers alive on existing connections.
     # Stop them completely before restoring an older, possibly anonymous API.
-    if ! { systemctl stop nginx && restore_file nginx "$LIVE_SITE" && nginx -t && systemctl start nginx; }; then
+    if ! { systemctl stop nginx && restore_file nginx "$LIVE_SITE" && nginx -t; }; then
       systemctl stop nginx || true
       echo 'Cannot restore private Nginx configuration; old application remains stopped.' >&2
+      return 1
+    fi
+    if (( PREVIOUS_NGINX_ACTIVE )); then
+      systemctl start nginx && systemctl is-active --quiet nginx || return 1
+    elif systemctl is-active --quiet nginx; then
+      echo 'Nginx was stopped before activation but is still active after rollback.' >&2
       return 1
     fi
   fi
   restore_file environment "$LIVE_ENV" && restore_file unit "$LIVE_UNIT" && systemctl daemon-reload || return 1
   if [[ -n "$PREVIOUS" ]]; then
-    activate_link "$PREVIOUS" && systemctl restart memoverse && health || return 1
-    echo "Restored previous code, environment and unit: $PREVIOUS" >&2
+    activate_link "$PREVIOUS" || return 1
+    if (( PREVIOUS_APP_ACTIVE )); then
+      systemctl restart memoverse && health || return 1
+    elif systemctl is-active --quiet memoverse; then
+      echo 'Application was stopped before activation but is still active after rollback.' >&2
+      return 1
+    fi
+    echo "Restored previous code, environment and unit: $PREVIOUS; application active=$PREVIOUS_APP_ACTIVE; nginx active=$PREVIOUS_NGINX_ACTIVE" >&2
   else
     rm -f -- /opt/memoverse/current
     echo 'No prior release; application remains stopped.' >&2
   fi
 }
+DIRTY=0
+COMMITTED=0
+finish() {
+  local result="$1"
+  # A second signal cannot interrupt recovery or invoke it a second time.
+  trap - EXIT
+  trap '' INT TERM HUP
+  if (( DIRTY && ! COMMITTED )); then
+    if rollback; then
+      (( result != 0 )) || result=1
+    else
+      echo "ROLLBACK FAILED. Application/site may be stopped; inspect $BACKUP and service state." >&2
+      result=2
+    fi
+  fi
+  exit "$result"
+}
+trap 'finish $?' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+# Mark before the first command which can change the live service. A signal
+# between command completion and the next shell statement must still recover.
+DIRTY=1
 if [[ -n "$PREVIOUS" || -f "$LIVE_UNIT" ]] || systemctl is-active --quiet memoverse; then
   systemctl stop memoverse || { echo 'Cannot stop old service; configuration/link unchanged.' >&2; exit 1; }
 fi
@@ -172,24 +213,24 @@ switch_release() {
   if [[ -n "$NGINX" ]] && ! cmp -s "$LIVE_SITE" "$BACKUP/nginx.next"; then
     # Old site logs may record OAuth query strings. Keep the site offline during
     # the auth/config transition rather than sending new auth traffic through it.
-    systemctl stop nginx || return 1
     NGINX_STOPPED=1
+    systemctl stop nginx || return 1
   fi
   if [[ -n "$ENVIRONMENT" ]]; then atomic_config "$BACKUP/environment.next" "$LIVE_ENV" 600 || return 1; fi
   atomic_config "$RELEASE/deploy/ubuntu/memoverse.service" "$LIVE_UNIT" 644 || return 1
   activate_link "$RELEASE" && systemctl daemon-reload && systemctl restart memoverse && auth_health || return 1
   if [[ -n "$NGINX" ]] && ! cmp -s "$LIVE_SITE" "$BACKUP/nginx.next"; then
-    atomic_config "$BACKUP/nginx.next" "$LIVE_SITE" 644 || return 1
     NGINX_CHANGED=1
+    atomic_config "$BACKUP/nginx.next" "$LIVE_SITE" 644 || return 1
     nginx -t && systemctl start nginx || return 1
   fi
   return 0
 }
 if switch_release; then
+  # Healthy code is committed even if enable-on-boot needs a later retry.
+  COMMITTED=1
   systemctl enable memoverse || { echo 'New release is healthy but enable-on-boot failed; retry activation.' >&2; exit 1; }
   echo "Active release with authenticated backend: $RELEASE; rollback evidence: $BACKUP"
   exit 0
 fi
-if rollback; then exit 1; fi
-echo "ROLLBACK FAILED. Application/site may be stopped; inspect $BACKUP and service state." >&2
-exit 2
+exit 1
