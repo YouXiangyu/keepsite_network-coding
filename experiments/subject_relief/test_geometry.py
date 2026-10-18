@@ -1,7 +1,107 @@
 import numpy as np
 import pytest
 
-from experiments.subject_relief.geometry import cell_patch_arrays, soften_subject_edges, subject_heights
+from experiments.subject_relief.geometry import (
+    cell_patch_arrays, export_heightfield, soften_subject_edges, subject_heights,
+    whole_image_relief,
+)
+
+
+def test_whole_image_normalization_keeps_original_interior_and_flattens_background():
+    depth = np.linspace(1, 5, 120, dtype=np.float32).reshape(10, 12)
+    valid = np.ones(depth.shape, dtype=bool)
+    foreground = np.zeros(depth.shape, dtype=bool)
+    foreground[1:9, 2:10] = True
+    result, stats = whole_image_relief(depth, valid, foreground)
+    inverse = 1 / depth
+    low, high = np.percentile(inverse, [2, 98])
+    original = np.clip((inverse - low) / (high - low), 0, 1) * 0.32
+    np.testing.assert_array_equal(result[2:8, 3:9], original[2:8, 3:9])
+    assert np.all(result[~foreground] == 0)
+    assert stats['stable_foreground_max_error'] == stats['background_max_abs_height'] == 0
+    assert stats['transition_count'] > 0
+    _, other = whole_image_relief(depth, valid, ~foreground)
+    assert other['inverse_depth_percentiles'] == stats['inverse_depth_percentiles']
+    assert other['original_height_range'] == stats['original_height_range']
+
+
+def test_foreground_union_has_no_internal_semantic_seam():
+    depth = np.linspace(1, 3, 100, dtype=np.float32).reshape(10, 10)
+    labels = np.zeros((10, 10), dtype=int)
+    labels[1:9, 1:5], labels[1:9, 5:9] = 1, 2
+    union, _ = whole_image_relief(depth, np.ones_like(depth, dtype=bool), labels > 0)
+    unmasked, _ = whole_image_relief(depth, np.ones_like(depth, dtype=bool), np.ones_like(depth, dtype=bool), transition_pixels=0)
+    np.testing.assert_array_equal(union[2:8, 4:6], unmasked[2:8, 4:6])
+
+
+def test_whole_image_invalid_and_empty_foreground_stay_flat():
+    depth = np.arange(1, 101, dtype=np.float32).reshape(10, 10)
+    depth[3, 3] = np.nan
+    valid = np.ones_like(depth, dtype=bool)
+    valid[4, 4] = False
+    result, stats = whole_image_relief(depth, valid, np.ones_like(valid))
+    assert result[3, 3] == result[4, 4] == 0
+    assert np.isfinite(result).all()
+    assert stats['invalid_foreground_count'] == 2
+    empty, stats = whole_image_relief(depth, valid, np.zeros_like(valid))
+    assert np.all(empty == 0)
+    assert stats['stable_foreground_count'] == 0
+
+
+@pytest.mark.parametrize('options', [
+    {'amplitude': 0}, {'amplitude': -1}, {'amplitude': np.nan},
+    {'transition_pixels': -1}, {'transition_pixels': np.inf},
+])
+def test_whole_image_parameter_boundaries(options):
+    depth = np.arange(1, 26, dtype=np.float32).reshape(5, 5)
+    mask = np.ones(depth.shape, dtype=bool)
+    with pytest.raises(ValueError):
+        whole_image_relief(depth, mask, mask, **options)
+
+
+def test_whole_image_invalid_shape_empty_validity_and_flat_depth_fail_explicitly():
+    mask = np.ones((5, 5), dtype=bool)
+    with pytest.raises(ValueError, match='sixteen'):
+        whole_image_relief(np.ones((5, 5)), ~mask, mask)
+    with pytest.raises(ValueError, match='flat'):
+        whole_image_relief(np.ones((5, 5)), mask, mask)
+    with pytest.raises(ValueError, match='shape'):
+        whole_image_relief(np.ones((5, 5)), mask, mask.astype(int))
+    with pytest.raises(ValueError, match='shape'):
+        whole_image_relief(np.empty((0, 5)), np.empty((0, 5), bool), np.empty((0, 5), bool))
+    with pytest.raises(ValueError, match='numeric range'):
+        whole_image_relief(np.full((5, 5), 1e-40), mask, mask)
+
+
+def test_heightfield_export_preserves_grid_uv_winding_and_offset(tmp_path):
+    from backend import anyimage_worker  # Expose the existing pinned cache dependencies.
+    import trimesh
+    from PIL import Image
+
+    heights = np.arange(24, dtype=np.float32).reshape(4, 6) / 100
+    target = tmp_path / 'continuous.glb'
+    with Image.new('RGBA', (60, 40), (250, 240, 230, 255)) as texture:
+        stats = export_heightfield(heights, texture, target, z_offset=-0.16)
+    scene = trimesh.load(target, force='scene', process=False)
+    assert len(scene.geometry) == 1
+    mesh = next(iter(scene.geometry.values()))
+    assert len(mesh.vertices) == 24
+    assert len(mesh.faces) == 30
+    np.testing.assert_allclose(mesh.vertices[:, 2], heights.ravel() - 0.16, atol=1e-7)
+    np.testing.assert_allclose(mesh.vertices[[0, 5, 18, 23], :2], [[-1.5, 1], [1.5, 1], [-1.5, -1], [1.5, -1]])
+    np.testing.assert_allclose(mesh.visual.uv[[0, 5, 18, 23]], [[0, 1], [1, 1], [0, 0], [1, 0]])
+    triangles = mesh.vertices[mesh.faces]
+    assert np.all(np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])[:, 2] > 0)
+    assert stats['z_offset'] == -0.16
+
+
+@pytest.mark.parametrize('heights,offset', [(np.zeros((1, 4)), 0), (np.full((3, 3), -1), 0), (np.full((3, 3), np.nan), 0), (np.zeros((3, 3)), np.inf)])
+def test_heightfield_rejects_invalid_geometry(tmp_path, heights, offset):
+    from backend import anyimage_worker
+    from PIL import Image
+
+    with Image.new('RGBA', (4, 4)) as texture, pytest.raises(ValueError):
+        export_heightfield(heights, texture, tmp_path / 'invalid.glb', z_offset=offset)
 
 
 def test_near_subject_is_higher_without_using_bright_pixels_or_background_depth():

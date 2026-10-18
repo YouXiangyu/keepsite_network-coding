@@ -28,8 +28,8 @@ function localUrl(value, field) {
   return url;
 }
 
-async function getFile(url) {
-  const response = await fetch(url, { signal: lifecycle.signal });
+async function getFile(url, signal = lifecycle.signal) {
+  const response = await fetch(url, { signal });
   if (!response.ok) throw new Error(`文件读取失败（HTTP ${response.status}）。`);
   return response;
 }
@@ -125,7 +125,7 @@ function resize() {
 
 const resizeObserver = new ResizeObserver(resize);
 
-function disposeModel(root, extraMaterials = []) {
+function disposeModel(root, extraMaterials = [], preservedMaterials = []) {
   const geometries = new Set();
   const materials = new Set(extraMaterials);
   const textures = new Set();
@@ -134,6 +134,7 @@ function disposeModel(root, extraMaterials = []) {
     for (const material of [].concat(object.material ?? [])) materials.add(material);
     for (const material of [].concat(object.userData.originalMaterial ?? [])) materials.add(material);
   });
+  for (const material of preservedMaterials) materials.delete(material);
   for (const material of materials) {
     for (const value of Object.values(material)) if (value?.isTexture) textures.add(value);
   }
@@ -147,7 +148,9 @@ function disposeModel(root, extraMaterials = []) {
   for (const geometry of geometries) geometry.dispose();
 }
 
-function createViewer(containerId, statusId, label) {
+function createViewer(prefix, label) {
+  const containerId = `${prefix}-viewport`;
+  const statusId = `${prefix}-status`;
   const container = byId(containerId);
   const status = byId(statusId);
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
@@ -182,7 +185,10 @@ function createViewer(containerId, statusId, label) {
   fillLight.position.set(3, -1, 3);
   scene.add(fillLight);
   const neutral = new THREE.MeshStandardMaterial({ color: 0xd9ddd4, roughness: 0.88, metalness: 0, side: THREE.DoubleSide });
-  const viewer = { container, status, renderer, scene, camera, controls, neutral, model: null };
+  const viewer = {
+    prefix, container, status, renderer, scene, camera, controls, neutral,
+    model: null, variant: null, generation: 0, request: null, loading: false, error: false,
+  };
   viewers.push(viewer);
   const onChange = () => syncFrom(viewer);
   controls.addEventListener('change', onChange);
@@ -213,35 +219,104 @@ function createViewer(containerId, statusId, label) {
   return viewer;
 }
 
-async function loadModel(viewer, url) {
-  const response = await getFile(url);
-  const data = await response.arrayBuffer();
+function updatePageStatus() {
   if (disposed) return;
-  const gltf = await new GLTFLoader().parseAsync(data, new URL('./', url).href);
-  if (disposed) {
-    disposeModel(gltf.scene);
-    return;
+  const ready = viewers.filter((viewer) => viewer.model).length;
+  const loading = viewers.some((viewer) => viewer.loading);
+  const failed = viewers.some((viewer) => viewer.error) || viewers.length < 2;
+  const message = loading ? '正在载入所选模型；已载入的模型仍可查看。'
+    : failed ? `当前可查看 ${ready} / 2 个模型；请查看面板中的加载提示。`
+      : '两个模型已载入 · 两侧使用相同正交视角与高度倍率。';
+  showStatus(pageStatus, message, failed && !loading);
+}
+
+function fitModels() {
+  const ready = viewers.filter((viewer) => viewer.model);
+  if (!ready.length) return;
+  sceneWidth = Math.max(...ready.map((viewer) => viewer.size.x));
+  sceneHeight = Math.max(...ready.map((viewer) => viewer.size.y));
+  sceneDepth = Math.max(...ready.map((viewer) => viewer.size.z));
+  resize();
+  for (const viewer of ready) viewer.controls.enabled = true;
+  for (const id of ['front-view', 'angled-view', 'texture-toggle', 'height-scale']) byId(id).disabled = false;
+}
+
+function setModelLabel(viewer, variant) {
+  byId(`${viewer.prefix}-title`).textContent = variant.label;
+  if (viewer.selector) {
+    viewer.selector.value = variant.id;
+    byId(`${viewer.prefix}-description`).textContent = typeof variant.title === 'string' ? variant.title
+      : variant.id === 'original' ? '原流程整图深度，作为参考。' : '保留整图主体起伏，仅将背景铺平。';
   }
-  const model = gltf.scene;
-  const bounds = new THREE.Box3().setFromObject(model);
-  if (bounds.isEmpty()) {
-    disposeModel(model);
-    throw new Error('模型没有可显示的几何表面。');
+  viewer.renderer.domElement.setAttribute('aria-label', `${variant.label}模型；方向键旋转，加减键缩放，正面和斜侧按钮重置视角`);
+}
+
+async function loadModel(viewer, variant) {
+  viewer.request?.abort();
+  const request = new AbortController();
+  const generation = ++viewer.generation;
+  viewer.request = request;
+  viewer.loading = true;
+  viewer.error = false;
+  viewer.container.setAttribute('aria-busy', 'true');
+  viewer.status.classList.toggle('has-model', Boolean(viewer.model));
+  setModelLabel(viewer, variant);
+  const retained = viewer.variant ? `；暂时显示“${viewer.variant.label}”` : '';
+  showStatus(viewer.status, `正在载入“${variant.label}”${retained}…`);
+  updatePageStatus();
+  let model = null;
+  try {
+    const url = localUrl(variant.model, variant.label);
+    const response = await getFile(url, request.signal);
+    const data = await response.arrayBuffer();
+    if (disposed || generation !== viewer.generation) return;
+    const gltf = await new GLTFLoader().parseAsync(data, new URL('./', url).href);
+    model = gltf.scene;
+    if (disposed || generation !== viewer.generation) {
+      disposeModel(model);
+      return;
+    }
+    const bounds = new THREE.Box3().setFromObject(model);
+    if (bounds.isEmpty()) throw new Error('模型没有可显示的几何表面。');
+    const center = bounds.getCenter(new THREE.Vector3());
+    const size = bounds.getSize(new THREE.Vector3());
+    model.position.x -= center.x;
+    model.position.y -= center.y;
+    model.scale.z = Number(byId('height-scale').value);
+    const textured = byId('texture-toggle').checked;
+    model.traverse((object) => {
+      if (!object.isMesh) return;
+      object.userData.originalMaterial = object.material;
+      if (!textured) object.material = viewer.neutral;
+    });
+    const previousModel = viewer.model;
+    viewer.scene.add(model);
+    viewer.model = model;
+    viewer.variant = variant;
+    viewer.size = size;
+    if (previousModel) {
+      viewer.scene.remove(previousModel);
+      disposeModel(previousModel, [], [viewer.neutral]);
+    }
+    setModelLabel(viewer, variant);
+    viewer.status.hidden = true;
+    fitModels();
+  } catch (error) {
+    if (model && model !== viewer.model) disposeModel(model, [], [viewer.neutral]);
+    if (disposed || generation !== viewer.generation) return;
+    viewer.error = true;
+    if (viewer.variant) setModelLabel(viewer, viewer.variant);
+    const retainedMessage = viewer.variant ? `仍显示“${viewer.variant.label}”。` : '';
+    showStatus(viewer.status, `“${variant.label}”加载失败。${retainedMessage}${error.message || '请检查模型文件。'}`, true);
+  } finally {
+    if (!disposed && generation === viewer.generation) {
+      viewer.request = null;
+      viewer.loading = false;
+      viewer.container.setAttribute('aria-busy', 'false');
+      updatePageStatus();
+      requestRender();
+    }
   }
-  const center = bounds.getCenter(new THREE.Vector3());
-  const size = bounds.getSize(new THREE.Vector3());
-  model.position.x -= center.x;
-  model.position.y -= center.y;
-  model.traverse((object) => {
-    if (!object.isMesh) return;
-    object.userData.originalMaterial = object.material;
-    object.material = viewer.neutral;
-  });
-  viewer.model = model;
-  viewer.size = size;
-  viewer.scene.add(model);
-  viewer.status.hidden = true;
-  requestRender();
 }
 
 function loadImage(imageId, statusId, value, label) {
@@ -259,6 +334,64 @@ function loadImage(imageId, statusId, value, label) {
 
 function metric(value, digits = 4) {
   return typeof value === 'number' && Number.isFinite(value) ? String(Number(value.toFixed(digits))) : '—';
+}
+
+function configureQuality(report) {
+  if (!Array.isArray(report.variants) || !report.variants.length) return null;
+  const variants = ['original', 'average', 'fine', 'finer', 'maximal']
+    .map((id) => report.variants.find((variant) => variant?.id === id))
+    .filter(Boolean);
+  if (!variants.length || variants.some((variant) => typeof variant.label !== 'string' || typeof variant.model !== 'string')) {
+    throw new Error('档位报告缺少有效的名称或模型路径。');
+  }
+  byId('experiment-intro').textContent = '保留整图深度推理得到的主体起伏，只将背景铺平。左右可独立选择原流程或四档推理结果，用相同视角对照；关闭照片纹理，可以直接检查表面凹凸。';
+  byId('overlay-title').textContent = '保留起伏的区域';
+  byId('overlay-description').textContent = '色块已合为保留起伏区域，颜色不代表凹凸；区域内部保留整图深度，外部背景铺平。';
+  byId('quality-section').hidden = false;
+  byId('legacy-metrics').hidden = true;
+  byId('details-title').textContent = '保留区域的来源';
+  for (const variant of variants) {
+    const row = document.createElement('tr');
+    const label = document.createElement('th');
+    label.scope = 'row';
+    label.textContent = variant.label;
+    row.append(label);
+    const elapsed = typeof variant.elapsed_seconds === 'number' && Number.isFinite(variant.elapsed_seconds)
+      ? `${metric(variant.elapsed_seconds, 1)} 秒` : '—';
+    const errorValue = (value) => typeof value === 'number' && Number.isFinite(value)
+      ? value === 0 ? '0' : value.toPrecision(3) : '—';
+    for (const value of [
+      metric(variant.depth_level, 0),
+      typeof variant.input_side === 'number' ? `${metric(variant.input_side, 0)} px` : '—',
+      metric(variant.inference_passes, 0),
+      elapsed,
+      errorValue(variant.background_deviation),
+      errorValue(variant.foreground_error),
+    ]) {
+      const cell = document.createElement('td');
+      cell.textContent = value;
+      row.append(cell);
+    }
+    byId('quality-rows').append(row);
+  }
+  return variants;
+}
+
+function configureSelector(viewer, variants, initial) {
+  viewer.selector = byId(`${viewer.prefix}-model-select`);
+  for (const variant of variants) {
+    const option = document.createElement('option');
+    option.value = variant.id;
+    option.textContent = variant.label;
+    viewer.selector.append(option);
+  }
+  viewer.selector.value = initial.id;
+  byId(`${viewer.prefix}-choice`).hidden = false;
+  byId(`${viewer.prefix}-tag`).textContent = viewer.prefix === 'baseline' ? '左侧' : '右侧';
+  viewer.selector.addEventListener('change', () => {
+    const selected = variants.find((variant) => variant.id === viewer.selector.value);
+    if (selected) void loadModel(viewer, selected);
+  }, { signal: lifecycle.signal });
 }
 
 function showReport(report) {
@@ -287,7 +420,9 @@ function showReport(report) {
     const className = originalName.replace(/-\d+$/, '');
     const name = subjectNames.has(className) ? `${subjectNames.get(className)}（${originalName}）` : originalName;
     const source = subject.source === 'manual-grabcut' ? '人工框选'
-      : subject.source === 'manual-mask' ? '人工蒙版' : '自动分割';
+      : subject.source === 'manual-mask' ? '人工蒙版'
+      : subject.source === 'semantic-union-with-manual-correction' ? '自动合并＋已指定设备校正'
+      : subject.source === 'semantic-union' ? '自动前景合并' : '自动分割';
     const score = source === '自动分割' && typeof subject.score === 'number' && Number.isFinite(subject.score)
       ? ` · 类别置信度 ${Math.round(subject.score * 100)}%` : '';
     item.textContent = `${name} · ${source}${score}`;
@@ -312,6 +447,8 @@ function cleanup() {
   resizeObserver.disconnect();
   if (renderFrame !== null) cancelAnimationFrame(renderFrame);
   for (const viewer of viewers) {
+    viewer.request?.abort();
+    viewer.generation += 1;
     viewer.controls.removeEventListener('change', viewer.onChange);
     viewer.controls.dispose();
     disposeModel(viewer.scene, [viewer.neutral]);
@@ -347,32 +484,28 @@ async function start() {
     const report = await response.json();
     if (disposed) return;
     showReport(report);
+    const variants = configureQuality(report);
+    const left = variants ? variants.find((variant) => variant.id === 'original') ?? variants[0]
+      : { id: 'baseline', label: '整张图估计深度', model: report.baseline_model };
+    const right = variants ? variants.find((variant) => variant.id === 'fine') ?? variants[variants.length - 1]
+      : { id: 'subject', label: '主体凸起，背景铺平', model: report.model };
     const specifications = [
-      ['baseline-viewport', 'baseline-status', '原流程模型', report.baseline_model, 'baseline_model'],
-      ['subject-viewport', 'subject-status', '主体分层模型', report.model, 'model'],
+      ['baseline', left],
+      ['subject', right],
     ];
-    const results = await Promise.allSettled(specifications.map(async ([container, status, label, path, field]) => {
+    const pending = [];
+    for (const [prefix, initial] of specifications) {
       try {
-        const viewer = createViewer(container, status, label);
-        await loadModel(viewer, localUrl(path, field));
+        const viewer = createViewer(prefix, initial.label);
+        if (variants) configureSelector(viewer, variants, initial);
+        pending.push([viewer, initial]);
       } catch (error) {
-        if (!disposed) showStatus(byId(status), error.message || '模型加载失败。', true);
-        throw error;
+        showStatus(byId(`${prefix}-status`), error.message || '三维查看器初始化失败。', true);
       }
-    }));
-    if (disposed) return;
-    const ready = viewers.filter((viewer) => viewer.model);
-    if (ready.length) {
-      sceneWidth = Math.max(...ready.map((viewer) => viewer.size.x));
-      sceneHeight = Math.max(...ready.map((viewer) => viewer.size.y));
-      sceneDepth = Math.max(...ready.map((viewer) => viewer.size.z));
-      resize();
-      setView(true);
-      for (const viewer of ready) viewer.controls.enabled = true;
-      for (const id of ['front-view', 'angled-view', 'texture-toggle', 'height-scale']) byId(id).disabled = false;
     }
-    const failed = results.filter((result) => result.status === 'rejected').length;
-    showStatus(pageStatus, failed ? `已载入 ${ready.length} / 2 个模型；请查看对应面板中的错误。` : '两个模型已载入 · 两侧使用相同视角与高度倍率。', failed > 0);
+    setView(true);
+    await Promise.allSettled(pending.map(([viewer, initial]) => loadModel(viewer, initial)));
+    updatePageStatus();
   } catch (error) {
     if (disposed) return;
     showStatus(pageStatus, `无法读取实验结果：${error.message} 请通过本地 HTTP 服务打开结果目录。`, true);

@@ -26,7 +26,7 @@
       .intro { max-width: 860px; font-size: 15px; }
       .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 16px 28px; margin: 28px 0 12px; padding: 16px; background: white; border: 1px solid var(--border); border-radius: 12px; }
       .view-buttons, .toggle, .height-control { display: flex; align-items: center; gap: 10px; }
-      button, input { font: inherit; }
+      button, input, select { font: inherit; }
       button { min-height: 44px; padding: 9px 17px; border: 1px solid #aab5ad; border-radius: 8px; background: white; color: #263e30; cursor: pointer; transition: background-color 150ms; }
       button:hover { background: #edf3ed; }
       button[aria-pressed="true"] { background: var(--accent); color: white; border-color: var(--accent); }
@@ -45,9 +45,13 @@
       .tag { flex: 0 0 auto; color: var(--muted); font-size: 12px; font-weight: 700; }
       .after .tag { color: var(--accent); }
       .card-description { padding: 0 20px 16px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+      .model-choice { display: flex; align-items: center; gap: 12px; padding: 0 20px 16px; font-size: 14px; }
+      .model-choice label { flex: 0 0 auto; }
+      select { flex: 1; min-width: 0; min-height: 44px; padding: 8px 12px; border: 1px solid #aab5ad; border-radius: 8px; background: white; color: #263e30; cursor: pointer; }
       .viewport { position: relative; width: 100%; height: clamp(280px, 33vw, 440px); background: #e9ede8; }
       canvas { display: block; width: 100%; height: 100%; touch-action: none; }
       .viewport .status { position: absolute; inset: 0; display: grid; place-content: center; padding: 28px; text-align: center; pointer-events: none; }
+      .viewport .status.has-model { inset: auto 12px 12px; display: block; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: #fffffff2; font-size: 13px; }
       .status.error { color: #a52a20; }
       [hidden] { display: none !important; }
       .source-grid { margin-top: 24px; }
@@ -57,6 +61,12 @@
       figcaption strong { display: block; color: #202522; font-size: 15px; margin-bottom: 3px; }
       .image-status { position: absolute; inset: 0; display: grid; place-content: center; padding: 20px; text-align: center; }
       .details { margin-top: 28px; }
+      .quality-table-wrap { margin-top: 12px; overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; background: white; }
+      table { width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; font-variant-numeric: tabular-nums; }
+      th, td { padding: 12px 16px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+      thead { background: #eef2ec; color: #36463c; }
+      tbody tr:last-child th, tbody tr:last-child td { border-bottom: 0; }
+      .quality-note { margin-top: 8px; }
       .metrics { display: flex; flex-wrap: wrap; gap: 20px 40px; margin: 16px 0 22px; }
       .metric-value { font-size: 24px; font-weight: 650; font-variant-numeric: tabular-nums; }
       .metric-label { margin-top: 3px; font-size: 13px; }
@@ -84,7 +94,7 @@
       <header>
         <p class="eyebrow">MEMOVERSE / LOCAL EXPERIMENT</p>
         <h1 id="title">主体浮雕，对照看层次</h1>
-        <p class="intro">用同一张照片比较整图深度与主体分层。背景保持平面，自动分割或人工指定的主体区域单独估计深度后嵌回；关闭照片纹理，可以直接检查表面的凹凸。</p>
+        <p id="experiment-intro" class="intro">用同一张照片比较整图深度与主体分层。背景保持平面，自动分割或人工指定的主体区域单独估计深度后嵌回；关闭照片纹理，可以直接检查表面的凹凸。</p>
       </header>
       <div class="toolbar" aria-label="三维对照设置">
         <div class="view-buttons" role="group" aria-label="观察角度">
@@ -102,13 +112,15 @@
       <p id="page-status" class="status" role="status" aria-live="polite">正在读取本地对照结果…</p>
       <section class="grid" aria-label="模型对照">
         <article class="card">
-          <div class="card-heading"><span class="tag">原流程</span><h2>整张图估计深度</h2></div>
-          <p class="card-description">前景与背景一起生成起伏。</p>
+          <div class="card-heading"><span id="baseline-tag" class="tag">原流程</span><h2 id="baseline-title">整张图估计深度</h2></div>
+          <p id="baseline-description" class="card-description">前景与背景一起生成起伏。</p>
+          <div id="baseline-choice" class="model-choice" hidden><label for="baseline-model-select">左侧模型</label><select id="baseline-model-select" aria-describedby="baseline-description"></select></div>
           <div id="baseline-viewport" class="viewport"><p id="baseline-status" class="status" role="status">正在准备旧模型…</p></div>
         </article>
         <article class="card after">
-          <div class="card-heading"><span class="tag">实验方案</span><h2>主体凸起，背景铺平</h2></div>
-          <p class="card-description">按主体掩码组合局部浮雕。</p>
+          <div class="card-heading"><span id="subject-tag" class="tag">实验方案</span><h2 id="subject-title">主体凸起，背景铺平</h2></div>
+          <p id="subject-description" class="card-description">按主体掩码组合局部浮雕。</p>
+          <div id="subject-choice" class="model-choice" hidden><label for="subject-model-select">右侧模型</label><select id="subject-model-select" aria-describedby="subject-description"></select></div>
           <div id="subject-viewport" class="viewport"><p id="subject-status" class="status" role="status">正在准备新模型…</p></div>
         </article>
       </section>
@@ -125,12 +137,23 @@
             <img id="overlay-image" class="source-image" alt="照片上叠加的主体区域掩码" hidden />
             <p id="overlay-status" class="status image-status">正在读取主体掩码…</p>
           </div>
-          <figcaption><strong>主体区域范围</strong>彩色区域用于生成凸起，其余区域作为平面背景；各区域来源见下方标签。</figcaption>
+          <figcaption><strong id="overlay-title">主体区域范围</strong><span id="overlay-description">彩色区域用于生成凸起，其余区域作为平面背景；各区域来源见下方标签。</span></figcaption>
         </figure>
+      </section>
+      <section id="quality-section" class="details" aria-labelledby="quality-title" hidden>
+        <h2 id="quality-title">推理档位与实测耗时</h2>
+        <p class="hint quality-note">推理精度不等于凸起高度。参数会影响时间，更高档位不保证视觉效果更好；高度倍率仅用于观察。</p>
+        <div class="quality-table-wrap" tabindex="0" role="region" aria-label="档位参数表，可横向滚动">
+          <table>
+            <thead><tr><th scope="col">档位</th><th scope="col">深度等级</th><th scope="col">输入长边</th><th scope="col">推理次数</th><th scope="col">实测耗时</th><th scope="col">背景偏离</th><th scope="col">主体保持误差</th></tr></thead>
+            <tbody id="quality-rows"></tbody>
+          </table>
+        </div>
+        <p class="hint quality-note">耗时包含本档加载、推理、融合与导出；“—”表示未记录。背景偏离相对于固定平面；主体保持误差相对于本档整图深度的内部区域，不是相对于平均档，也不表示识别准确率。</p>
       </section>
       <section class="details" aria-labelledby="details-title">
         <h2 id="details-title">本次生成</h2>
-        <div class="metrics">
+        <div id="legacy-metrics" class="metrics">
           <div><p id="subject-count" class="metric-value">—</p><p class="metric-label">主体区域</p></div>
           <div><p id="depth-calls" class="metric-value">—</p><p class="metric-label">主体深度推理次数</p></div>
           <div><p id="background-height" class="metric-value">—</p><p class="metric-label">背景最大绝对高度</p></div>

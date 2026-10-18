@@ -253,3 +253,153 @@ def test_empty_manual_mask_is_rejected(tmp_path):
     Image.fromarray(np.zeros((10, 12), np.uint8)).save(path)
     with pytest.raises(ValueError, match="no foreground"):
         subject.load_mask(path, (12, 10))
+
+
+def test_foreground_unites_classes_before_component_area_filter(monkeypatch):
+    image = np.zeros((100, 100, 3), np.uint8)
+    semantic = np.zeros((100, 100), np.int32)
+    semantic[20:30, 20:35] = 1
+    semantic[20:30, 35:50] = 2
+    inject_semantics(monkeypatch, semantic)
+    mask, diagnostics = subject.automatic_foreground(image, Path("unused"), refine=False)
+    # Each semantic part is only 1.5%; their joined 3% component survives 2%.
+    assert np.array_equal(mask, semantic > 0)
+    assert diagnostics["threshold"]["pixels"] == 200
+    assert len(diagnostics["components_before"]) == len(diagnostics["components_after"]) == 1
+    assert diagnostics["raw_union_pixels"] == diagnostics["kept_pixels"] == 300
+
+
+def test_foreground_removes_isolated_small_island_without_expanding_into_floor(monkeypatch):
+    image = np.zeros((100, 100, 3), np.uint8)
+    semantic = np.zeros((100, 100), np.int32)
+    semantic[10:40, 10:40] = 1
+    semantic[70:75, 70:75] = 2
+    inject_semantics(monkeypatch, semantic)
+    mask, diagnostics = subject.automatic_foreground(image, Path("unused"), refine=False)
+    assert mask.sum() == 900
+    assert not mask[70:75, 70:75].any()
+    assert not mask[semantic == 0].any()
+    assert diagnostics["removed_regions"][0]["pixels"] == 25
+    assert diagnostics["removed_regions"][0]["manual_exemption"] is False
+
+
+def test_foreground_preserves_tiny_manual_subject_even_without_automatic_subject(monkeypatch):
+    image = np.zeros((100, 100, 3), np.uint8)
+    inject_semantics(monkeypatch, np.zeros((100, 100), np.int32))
+    manual = np.zeros((100, 100), bool)
+    manual[50, 50] = True
+    original = manual.copy()
+    monkeypatch.setattr(subject, "_refine_mask", lambda *args: pytest.fail("manual-only pixels need no refinement"))
+    mask, diagnostics = subject.automatic_foreground(image, Path("unused"), preserve_mask=manual)
+    assert np.array_equal(mask, original)
+    assert np.array_equal(manual, original)
+    assert diagnostics["components_after"][0]["manual_exemption"] is True
+    assert diagnostics["manual"]["retained_pixels"] == 1
+    assert diagnostics["refinement"]["method"] == "manual-only-no-automatic-refinement"
+
+
+def test_foreground_refines_union_once_without_internal_semantic_seam(monkeypatch):
+    image = np.full((80, 100, 3), 10, np.uint8)
+    semantic = np.zeros((80, 100), np.int32)
+    semantic[15:65, 15:50] = 1
+    semantic[15:65, 50:85] = 2
+    image[semantic > 0] = 240
+    inject_semantics(monkeypatch, semantic)
+    original_refine = subject._refine_mask
+    calls = []
+
+    def tracked_refine(rgb, mask):
+        calls.append(mask.copy())
+        return original_refine(rgb, mask)
+
+    monkeypatch.setattr(subject, "_refine_mask", tracked_refine)
+    mask, diagnostics = subject.automatic_foreground(image, Path("unused"))
+    assert len(calls) == 1
+    assert np.array_equal(calls[0], semantic > 0)
+    assert mask[20:60, 48:52].all()
+    assert diagnostics["refinement"]["method"] == "graphcut-inner-boundary"
+
+
+def test_foreground_does_not_fill_floor_holes_or_raise_wall(monkeypatch):
+    image = np.zeros((80, 100, 3), np.uint8)
+    semantic = np.zeros((80, 100), np.int32)
+    semantic[15:65, 15:85] = 1
+    semantic[35:40, 40:45] = 0
+    semantic[:8] = 2
+    image[semantic == 1] = 240
+    inject_semantics(monkeypatch, semantic, labels={0: "floor", 1: "bed", 2: "wall"})
+    mask, diagnostics = subject.automatic_foreground(image, Path("unused"))
+    assert not mask[35:40, 40:45].any()
+    assert not mask[semantic != 1].any()
+    assert diagnostics["hole_filling"] == {"enabled": False, "added_pixels": 0}
+
+
+def test_foreground_restores_manual_pixels_after_one_refinement(monkeypatch):
+    image = np.zeros((100, 100, 3), np.uint8)
+    semantic = np.zeros((100, 100), np.int32)
+    semantic[10:40, 10:40] = 1
+    manual = np.zeros((100, 100), bool)
+    manual[70:72, 70:72] = True
+    inject_semantics(monkeypatch, semantic)
+    calls = []
+
+    def remove_manual(rgb, mask):
+        calls.append(1)
+        return mask & ~manual, {"method": "test-refinement", "removed_pixels": 4, "added_pixels": 0}
+
+    monkeypatch.setattr(subject, "_refine_mask", remove_manual)
+    mask, diagnostics = subject.automatic_foreground(image, Path("unused"), preserve_mask=manual)
+    assert len(calls) == 1
+    assert mask[manual].all()
+    assert diagnostics["manual"]["retained_pixels"] == 4
+    assert len(diagnostics["components_after"]) == 2
+
+
+def test_foreground_rechecks_small_components_severed_by_refinement(monkeypatch):
+    image = np.zeros((100, 100, 3), np.uint8)
+    semantic = np.zeros((100, 100), np.int32)
+    semantic[10:40, 10:40] = 1
+    semantic[35:45, 35:45] = 1
+    inject_semantics(monkeypatch, semantic)
+
+    def sever_small_piece(rgb, mask):
+        refined = mask.copy()
+        refined[35:40, 35:40] = False
+        refined[35:40, 40:45] = False
+        refined[39, 34:45] = False
+        return refined, {"method": "test-refinement", "removed_pixels": 51, "added_pixels": 0}
+
+    monkeypatch.setattr(subject, "_refine_mask", sever_small_piece)
+    mask, diagnostics = subject.automatic_foreground(image, Path("unused"))
+    assert not mask[40:45, 35:45].any()
+    assert any(item["stage"] == "after-refinement" for item in diagnostics["removed_regions"])
+
+
+def test_foreground_no_subject_is_explicit_with_json_diagnostics(monkeypatch):
+    import json
+
+    image = np.zeros((40, 40, 3), np.uint8)
+    inject_semantics(monkeypatch, np.zeros((40, 40), np.int32))
+    with pytest.raises(subject.NoSubjectsError) as error:
+        subject.automatic_foreground(image, Path("unused"))
+    diagnostics = error.value.diagnostics
+    assert diagnostics["raw_union_pixels"] == diagnostics["kept_pixels"] == 0
+    json.dumps({key: value for key, value in diagnostics.items() if key != "semantic_map"})
+
+
+@pytest.mark.parametrize("arguments", [
+    {"min_component_fraction": 0}, {"min_component_fraction": 1.1},
+    {"min_component_fraction": float("nan")}, {"min_component_fraction": True},
+    {"refine": 1}, {"preserve_mask": np.zeros((4, 4), bool)},
+    {"preserve_mask": np.zeros((40, 40), np.uint8)},
+])
+def test_foreground_bad_options_fail_before_inference(monkeypatch, arguments):
+    monkeypatch.setattr(subject, "_infer_semantics", lambda *args: pytest.fail("model must not load"))
+    with pytest.raises(ValueError):
+        subject.automatic_foreground(np.zeros((40, 40, 3), np.uint8), Path("unused"), **arguments)
+
+
+def test_foreground_empty_image_fails_before_inference(monkeypatch):
+    monkeypatch.setattr(subject, "_infer_semantics", lambda *args: pytest.fail("model must not load"))
+    with pytest.raises(ValueError):
+        subject.automatic_foreground(np.zeros((0, 40, 3), np.uint8), Path("unused"))

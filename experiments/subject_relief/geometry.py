@@ -8,6 +8,88 @@ from __future__ import annotations
 import numpy as np
 
 
+def whole_image_relief(depth, valid, foreground, *, amplitude=0.32, transition_pixels=2.0):
+    """Keep globally normalized scene geometry, flattening only the background.
+
+    Heights are artistic offsets from the original far plane, not metric depth.
+    The foreground union only controls coverage; it never changes normalization.
+    """
+    from scipy.ndimage import distance_transform_edt
+
+    depth = np.asarray(depth, dtype=np.float32)
+    valid = np.asarray(valid, dtype=bool)
+    foreground = np.asarray(foreground)
+    if (depth.ndim != 2 or not depth.size or valid.shape != depth.shape
+            or foreground.shape != depth.shape or foreground.dtype != bool):
+        raise ValueError('depth, valid and boolean foreground must share a nonempty 2D shape')
+    if (not np.isfinite([amplitude, transition_pixels]).all()
+            or amplitude <= 0 or transition_pixels < 0):
+        raise ValueError('amplitude must be positive and transition_pixels nonnegative and finite')
+    selected = valid & np.isfinite(depth) & (depth > 0)
+    if selected.sum() < 16:
+        raise ValueError('whole-image relief requires at least sixteen valid depth samples')
+    inverse = np.zeros_like(depth)
+    with np.errstate(over='ignore'):
+        inverse[selected] = 1.0 / depth[selected]
+    if not np.isfinite(inverse[selected]).all():
+        raise ValueError('whole-image inverse depth exceeds the supported numeric range')
+    low, high = np.percentile(inverse[selected], [2, 98])
+    if high - low < 1e-8:
+        raise ValueError('whole-image depth is effectively flat; no relief range is available')
+    original = np.clip((inverse - low) / (high - low), 0, 1) * amplitude
+    original[~selected] = 0
+    distance = distance_transform_edt(np.pad(foreground, 1))[1:-1, 1:-1]
+    weights = np.ones(depth.shape) if transition_pixels == 0 else np.minimum(distance / transition_pixels, 1)
+    heights = np.where(foreground & selected, original * weights, 0)
+    stable = foreground & selected & (weights == 1)
+    transition = foreground & selected & (weights < 1)
+    return heights, {
+        'normalization': 'whole-image valid inverse depth, percentiles 2 and 98',
+        'inverse_depth_percentiles': [float(low), float(high)],
+        'original_height_range': [float(original[selected].min()), float(original[selected].max())],
+        'amplitude': float(amplitude), 'transition_pixels': float(transition_pixels),
+        'transition_count': int(transition.sum()), 'stable_foreground_count': int(stable.sum()),
+        'stable_foreground_max_error': float(np.abs(heights[stable] - original[stable]).max()) if stable.any() else 0.0,
+        'background_max_abs_height': float(np.abs(heights[~foreground]).max()) if (~foreground).any() else 0.0,
+        'valid_fraction': float(selected.mean()), 'invalid_foreground_count': int((foreground & ~selected).sum()),
+    }
+
+
+def export_heightfield(heights, texture, target, *, z_offset=0):
+    """Export one continuous grid with the production worker's XY/UV topology."""
+    import trimesh
+
+    heights = np.asarray(heights)
+    if (heights.ndim != 2 or min(heights.shape, default=0) < 2
+            or not np.isfinite(heights).all() or np.any(heights < 0)
+            or not np.isfinite(z_offset)):
+        raise ValueError('heightfield must be finite, nonnegative and at least 2 by 2; offset must be finite')
+    if texture.mode != 'RGBA':
+        raise ValueError('heightfield texture must be RGBA')
+    height, width = heights.shape
+    aspect = width / height
+    x, y = np.meshgrid(np.linspace(-aspect, aspect, width), np.linspace(1, -1, height))
+    vertices = np.stack((x, y, heights + z_offset), axis=-1).reshape(-1, 3)
+    ids = np.arange(width * height).reshape(height, width)
+    a, b, c, d = ids[:-1, :-1], ids[:-1, 1:], ids[1:, :-1], ids[1:, 1:]
+    faces = np.concatenate((np.stack((a, c, b), -1).reshape(-1, 3), np.stack((b, c, d), -1).reshape(-1, 3)))
+    uv = np.stack(((x / aspect + 1) / 2, (y + 1) / 2), -1).reshape(-1, 2)
+    material = trimesh.visual.material.PBRMaterial(
+        baseColorTexture=texture, metallicFactor=0.0, roughnessFactor=1.0,
+        doubleSided=True, alphaMode='BLEND' if texture.getextrema()[3][0] < 255 else 'OPAQUE',
+    )
+    mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False,
+                           visual=trimesh.visual.texture.TextureVisuals(uv=uv, material=material))
+    mesh.export(str(target), file_type='glb', include_normals=True)
+    return {
+        'topology': 'single continuous regular grid, production XY/UV layout',
+        'vertices': len(vertices), 'triangles': len(faces), 'aspect': aspect,
+        'z_offset': float(z_offset), 'height_range': [float(heights.min()), float(heights.max())],
+        'z_range': [float(heights.min() + z_offset), float(heights.max() + z_offset)],
+        'coordinates': {'front': '+Z', 'up': '+Y', 'uv': 'bottom-left origin'},
+    }
+
+
 def subject_heights(depth, valid, mask, *, lift=0.04, relief=0.18):
     """Normalize inverse depth using this subject only; keep it above z=0.
 

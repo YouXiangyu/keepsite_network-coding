@@ -367,6 +367,143 @@ def automatic_regions(
     return regions, diagnostics
 
 
+def automatic_foreground(
+    image_rgb: np.ndarray,
+    model_dir: Path,
+    *,
+    min_component_fraction: float = 0.02,
+    preserve_mask: np.ndarray | None = None,
+    refine: bool = True,
+) -> tuple[np.ndarray, dict]:
+    """Make one foreground mask for a shared, whole-image depth prediction.
+
+    Semantic classes are united before component filtering, so a cushion and
+    the adjoining sofa can survive together. Manual pixels are exempt from
+    area filtering and restored after refinement. No holes are filled, and no
+    automatic operation adds pixels outside the original object-class union.
+    """
+    _validate_image(image_rgb)
+    if (
+        isinstance(min_component_fraction, bool)
+        or not isinstance(min_component_fraction, (int, float))
+        or not math.isfinite(min_component_fraction)
+        or not 0 < min_component_fraction <= 1
+    ):
+        raise ValueError("min_component_fraction must be finite and in (0, 1].")
+    if not isinstance(refine, bool):
+        raise ValueError("refine must be a boolean.")
+    shape = image_rgb.shape[:2]
+    if preserve_mask is not None and (
+        not isinstance(preserve_mask, np.ndarray)
+        or preserve_mask.shape != shape
+        or preserve_mask.dtype != bool
+    ):
+        raise ValueError("preserve_mask must be a boolean array matching the image height and width.")
+    manual = np.zeros(shape, dtype=bool) if preserve_mask is None else preserve_mask.copy()
+
+    semantic_map, confidence_map, labels_by_id, metadata = _infer_semantics(image_rgb, Path(model_dir))
+    _validate_prediction(semantic_map, confidence_map, labels_by_id, shape)
+    selected_ids = {
+        class_id for class_id, label in labels_by_id.items()
+        if _aliases(label) & DEFAULT_SUBJECT_LABELS and not _aliases(label) & PROTECTED_BACKGROUND_LABELS
+    }
+    semantic_union = np.isin(semantic_map, list(selected_ids))
+    raw_union = semantic_union | manual
+    minimum_pixels = max(1, math.ceil(raw_union.size * min_component_fraction))
+    diagnostics = {
+        "semantic_map": semantic_map,
+        "model": metadata,
+        "threshold": {
+            "fraction": float(min_component_fraction),
+            "pixels": minimum_pixels,
+            "image_pixels": raw_union.size,
+            "connectivity": 8,
+        },
+        "semantic_union_pixels": int(semantic_union.sum()),
+        "raw_union_pixels": int(raw_union.sum()),
+        "kept_pixels_before_refinement": 0,
+        "kept_pixels": 0,
+        "detected_classes": [],
+        "components_before": [],
+        "components_after": [],
+        "removed_regions": [],
+        "manual": {
+            "supplied": preserve_mask is not None,
+            "pixels": int(manual.sum()),
+            "added_to_semantic_union_pixels": int((manual & ~semantic_union).sum()),
+            "retained_pixels": 0,
+        },
+        "hole_filling": {"enabled": False, "added_pixels": 0},
+        "refinement": {"method": "disabled-explicitly", "added_pixels": 0, "removed_pixels": 0},
+        "limitations": [
+            "The foreground union is not an instance count; touching furniture can share one component.",
+            "The area threshold measures image pixels, not physical object size; small real objects may be removed.",
+            "A small misclassified fragment attached to a large component can survive area filtering.",
+            "Holes are not filled; excluded floor and wall pixels remain background unless explicitly preserved.",
+            "Semantic classes can be incorrect or missing; ADE20K has no dedicated cup or air-conditioner class.",
+            "Use this single mask with a shared depth prediction; do not normalize each semantic class independently.",
+        ],
+    }
+    class_ids, pixel_counts = np.unique(semantic_map, return_counts=True)
+    for class_id, pixels in zip(class_ids.tolist(), pixel_counts.tolist()):
+        diagnostics["detected_classes"].append({
+            "id": class_id, "name": _canonical_label(labels_by_id[class_id]),
+            "pixels": pixels, "selected": class_id in selected_ids,
+        })
+
+    def filter_components(mask, stage):
+        count, component_map, stats, _ = cv2.connectedComponentsWithStats(
+            mask.astype(np.uint8), connectivity=8
+        )
+        kept = np.zeros(shape, dtype=bool)
+        records = []
+        for component_id in range(1, count):
+            x, y, width, height, pixels = stats[component_id].tolist()
+            component = component_map[y:y + height, x:x + width] == component_id
+            manual_pixels = int((component & manual[y:y + height, x:x + width]).sum())
+            keep = pixels >= minimum_pixels or manual_pixels > 0
+            record = {
+                "component": component_id, "pixels": pixels,
+                "fraction": pixels / raw_union.size,
+                "box": [x, y, x + width, y + height],
+                "manual_pixels": manual_pixels,
+                "manual_exemption": bool(manual_pixels and pixels < minimum_pixels),
+                "kept": keep,
+            }
+            records.append(record)
+            if keep:
+                kept[y:y + height, x:x + width] |= component
+            else:
+                diagnostics["removed_regions"].append({
+                    **record, "stage": stage, "reason": "below-minimum-component-area",
+                })
+        return kept, records
+
+    kept, diagnostics["components_before"] = filter_components(raw_union, "before-refinement")
+    diagnostics["kept_pixels_before_refinement"] = int(kept.sum())
+    if not kept.any():
+        raise NoSubjectsError(
+            "No foreground components meet the area threshold; inspect diagnostics, "
+            "lower the threshold explicitly, or preserve a manual mask.", diagnostics
+        )
+    if refine and np.any(kept & ~manual):
+        kept, diagnostics["refinement"] = _refine_mask(image_rgb, kept)
+    elif refine:
+        diagnostics["refinement"]["method"] = "manual-only-no-automatic-refinement"
+    kept |= manual
+    # Refinement can sever a thin connection; recheck the final component sizes.
+    kept, final_records = filter_components(kept, "after-refinement")
+    diagnostics["components_after"] = [record for record in final_records if record["kept"]]
+    diagnostics["kept_pixels"] = int(kept.sum())
+    diagnostics["manual"]["retained_pixels"] = int((kept & manual).sum())
+    if not kept.any():
+        raise NoSubjectsError(
+            "No foreground components meet the area threshold after boundary refinement; "
+            "inspect diagnostics or preserve a manual mask.", diagnostics
+        )
+    return kept, diagnostics
+
+
 def grabcut_region(image_rgb: np.ndarray, box: tuple[int, int, int, int], name: str) -> Region:
     """Segment a manual rectangle, in half-open pixels (x0, y0, x1, y1).
 
