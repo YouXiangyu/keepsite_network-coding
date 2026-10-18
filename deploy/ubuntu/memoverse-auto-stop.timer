@@ -1,0 +1,10 @@
+[Unit]
+Description=Stop the MemoVerse EC2 instance one hour after each boot
+
+[Timer]
+OnBootSec=1h
+AccuracySec=1s
+Unit=memoverse-auto-stop.service
+
+[Install]
+WantedBy=timers.target
