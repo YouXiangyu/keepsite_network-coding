@@ -1,8 +1,18 @@
 # EC2 部署验收
 
-验收日期：2026-10-18，北京时间。当前应用运行提交：`80d7681556823f81372b9c6cc5d32450ddc7961f`；后续纯文档提交不改变运行版本。
+验收日期：2026-10-18，北京时间。最近应用运行提交：`80d7681556823f81372b9c6cc5d32450ddc7961f`；主机自动关机配置提交：`902d3ee`，没有重新发布应用。
 
-当前状态：新 Web / 账号版本已正式切换，EC2 `i-0e9ba9bc6f4b1c019` 为 `running`，系统、实例及 EBS 状态检查通过，公网 IPv4 与 DDNS A 记录均为 `13.230.191.15`。应用和 Nginx active，10 GB 根盘配置保持。服务器继续运行供用户醒来验收；下文停机、BasicAuth 和旧运行时记录均为此前阶段历史，不能用于判断当前状态。
+当前状态：用户简单测试后明确要求停机，并追加“每次开机一小时后自动关机”。2026-10-18 12:11 已核验 EC2 `i-0e9ba9bc6f4b1c019` 为 `stopped`、无公网 IP，Cloudflare A 记录数为 0，网站暂不可访问。10 GB 加密根卷仍附着，业务数据、S3 和账号配置保留。下文发布时 active 等表述均为当时验收事实。
+
+## 用户测试后停机与自动关机配置
+
+首次检查没有待处理生成任务或传输进程，以正常 `StopInstances` 停机，确认 stopped、动态 IP `13.230.191.15` 释放、DNS A 为零。随后按用户新增要求短暂维护开机，读取新 IP `18.181.150.249`，严格校验既有 SSH host key，安装已审查的 `memoverse-auto-stop.timer` 和同名 service，之后恢复关机。
+
+定时器启用在 `timers.target`，`OnBootSec=1h`、`AccuracySec=1s`，触发 `/usr/bin/systemctl poweroff`。AWS `InstanceInitiatedShutdownBehavior` 两次读回均为 `stop`。服务器 `systemd-analyze verify` 通过，两个已安装文件的 SHA-256 与提交源码一致；`is-enabled` 返回 enabled、timer active、`TimersMonotonic` 与 `NextElapseUSecMonotonic` 均显示开机后 1h。当时 uptime 76.49 秒，下一次计划为 2026-10-18 13:09:21 北京时间，约剩 58 分钟。
+
+没有等待完整一小时：手动启动同一个关机 service 验证执行链。最终 AWS 状态为 stopped，原因 `Client.InstanceInitiatedShutdown`，维护 IP 已释放；Cloudflare A 再次为零。10 GiB 根卷 `vol-0bb6aa01805d28c75` 仍为加密、in-use。一次性 unit 上传文件已删除，证据保留在 `.cache/server/auto-stop-install.log` 和 `auto-stop-acceptance.json`。
+
+此设置不依赖 Codex 在线或 AWS 临时登录有效。每次系统开机重新计时，普通应用重启、发布和等待验收不暂停或重置倒计时；一小时到点发起正常关机，实例进入 stopped 还需服务退出时间。需要延长时必须事先获得用户明确授权。用户本次只表示简单测试，不能据此补记 Google 本人授权或真实邮件投递已专项验收。
 
 ## Web / 账号 / 私有 S3 发布验收
 
@@ -26,7 +36,7 @@
 
 退出修复经独立复核；认证 45 项、Web 单元 27 项、退出专项 Chromium 3 项、运行契约和生产构建通过。真实 HTTPS 浏览器退出后回到本站匿名首页，浏览器 Back 仍只显示登录页；Cognito `/logout` 实际返回 302 到 `https://keepsite.space/`。最终首页 200、HTTP→HTTPS 301、匿名业务 API 401，Google/email provider 均已配置。证据：`.cache/server/final-account-acceptance.json`、`logout-deploy.log`、`.cache/qa-auth/web-logout-live.png`；实际本人 Google consent 与邮件投递仍保留上述待验收边界。
 
-本轮线上 QA 清理已完成：3 个临时 Cognito 账号已删除并查回为零；短暂停止应用后，精确清理 A/B 业务账号、归属记录及指定测试 asset/model，前后检查 SQLite 完整性、外键、模板引用和其他账号引用，复查为 already-cleaned，随后服务恢复 active。退出后已无匹配 QA 会话。S3 精确删除测试图、模型三文件及 QA 凭据共 5 个版本，相关前缀无版本或删除标记；桶内剩 18 media + 54 models，均为模板。服务器一次性暂存目录及本机 3 个临时凭据/签名 URL 文件已删除。本机 4173/4174/4175/8000/8001 无监听，候选服务已停止；保留当前网站登录页供用户验收。
+本轮线上 QA 清理已完成：3 个临时 Cognito 账号已删除并查回为零；短暂停止应用后，精确清理 A/B 业务账号、归属记录及指定测试 asset/model，前后检查 SQLite 完整性、外键、模板引用和其他账号引用，复查为 already-cleaned，随后服务恢复 active。退出后已无匹配 QA 会话。S3 精确删除测试图、模型三文件及 QA 凭据共 5 个版本，相关前缀无版本或删除标记；桶内剩 18 media + 54 models，均为模板。服务器一次性暂存目录及本机 3 个临时凭据/签名 URL 文件已删除。本机 4173/4174/4175/8000/8001 无监听，候选服务已停止；该阶段曾保留网站登录页供用户验收，本次用户测试后已停机，网站暂不可访问。
 
 历史 22 + 6 项拒绝清理记录继续保留；本轮下列 9 个合成测试目录删除被自动审批拒绝（`blocked by policy`），未绕过，仍为待清理项。保留当前准确发布制品、回滚备份、业务数据、模板、凭据及验收证据。
 
