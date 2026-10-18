@@ -74,7 +74,7 @@ checkpoint() {
 systemctl() {
   fake_systemctl "$@"
   local result=$?
-  if [[ "$1 $2" == 'stop memoverse' ]]; then
+  if [[ "${1:-} ${2:-}" == 'stop memoverse' ]]; then
     if [[ -f "$TEST_ROOT/reached" && "$TEST_HOLD_ROLLBACK" == 1 ]]; then
       : > "$TEST_ROOT/recovering"
       while [[ ! -f "$TEST_ROOT/recover" ]]; do command sleep 0.02; done
