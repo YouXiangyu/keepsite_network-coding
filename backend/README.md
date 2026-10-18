@@ -36,6 +36,46 @@ Cognito 提供邮箱密码、验证码确认、重置密码以及 Google 联合�
 
 部署入口与配置切换见 [Ubuntu 部署说明](../deploy/ubuntu/README.md)，实时资源定位见[项目运行信息](../.agents/skills/memoverse-delivery/references/project-context.md)。不得将真实配置或凭据写入 Git。
 
+## 生成业务责任地图
+
+| 模块 | 负责什么 | 边界 |
+| --- | --- | --- |
+| `jobs.py` | `JobWorker` 的线程、唤醒、停止与一次任务的协调；引擎可用性入口 | 应用仍从这里创建 worker；不在调度层展开 SQL 或文件流水线 |
+| `generation/repository.py` | 启动恢复、领取任务、最终结果发布的数据库事务 | 每次发布核对账户、任务、输入版本与原图；只在短事务内写库 |
+| `generation/pipeline.py` | 下载原图、调用生成器、校验产物、上传不可变模型文件 | 完成全部上传后才返回模型结果，不自行发布数据库状态 |
+| `relief_engine.py` | 推理子进程、超时与进程终止 | 生成算法与进程执行入口，保持资源清理 |
+| `object_storage.py` | 本地/S3 对象访问与完整性校验 | 存储 I/O 不占任务写事务 |
+
+调用顺序是 `JobWorker → repository 领取 → pipeline 执行 → repository 发布`。`generation/cancellation.py` 区分任务取消与服务停止；最终事务失败只重试发布，最多 3 次、总预算 8 秒。超过预算后，同进程保留完成结果，并通过账户限定的 `generationRecovery` 和重试接口恢复保存。每次发布重新检查账户、任务状态、图片与输入版本；已完成的事务可以幂等重放。
+
+完成结果保留在进程内存中，服务重启会按持久任务状态重新排队，可能重新推理。任务取消会中断推理子进程并阻止后续阶段；已经执行的 S3 请求仍受连接/读取超时与 SDK 有限重试约束。生产仍是单进程、单 worker，没有新增多 worker 租约。
+
+## 业务与存储边界
+
+| 模块 | 职责 |
+| --- | --- |
+| `app.py` | 配置装配、生命周期、错误处理、安全中间件与认证安装 |
+| `api.py` | 从服务器会话取得身份、校验请求契约、调用业务、返回 JSON/文件流 |
+| `contracts.py` | HTTP 与恢复工具共用的业务字段校验 |
+| `services/collections.py` | 收藏版本/幂等、修改、删除、重试和生成状态查询 |
+| `services/social.py`、`services/profiles.py` | 分享/社区互动与个人资料业务 |
+| `accounts.py` | 首次账户初始化；文件准备在写事务外，写入前再次检查账户是否存在 |
+| `state.py` | 数据展示、账户快照和带生成恢复信息的统一 HTTP 响应 |
+| `store.py` | schema、事务、账户权限与不可变资源元数据存取 |
+| `backups.py` | 一致快照导出、文件与记录校验、隔离恢复；不导出认证数据库 |
+
+## 账户备份恢复
+
+仅把账户 ZIP 恢复到**新的绝对目录**，显式指定原 owner，不覆盖或合并生产数据库：
+
+```powershell
+backend/.venv/Scripts/python.exe -B scripts/restore-account-backup.py --archive D:/backups/account.zip --destination D:/backups/restored-account --user-id <备份中的userId>
+```
+
+目标父目录须已存在且无链接；已有目标一律拒绝。工具核对 ZIP 路径、成员集合、SHA-256/长度、完整业务字段、账户归属、模型三件套、相机、数据库引用与完整性。上限为 50,000 个 ZIP 成员、2 GiB 展开大小、16 MiB manifest；图片沿用上传的 12 MiB/4,000 万像素限制。导出执行相同上限，并在对象流超过声明长度时立即停止。
+
+恢复目录内含 SQLite 和本地 `objects/`，不会上传 S3、改变 Cognito 或自动切换运行环境。恢复中的 processing/blocked 任务转 queued，重新运行时可继续；新 serverId 让旧客户端识别恢复后的空间。若发布恢复目录时中断，`RESTORE_INCOMPLETE` 标记会阻止应用启动；保留现场检查，另选新目录重新恢复，不手动移除标记冒充完整。
+
 ## 开发验证
 
 Python 3.12/3.13，依赖放 `backend/.venv`。配置有效身份服务和模板后，开发可显式选择 `MEMOVERSE_STORAGE=local`，通过 Vite `/api` 代理同源访问；生产验收在 EC2 进行。

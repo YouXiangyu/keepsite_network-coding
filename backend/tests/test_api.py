@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app import create_app
+from backend import accounts
 from backend.object_storage import LocalObjectStore, StorageError
 from account_fixtures import FakeAuthFactory, ORIGIN, USERS, WRITE_HEADERS, image_bytes, signed_in, template_fixture
 
@@ -136,7 +137,7 @@ def test_concurrent_initialization_is_atomic_and_repeated_login_preserves_edits(
     client, app, _ = workspace
     bob = USERS["bob"]
     with ThreadPoolExecutor(max_workers=4) as pool:
-        list(pool.map(lambda _: app.state.store.ensure_account(bob["id"], bob["email"], bob["name"]), range(8)))
+        list(pool.map(lambda _: accounts.ensure_account(app.state.store, bob["id"], bob["email"], bob["name"]), range(8)))
     signed_in(client, "bob")
     state(client.patch("/api/profile", headers=WRITE_HEADERS, json={"name": "修改后的Bob", "bio": "保留"}))
     assert state(client.get("/api/state"))["data"]["profile"]["name"] == "修改后的Bob"
@@ -344,6 +345,52 @@ def test_template_tampering_fails_before_creating_account_database(tmp_path):
     assert not (tmp_path / "new/memoverse.sqlite3").exists()
 
 
+@pytest.mark.parametrize("with_database", [False, True])
+def test_incomplete_restoration_is_rejected_before_startup_writes(tmp_path, with_database):
+    root = tmp_path / "incomplete"
+    root.mkdir()
+    if with_database:
+        with sqlite3.connect(root / "memoverse.sqlite3") as db:
+            db.execute("CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT)")
+            db.execute("INSERT INTO meta VALUES ('schema_version','2')")
+    (root / "RESTORE_INCOMPLETE").write_text("interrupted publication")
+    before = {path.name: path.read_bytes() for path in root.iterdir()}
+    with pytest.raises(RuntimeError, match="Incomplete account restoration"):
+        create_app(data_dir=root, run_worker=False, auth_provider=FakeAuthFactory())
+    assert {path.name: path.read_bytes() for path in root.iterdir()} == before
+
+
+def test_existing_account_without_template_survives_but_new_account_is_rejected(workspace):
+    from backend.store import StoreError
+    client, app, _ = workspace
+    before = state(client.get("/api/state"))
+    app.state.store.template = None
+    accounts.ensure_account(app.state.store, "user-alice", "alice@example.test", "Alice")
+    with pytest.raises(StoreError) as failure:
+        accounts.ensure_account(app.state.store, "user-bob", "bob@example.test", "Bob")
+    assert failure.value.status_code == 503
+    assert state(client.get("/api/state"))["data"] == before["data"]
+    with app.state.store.transaction() as db:
+        assert not db.execute("SELECT 1 FROM users WHERE id='user-bob'").fetchone()
+
+
+def test_backup_validation_failure_returns_safe_actionable_error(workspace, monkeypatch):
+    from backend import api
+    from backend.backups import BackupError
+    client, _, _ = workspace
+    before = state(client.get("/api/state"))
+
+    def fail(*args):
+        raise BackupError("fixture internal archive detail")
+
+    monkeypatch.setattr(api, "create_account_backup", fail)
+    response = client.get("/api/backup")
+    assert response.status_code == 503
+    assert "记录仍保留" in response.json()["detail"]
+    assert "fixture" not in response.text
+    assert state(client.get("/api/state"))["data"] == before["data"]
+
+
 def test_failed_account_clone_rolls_back_all_user_records(workspace, monkeypatch):
     _, app, _ = workspace
     original = app.state.store.register_model
@@ -351,12 +398,12 @@ def test_failed_account_clone_rolls_back_all_user_records(workspace, monkeypatch
         raise RuntimeError("fixture initialization failure")
     monkeypatch.setattr(app.state.store, "register_model", fail)
     with pytest.raises(RuntimeError, match="initialization"):
-        app.state.store.ensure_account("user-bob", "bob@example.test", "Bob")
+        accounts.ensure_account(app.state.store, "user-bob", "bob@example.test", "Bob")
     with app.state.store.transaction() as db:
         for table in ("users", "profiles", "collections", "asset_grants", "model_grants", "shares", "community"):
             column = "id" if table == "users" else "user_id"
             assert db.execute(f"SELECT COUNT(*) FROM {table} WHERE {column}=?", ("user-bob",)).fetchone()[0] == 0
     monkeypatch.setattr(app.state.store, "register_model", original)
-    app.state.store.ensure_account("user-bob", "bob@example.test", "Bob")
+    accounts.ensure_account(app.state.store, "user-bob", "bob@example.test", "Bob")
     with app.state.store.transaction() as db:
         assert db.execute("SELECT COUNT(*) FROM collections WHERE user_id='user-bob'").fetchone()[0] == 1

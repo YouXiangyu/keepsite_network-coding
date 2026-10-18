@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -21,7 +21,7 @@ while (queue.length) {
     for (const [, specifier] of imports) {
       if (!specifier.startsWith('.')) continue;
       const base = path.resolve(path.dirname(filename), specifier);
-      const resolved = [base, ...['.ts', '.tsx', '.js', '.css', '/index.ts', '/index.tsx'].map(extension => base + extension)].find(candidate => existsSync(candidate));
+      const resolved = [base, ...['.ts', '.tsx', '.js', '.css', '/index.ts', '/index.tsx'].map(extension => base + extension)].find(candidate => existsSync(candidate) && statSync(candidate).isFile());
       if (!resolved) failures.push(`${relative}: unresolved local import ${specifier}`);
       else queue.push(resolved);
     }

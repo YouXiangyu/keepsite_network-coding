@@ -7,6 +7,8 @@ import subprocess
 import sys
 import time
 
+from .generation.cancellation import GenerationCancelled
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -23,6 +25,8 @@ def engine_status() -> dict:
 
 
 def generate_relief(input_path: Path, output_dir: Path, *, cancel_event=None) -> dict:
+    if cancel_event is not None and cancel_event.is_set():
+        raise GenerationCancelled('生成已取消。')
     status = engine_status()
     if not status['available']:
         raise RuntimeError(status['reason'])
@@ -34,7 +38,7 @@ def generate_relief(input_path: Path, output_dir: Path, *, cancel_event=None) ->
     try:
         while True:
             if cancel_event is not None and cancel_event.is_set():
-                raise RuntimeError('本机服务停止，生成任务将在下次启动时恢复。')
+                raise GenerationCancelled('生成已取消。')
             if time.monotonic() >= deadline:
                 raise RuntimeError('生成超过十分钟，原图已保留，可以稍后重试。')
             try:
@@ -48,7 +52,7 @@ def generate_relief(input_path: Path, output_dir: Path, *, cancel_event=None) ->
         if process.poll() is None:
             process.terminate()
             try:
-                process.communicate(timeout=5)
+                process.communicate(timeout=2)
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.communicate()

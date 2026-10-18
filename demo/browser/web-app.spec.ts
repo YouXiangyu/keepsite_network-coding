@@ -1,3 +1,4 @@
+import { glb } from '../tests/glb-fixture.mjs';
 import { expect, test, type Page, type Route } from '@playwright/test';
 
 const password = 'ExamplePassword123!';
@@ -21,25 +22,6 @@ function dataFor(user: string) {
     profile: { name: `用户 ${user.toUpperCase()}`, bio: '把喜欢的日子留下来' }, likedCommunityIds: [] as string[],
   };
 }
-function glb() {
-  const vertices = new Float32Array([-1, -.7, 0, 1, -.7, 0, 1, .7, .1, -1, .7, 0]);
-  const indices = new Uint16Array([0, 1, 2, 0, 2, 3]);
-  const binary = Buffer.concat([Buffer.from(vertices.buffer), Buffer.from(indices.buffer)]);
-  const document = { asset: { version: '2.0' }, scene: 0, scenes: [{ nodes: [0] }], nodes: [{ mesh: 0 }],
-    meshes: [{ primitives: [{ attributes: { POSITION: 0 }, indices: 1, material: 0 }] }],
-    materials: [{ doubleSided: true, pbrMetallicRoughness: { baseColorFactor: [.75, .8, .68, 1], metallicFactor: 0, roughnessFactor: 1 } }],
-    buffers: [{ byteLength: binary.length }], bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: vertices.byteLength, target: 34962 },
-      { buffer: 0, byteOffset: vertices.byteLength, byteLength: indices.byteLength, target: 34963 }],
-    accessors: [{ bufferView: 0, componentType: 5126, count: 4, type: 'VEC3', min: [-1, -.7, 0], max: [1, .7, .1] },
-      { bufferView: 1, componentType: 5123, count: 6, type: 'SCALAR', min: [0], max: [3] }] };
-  const json = Buffer.from(JSON.stringify(document));
-  const padded = Buffer.concat([json, Buffer.alloc((4 - json.length % 4) % 4, 32)]);
-  const output = Buffer.alloc(12 + 8 + padded.length + 8 + binary.length);
-  output.writeUInt32LE(0x46546c67, 0); output.writeUInt32LE(2, 4); output.writeUInt32LE(output.length, 8);
-  output.writeUInt32LE(padded.length, 12); output.writeUInt32LE(0x4e4f534a, 16); padded.copy(output, 20);
-  output.writeUInt32LE(binary.length, 20 + padded.length); output.writeUInt32LE(0x004e4942, 24 + padded.length); binary.copy(output, 28 + padded.length);
-  return output;
-}
 const model = glb();
 
 async function mockApi(page: Page, options: { user?: string; configured?: boolean; google?: boolean; sessionGate?: Promise<void> } = {}) {
@@ -50,6 +32,7 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
     rejectVerification: false, unverifiedLogin: false, holdState: undefined as Promise<void> | undefined,
     csrfToken: undefined as string | undefined,
     logoutUrl: undefined as string | undefined,
+    generationRecovery: [] as { jobId: string; collectionId: string; error: string }[],
   };
   const currentData = (user = server.user) => {
     if (!server.data.has(user)) server.data.set(user, dataFor(user));
@@ -58,7 +41,7 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
   const session = () => ({ authenticated: !!server.user, configured: server.configured,
     providers: { google: server.google, email: true }, ...(server.user ? { user: { id: server.user, email: `${server.user}@example.test`, name: `用户 ${server.user.toUpperCase()}` }, csrfToken: server.csrfToken ?? `csrf-${server.user}` } : {}) });
   const state = (user = server.user) => ({ initialized: true, serverId: 'web-server', userId: user, revision: server.revision,
-    data: structuredClone(currentData(user)), generationEngine: { available: true, reason: 'test engine' } });
+    data: structuredClone(currentData(user)), generationRecovery: user === 'a' ? server.generationRecovery : [], generationEngine: { available: true, reason: 'test engine' } });
   const respond = (route: Route, value: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) });
   await page.addInitScript(() => {
     (window as any).__legacyReads = 0;
@@ -104,6 +87,10 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
     }
     if (path === '/api/media' && method === 'POST') return respond(route, { assetId: 'uploaded', url: '/api/media/uploaded', sha256: 'hash', width: 1, height: 1, size: 68, mimeType: 'image/png' });
     const data = currentData();
+    if (path.endsWith('/retry-generation')) {
+      server.generationRecovery = [];
+      return respond(route, state());
+    }
     if (path === '/api/collections' && method === 'POST') {
       data.collections.push({ ...body, tags: body.tags ?? [], addedAt: 1000, source: 'mine', version: 1, generation: 'queued',
         customImage: '/api/media/uploaded', generationJobId: 'new-job' } as any);
@@ -117,6 +104,22 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
     } else if (path === '/api/profile') data.profile = body;
     else if (path === '/api/shares/read-all') data.shares.forEach(share => { share.unread = false; });
     else if (path.match(/^\/api\/shares\/[^/]+\/read$/)) data.shares.find(share => share.id === path.split('/')[3])!.unread = false;
+    else if (path.match(/^\/api\/community\/[^/]+\/view$/)) data.community.find(item => item.id === path.split('/')[3])!.exposures += 1;
+    else if (path.match(/^\/api\/community\/[^/]+\/like$/) && method === 'PUT') {
+      const item = data.community.find(item => item.id === path.split('/')[3])!;
+      const wasLiked = data.likedCommunityIds.includes(item.id);
+      data.likedCommunityIds = data.likedCommunityIds.filter(id => id !== item.id);
+      if (body.liked) data.likedCommunityIds.push(item.id);
+      item.likes += Number(body.liked) - Number(wasLiked);
+    } else if (path.match(/^\/api\/(community|shares)\/[^/]+\/collect$/) && method === 'POST') {
+      const [, , source, id] = path.split('/');
+      const shared = source === 'shares' ? data.shares.find(share => share.id === id)!.item : undefined;
+      const community = source === 'community' ? data.community.find(item => item.id === id)! : undefined;
+      data.collections.push(shared ? { ...shared, id: `collected-${id}` } : {
+        ...data.collections[0], ...community, id: `collected-${id}`, source: 'friend', sender: community!.author,
+        note: community!.description,
+      });
+    }
     server.revision += 1;
     return respond(route, state());
   });
@@ -261,6 +264,7 @@ test('upload, edit, conflict recovery and document-portal delete preserve busine
   await page.getByRole('button', { name: '保存收藏', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('版本已更新');
   await expect(page.getByRole('textbox', { name: /想记住的话/ })).toHaveValue('版本冲突后保留的草稿');
+  await expect(page.getByRole('link', { name: '取消编辑', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '读取最新版本，保留草稿' }).click();
   await page.getByRole('button', { name: '保存收藏', exact: true }).click();
   await expect(page.getByRole('heading', { name: '新的一杯咖啡' })).toBeVisible();
@@ -421,4 +425,185 @@ test('gallery supporting text retains readable contrast on its light surfaces', 
   });
   expect(ratios.length).toBeGreaterThan(0);
   expect(Math.min(...ratios)).toBeGreaterThanOrEqual(4.5);
+});
+
+
+test('explore filtering survives detail navigation and community actions update the account', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' });
+  await page.goto('/explore');
+  await page.getByRole('group', { name: '探索分类' }).getByRole('button', { name: '旅行', exact: true }).click();
+  await expect(page.locator('.explore-grid .photo-card')).toHaveCount(2);
+  await page.locator('.explore-grid .photo-card').first().click();
+  await expect(page.getByRole('heading', { name: '社区灵感 1', exact: true })).toBeVisible();
+  await expect.poll(() => api.requests.some(request => request.path === '/api/community/community-0/view')).toBeTruthy();
+  await page.getByRole('button', { name: '喜欢这件纪念品', exact: true }).click();
+  await expect(page.getByRole('button', { name: '取消喜欢', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '加入我的收藏', exact: true }).click();
+  await expect(page.getByText('已加入我的收藏', { exact: true })).toBeVisible();
+  const liked = api.requests.find(request => request.path === '/api/community/community-0/like')!;
+  expect(liked.method).toBe('PUT');
+  expect(liked.body).toEqual({ liked: true });
+  expect(liked.headers['x-csrf-token']).toBe('csrf-a');
+  await page.goBack();
+  await expect(page.getByRole('group', { name: '探索分类' }).getByRole('button', { name: '旅行', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.explore-grid .photo-card')).toHaveCount(2);
+  await expect(page.locator('.community-byline').first()).toContainText('21 人喜欢');
+  await page.getByRole('navigation', { name: '主导航', exact: true }).getByRole('link', { name: '我的收藏', exact: true }).click();
+  await expect(page.locator('.recent-grid').getByRole('heading', { name: '社区灵感 1', exact: true })).toBeVisible();
+});
+
+test('shares preserve unread filtering across detail navigation and add the received item to collections', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' });
+  await page.goto('/friends');
+  await page.getByRole('group', { name: '分享筛选' }).getByRole('button', { name: /未查看/ }).click();
+  await expect(page.locator('.friend-card')).toHaveCount(2);
+  await page.locator('.friend-card .photo-card').first().click();
+  await expect(page.getByRole('heading', { name: 'A 的海边', exact: true })).toBeVisible();
+  await expect.poll(() => api.requests.some(request => request.path === '/api/shares/share-0/read')).toBeTruthy();
+  await expect(page.locator('#main-content')).toHaveAttribute('aria-busy', 'false');
+  await page.goBack();
+  await expect(page.getByRole('group', { name: '分享筛选' }).getByRole('button', { name: /未查看/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.friend-card')).toHaveCount(1);
+  await page.getByRole('button', { name: '收藏这份分享', exact: true }).click();
+  await expect(page.getByText('已加入我的收藏', { exact: true })).toBeVisible();
+  const collect = api.requests.find(request => request.path === '/api/shares/share-1/collect')!;
+  expect(collect.method).toBe('POST');
+  expect(collect.headers['x-csrf-token']).toBe('csrf-a');
+  await page.getByRole('navigation', { name: '主导航', exact: true }).getByRole('link', { name: '我的收藏', exact: true }).click();
+  await expect(page.locator('a[href="/collection/collected-share-1"]').first()).toBeVisible();
+});
+
+test('generation publication recovery appears and clears at the same revision, without leaking to a replacement account', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' });
+  const data = dataFor('a');
+  data.collections[0].generation = 'processing';
+  api.data.set('a', data);
+  await page.clock.install();
+  await page.goto('/collection/item-1');
+  await expect(page.getByRole('heading', { name: 'A 的海边', exact: true })).toBeVisible();
+  const revision = api.revision;
+  api.generationRecovery = [{ jobId: 'completed-job', collectionId: 'item-1', error: '请重试保存生成结果。' }];
+  await page.clock.fastForward(4001);
+  await expect(page.getByRole('alert')).toContainText('生成结果保存失败');
+  await expect(page.locator('.generation-status')).toContainText('生成结果保存未完成');
+  await page.getByRole('button', { name: '重试保存生成结果：A 的海边', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(api.revision).toBe(revision);
+  expect(api.requests.filter(request => request.path === '/api/collections/item-1/retry-generation')).toHaveLength(1);
+  api.generationRecovery = [{ jobId: 'completed-job', collectionId: 'item-1', error: '请重试保存生成结果。' }];
+  await page.clock.fastForward(4001);
+  await expect(page.getByRole('alert')).toContainText('生成结果保存失败');
+  await page.getByRole('button', { name: '退出登录', exact: true }).first().click();
+  await login(page, 'b@example.test');
+  await expect(page.locator('.memoverse-shell')).toHaveAttribute('data-user-id', 'b');
+  await expect(page.getByText(/生成结果保存失败/)).toHaveCount(0);
+});
+
+test('an older polled snapshot cannot undo a completed community mutation', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' });
+  await page.clock.install();
+  await page.goto('/community/community-0');
+  await expect(page.getByRole('button', { name: '喜欢这件纪念品', exact: true })).toBeEnabled();
+  let release!: () => void;
+  api.holdState = new Promise<void>(resolve => { release = resolve; });
+  const previous = api.requests.filter(request => request.path === '/api/state').length;
+  await page.clock.fastForward(10_001);
+  await expect.poll(() => api.requests.filter(request => request.path === '/api/state').length).toBeGreaterThan(previous);
+  const cancelledPoll = page.waitForEvent('requestfailed', request => new URL(request.url()).pathname === '/api/state');
+  await page.getByRole('button', { name: '喜欢这件纪念品', exact: true }).click();
+  await expect(page.getByRole('button', { name: '取消喜欢', exact: true })).toBeVisible();
+  await cancelledPoll;
+  release();
+  await page.clock.runFor(20);
+  await expect(page.getByRole('button', { name: '取消喜欢', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '喜欢这件纪念品', exact: true })).toHaveCount(0);
+});
+
+test('photo previews are released on replacement, leaving the editor and logout', async ({ page }) => {
+  await mockApi(page, { user: 'a' });
+  await page.addInitScript(() => {
+    const created: string[] = [];
+    const revoked: string[] = [];
+    (window as any).__previewURLs = { created, revoked };
+    const create = URL.createObjectURL.bind(URL);
+    const revoke = URL.revokeObjectURL.bind(URL);
+    URL.createObjectURL = value => {
+      const url = create(value);
+      if (value instanceof File) created.push(url);
+      return url;
+    };
+    URL.revokeObjectURL = url => { revoked.push(url); revoke(url); };
+  });
+  await page.goto('/add');
+  const image = { name: 'photo.png', mimeType: 'image/png', buffer: png };
+  await page.getByLabel('选择收藏图片').setInputFiles(image);
+  await page.getByLabel('选择收藏图片').setInputFiles({ ...image, name: 'replacement.png' });
+  await expect.poll(() => page.evaluate(() => {
+    const urls = (window as any).__previewURLs;
+    return urls.created.length === 2 && urls.revoked.includes(urls.created[0]) && !urls.revoked.includes(urls.created[1]);
+  })).toBeTruthy();
+  await page.getByRole('link', { name: '取消编辑', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => {
+    const urls = (window as any).__previewURLs;
+    return urls.created.every((url: string) => urls.revoked.includes(url));
+  })).toBeTruthy();
+  await page.locator('.sidebar-add').click();
+  await page.getByLabel('选择收藏图片').setInputFiles(image);
+  await page.getByRole('button', { name: '退出登录', exact: true }).first().click();
+  await expect(page.locator('.memoverse-shell')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => {
+    const urls = (window as any).__previewURLs;
+    return urls.created.length === 3 && urls.created.every((url: string) => urls.revoked.includes(url));
+  })).toBeTruthy();
+});
+
+test('an older poll at the same revision cannot restore a recovered generation warning', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' });
+  const data = dataFor('a');
+  data.collections[0].generation = 'processing';
+  api.data.set('a', data);
+  api.generationRecovery = [{ jobId: 'completed-job', collectionId: 'item-1', error: '请重试保存生成结果。' }];
+  await page.clock.install();
+  await page.goto('/collection/item-1');
+  await expect(page.getByRole('alert')).toContainText('生成结果保存失败');
+  let release!: () => void;
+  api.holdState = new Promise<void>(resolve => { release = resolve; });
+  const previous = api.requests.filter(request => request.path === '/api/state').length;
+  await page.clock.fastForward(4001);
+  await expect.poll(() => api.requests.filter(request => request.path === '/api/state').length).toBeGreaterThan(previous);
+  const cancelledPoll = page.waitForEvent('requestfailed', request => new URL(request.url()).pathname === '/api/state');
+  await page.getByRole('button', { name: '重试保存生成结果：A 的海边', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await cancelledPoll;
+  release();
+  await page.clock.runFor(20);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+test('polling pauses while a recovery mutation is unresolved and resumes with its resulting state', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' });
+  const data = dataFor('a');
+  data.collections[0].generation = 'processing';
+  api.data.set('a', data);
+  api.generationRecovery = [{ jobId: 'completed-job', collectionId: 'item-1', error: '请重试保存生成结果。' }];
+  let release!: () => void;
+  const heldMutation = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/collections/item-1/retry-generation', async route => {
+    await heldMutation;
+    await route.fallback();
+  });
+  await page.clock.install();
+  await page.goto('/collection/item-1');
+  await expect(page.getByRole('alert')).toContainText('生成结果保存失败');
+  const before = api.requests.filter(request => request.path === '/api/state').length;
+  await page.getByRole('button', { name: '重试保存生成结果：A 的海边', exact: true }).click();
+  await expect(page.locator('#main-content')).toHaveAttribute('aria-busy', 'true');
+  await page.clock.runFor(8001);
+  expect(api.requests.filter(request => request.path === '/api/state')).toHaveLength(before);
+  release();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.locator('#main-content')).toHaveAttribute('aria-busy', 'false');
+  await page.clock.fastForward(4001);
+  await expect.poll(() => api.requests.filter(request => request.path === '/api/state').length).toBeGreaterThan(before);
+  await expect(page.getByRole('alert')).toHaveCount(0);
 });

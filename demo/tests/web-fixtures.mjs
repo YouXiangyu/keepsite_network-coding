@@ -15,6 +15,6 @@ export const sampleData = () => ({
   profile: { name: '测试用户', bio: '保留喜欢的瞬间' }, likedCommunityIds: [],
 });
 export const serverState = (id = 'a') => ({
-  initialized: true, serverId: 'server', userId: id, revision: 7, data: sampleData(),
+  generationRecovery: [], initialized: true, serverId: 'server', userId: id, revision: 7, data: sampleData(),
   generationEngine: { available: true, reason: 'fixture', pipeline: 'AnyImage' },
 });

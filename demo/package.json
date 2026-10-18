@@ -8,6 +8,7 @@
     "update:runtime-lock": "node scripts/update-mobile-runtime-lock.mjs",
     "test:runtime": "npm run test:web",
     "test:web": "playwright test --config=playwright.web.config.ts",
+    "test:reliability": "npm run build && playwright test --config=playwright.reliability.config.ts",
     "test:mobile-archive": "playwright test --config=playwright.config.ts",
     "test:unit": "node --test tests/api.test.mjs tests/data.test.mjs tests/relief-angle.test.mjs",
     "test:sites": "node --test tests/sites-worker.test.mjs",
