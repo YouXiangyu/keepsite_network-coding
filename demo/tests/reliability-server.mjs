@@ -10,6 +10,7 @@ const model = glb();
 const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=', 'base64');
 const backup = Buffer.from('504b0506000000000000000000000000000000000000', 'hex');
 let accounts = new Map();
+let createFingerprints = new Map();
 let requests = [];
 let stalls = [];
 let hang;
@@ -57,7 +58,7 @@ const server = createServer(async (request, response) => {
     const body = ['POST', 'PATCH', 'PUT', 'DELETE'].includes(method) ? await bodyOf(request) : undefined;
     if (pathname === '/__test/reset' && method === 'POST') {
       for (const stalled of stalls) stalled.response.destroy();
-      accounts = new Map(); requests = []; stalls = []; hang = undefined;
+      accounts = new Map(); createFingerprints = new Map(); requests = []; stalls = []; hang = undefined;
       return respond(response, pathname, method, { ok: true });
     }
     if (pathname === '/__test/hang' && method === 'POST') {
@@ -94,10 +95,17 @@ const server = createServer(async (request, response) => {
       if (pathname === '/api/media') return respond(response, pathname, method, { assetId: 'uploaded', url: '/api/media/uploaded' });
       const workspace = account(user);
       if (pathname === '/api/collections' && method === 'POST') {
-        if (!workspace.data.collections.some(item => item.id === body.id)) workspace.data.collections.push({
-          ...body, tags: body.tags ?? [], addedAt: 100, source: 'mine', version: 1,
-          generation: 'queued', generationJobId: 'job-new', customImage: '/api/media/uploaded',
-        });
+        const key = `${user}/${body.id}`;
+        const fingerprint = JSON.stringify(body);
+        if (workspace.data.collections.some(item => item.id === body.id)) {
+          if (createFingerprints.get(key) !== fingerprint) return respond(response, pathname, method, { detail: '这件收藏已创建且内容不同，请刷新后编辑。' }, 409);
+        } else {
+          createFingerprints.set(key, fingerprint);
+          workspace.data.collections.push({
+            ...body, tags: body.tags ?? [], addedAt: 100, source: 'mine', version: 1,
+            generation: 'queued', generationJobId: 'job-new', customImage: '/api/media/uploaded',
+          });
+        }
       } else if (pathname.startsWith('/api/collections/') && method === 'PATCH') {
         const item = workspace.data.collections.find(item => item.id === pathname.split('/')[3]);
         if (item.version !== body.version) return respond(response, pathname, method, { detail: '版本已更新，草稿仍保留。' }, 409);

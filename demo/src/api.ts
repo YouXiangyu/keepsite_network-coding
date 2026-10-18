@@ -20,6 +20,7 @@ export interface ServerState {
   userId: string;
   revision: number;
   data: AppData | null;
+  generationRecovery: { jobId: string; collectionId: string; error: string }[];
   generationEngine?: { available: boolean; reason?: string; pipeline?: string };
 }
 export interface MediaAsset {
@@ -223,6 +224,11 @@ function checkedState(value: unknown, expectedUser: string): ServerState {
   if (typeof state.initialized !== 'boolean' || typeof state.serverId !== 'string' || !state.serverId
       || !Number.isSafeInteger(state.revision) || state.revision < 0) {
     throw new ApiError('收藏状态不完整，未更新界面。');
+  }
+  if (!Array.isArray(state.generationRecovery) || state.generationRecovery.some(item => !item
+      || typeof item.jobId !== 'string' || !item.jobId || typeof item.collectionId !== 'string' || !item.collectionId
+      || typeof item.error !== 'string')) {
+    throw new ApiError('生成恢复状态不完整，未更新界面。');
   }
   if (state.initialized) validateData(state.data);
   else if (state.data !== null) throw new ApiError('收藏空间尚未准备完成。');

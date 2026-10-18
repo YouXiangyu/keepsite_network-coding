@@ -32,6 +32,7 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
     rejectVerification: false, unverifiedLogin: false, holdState: undefined as Promise<void> | undefined,
     csrfToken: undefined as string | undefined,
     logoutUrl: undefined as string | undefined,
+    generationRecovery: [] as { jobId: string; collectionId: string; error: string }[],
   };
   const currentData = (user = server.user) => {
     if (!server.data.has(user)) server.data.set(user, dataFor(user));
@@ -40,7 +41,7 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
   const session = () => ({ authenticated: !!server.user, configured: server.configured,
     providers: { google: server.google, email: true }, ...(server.user ? { user: { id: server.user, email: `${server.user}@example.test`, name: `用户 ${server.user.toUpperCase()}` }, csrfToken: server.csrfToken ?? `csrf-${server.user}` } : {}) });
   const state = (user = server.user) => ({ initialized: true, serverId: 'web-server', userId: user, revision: server.revision,
-    data: structuredClone(currentData(user)), generationEngine: { available: true, reason: 'test engine' } });
+    data: structuredClone(currentData(user)), generationRecovery: user === 'a' ? server.generationRecovery : [], generationEngine: { available: true, reason: 'test engine' } });
   const respond = (route: Route, value: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) });
   await page.addInitScript(() => {
     (window as any).__legacyReads = 0;
@@ -86,6 +87,10 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
     }
     if (path === '/api/media' && method === 'POST') return respond(route, { assetId: 'uploaded', url: '/api/media/uploaded', sha256: 'hash', width: 1, height: 1, size: 68, mimeType: 'image/png' });
     const data = currentData();
+    if (path.endsWith('/retry-generation')) {
+      server.generationRecovery = [];
+      return respond(route, state());
+    }
     if (path === '/api/collections' && method === 'POST') {
       data.collections.push({ ...body, tags: body.tags ?? [], addedAt: 1000, source: 'mine', version: 1, generation: 'queued',
         customImage: '/api/media/uploaded', generationJobId: 'new-job' } as any);
@@ -259,6 +264,7 @@ test('upload, edit, conflict recovery and document-portal delete preserve busine
   await page.getByRole('button', { name: '保存收藏', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('版本已更新');
   await expect(page.getByRole('textbox', { name: /想记住的话/ })).toHaveValue('版本冲突后保留的草稿');
+  await expect(page.getByRole('link', { name: '取消编辑', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '读取最新版本，保留草稿' }).click();
   await page.getByRole('button', { name: '保存收藏', exact: true }).click();
   await expect(page.getByRole('heading', { name: '新的一杯咖啡' })).toBeVisible();
@@ -465,4 +471,139 @@ test('shares preserve unread filtering across detail navigation and add the rece
   expect(collect.headers['x-csrf-token']).toBe('csrf-a');
   await page.getByRole('navigation', { name: '主导航', exact: true }).getByRole('link', { name: '我的收藏', exact: true }).click();
   await expect(page.locator('a[href="/collection/collected-share-1"]').first()).toBeVisible();
+});
+
+test('generation publication recovery appears and clears at the same revision, without leaking to a replacement account', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' });
+  const data = dataFor('a');
+  data.collections[0].generation = 'processing';
+  api.data.set('a', data);
+  await page.clock.install();
+  await page.goto('/collection/item-1');
+  await expect(page.getByRole('heading', { name: 'A 的海边', exact: true })).toBeVisible();
+  const revision = api.revision;
+  api.generationRecovery = [{ jobId: 'completed-job', collectionId: 'item-1', error: '请重试保存生成结果。' }];
+  await page.clock.fastForward(4001);
+  await expect(page.getByRole('alert')).toContainText('生成结果保存失败');
+  await expect(page.locator('.generation-status')).toContainText('生成结果保存未完成');
+  await page.getByRole('button', { name: '重试保存生成结果：A 的海边', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(api.revision).toBe(revision);
+  expect(api.requests.filter(request => request.path === '/api/collections/item-1/retry-generation')).toHaveLength(1);
+  api.generationRecovery = [{ jobId: 'completed-job', collectionId: 'item-1', error: '请重试保存生成结果。' }];
+  await page.clock.fastForward(4001);
+  await expect(page.getByRole('alert')).toContainText('生成结果保存失败');
+  await page.getByRole('button', { name: '退出登录', exact: true }).first().click();
+  await login(page, 'b@example.test');
+  await expect(page.locator('.memoverse-shell')).toHaveAttribute('data-user-id', 'b');
+  await expect(page.getByText(/生成结果保存失败/)).toHaveCount(0);
+});
+
+test('an older polled snapshot cannot undo a completed community mutation', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' });
+  await page.clock.install();
+  await page.goto('/community/community-0');
+  await expect(page.getByRole('button', { name: '喜欢这件纪念品', exact: true })).toBeEnabled();
+  let release!: () => void;
+  api.holdState = new Promise<void>(resolve => { release = resolve; });
+  const previous = api.requests.filter(request => request.path === '/api/state').length;
+  await page.clock.fastForward(10_001);
+  await expect.poll(() => api.requests.filter(request => request.path === '/api/state').length).toBeGreaterThan(previous);
+  const cancelledPoll = page.waitForEvent('requestfailed', request => new URL(request.url()).pathname === '/api/state');
+  await page.getByRole('button', { name: '喜欢这件纪念品', exact: true }).click();
+  await expect(page.getByRole('button', { name: '取消喜欢', exact: true })).toBeVisible();
+  await cancelledPoll;
+  release();
+  await page.clock.runFor(20);
+  await expect(page.getByRole('button', { name: '取消喜欢', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '喜欢这件纪念品', exact: true })).toHaveCount(0);
+});
+
+test('photo previews are released on replacement, leaving the editor and logout', async ({ page }) => {
+  await mockApi(page, { user: 'a' });
+  await page.addInitScript(() => {
+    const created: string[] = [];
+    const revoked: string[] = [];
+    (window as any).__previewURLs = { created, revoked };
+    const create = URL.createObjectURL.bind(URL);
+    const revoke = URL.revokeObjectURL.bind(URL);
+    URL.createObjectURL = value => {
+      const url = create(value);
+      if (value instanceof File) created.push(url);
+      return url;
+    };
+    URL.revokeObjectURL = url => { revoked.push(url); revoke(url); };
+  });
+  await page.goto('/add');
+  const image = { name: 'photo.png', mimeType: 'image/png', buffer: png };
+  await page.getByLabel('选择收藏图片').setInputFiles(image);
+  await page.getByLabel('选择收藏图片').setInputFiles({ ...image, name: 'replacement.png' });
+  await expect.poll(() => page.evaluate(() => {
+    const urls = (window as any).__previewURLs;
+    return urls.created.length === 2 && urls.revoked.includes(urls.created[0]) && !urls.revoked.includes(urls.created[1]);
+  })).toBeTruthy();
+  await page.getByRole('link', { name: '取消编辑', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => {
+    const urls = (window as any).__previewURLs;
+    return urls.created.every((url: string) => urls.revoked.includes(url));
+  })).toBeTruthy();
+  await page.locator('.sidebar-add').click();
+  await page.getByLabel('选择收藏图片').setInputFiles(image);
+  await page.getByRole('button', { name: '退出登录', exact: true }).first().click();
+  await expect(page.locator('.memoverse-shell')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => {
+    const urls = (window as any).__previewURLs;
+    return urls.created.length === 3 && urls.created.every((url: string) => urls.revoked.includes(url));
+  })).toBeTruthy();
+});
+
+test('an older poll at the same revision cannot restore a recovered generation warning', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' });
+  const data = dataFor('a');
+  data.collections[0].generation = 'processing';
+  api.data.set('a', data);
+  api.generationRecovery = [{ jobId: 'completed-job', collectionId: 'item-1', error: '请重试保存生成结果。' }];
+  await page.clock.install();
+  await page.goto('/collection/item-1');
+  await expect(page.getByRole('alert')).toContainText('生成结果保存失败');
+  let release!: () => void;
+  api.holdState = new Promise<void>(resolve => { release = resolve; });
+  const previous = api.requests.filter(request => request.path === '/api/state').length;
+  await page.clock.fastForward(4001);
+  await expect.poll(() => api.requests.filter(request => request.path === '/api/state').length).toBeGreaterThan(previous);
+  const cancelledPoll = page.waitForEvent('requestfailed', request => new URL(request.url()).pathname === '/api/state');
+  await page.getByRole('button', { name: '重试保存生成结果：A 的海边', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await cancelledPoll;
+  release();
+  await page.clock.runFor(20);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+test('polling pauses while a recovery mutation is unresolved and resumes with its resulting state', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' });
+  const data = dataFor('a');
+  data.collections[0].generation = 'processing';
+  api.data.set('a', data);
+  api.generationRecovery = [{ jobId: 'completed-job', collectionId: 'item-1', error: '请重试保存生成结果。' }];
+  let release!: () => void;
+  const heldMutation = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/collections/item-1/retry-generation', async route => {
+    await heldMutation;
+    await route.fallback();
+  });
+  await page.clock.install();
+  await page.goto('/collection/item-1');
+  await expect(page.getByRole('alert')).toContainText('生成结果保存失败');
+  const before = api.requests.filter(request => request.path === '/api/state').length;
+  await page.getByRole('button', { name: '重试保存生成结果：A 的海边', exact: true }).click();
+  await expect(page.locator('#main-content')).toHaveAttribute('aria-busy', 'true');
+  await page.clock.runFor(8001);
+  expect(api.requests.filter(request => request.path === '/api/state')).toHaveLength(before);
+  release();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.locator('#main-content')).toHaveAttribute('aria-busy', 'false');
+  await page.clock.fastForward(4001);
+  await expect.poll(() => api.requests.filter(request => request.path === '/api/state').length).toBeGreaterThan(before);
+  await expect(page.getByRole('alert')).toHaveCount(0);
 });

@@ -317,3 +317,9 @@ test('account cancellation promptly rejects a body that never finishes', async (
   api.installSession(signedSession('b'));
   await rejected;
 });
+
+test('malformed generation recovery metadata cannot silently hide a recovery action', async () => {
+  api.installSession(signedSession());
+  globalThis.fetch = async () => Response.json({ ...serverState(), generationRecovery: [{ jobId: 'j', error: 'failed' }] });
+  await assert.rejects(api.getState(), /生成恢复状态不完整/);
+});
