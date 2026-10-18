@@ -23,7 +23,9 @@
 
 ## 业务状态
 
-`GET /api/state` 及成功修改返回 `{initialized,serverId,userId,revision,data,generationEngine}`。data 保持 collections / shares / community / profile / likedCommunityIds。revision 属于当前账户；客户端必须同时核对 userId 与会话代次，丢弃旧账户迟到结果。首次认证由服务器幂等复制已批准模板，不由浏览器上传全局旧工作区。
+`GET /api/state` 及成功修改返回 `{initialized,serverId,userId,revision,data,generationEngine,generationRecovery}`。data 保持 collections / shares / community / profile / likedCommunityIds。revision 属于当前账户；客户端必须同时核对 userId 与会话代次，丢弃旧账户迟到结果。首次认证由服务器幂等复制已批准模板，不由浏览器上传全局旧工作区。
+
+`generationRecovery` 始终为数组，元素为 `{jobId,collectionId,error}`，只包含当前账户的结果保存故障。它来自 worker 内存，可能在数据库 revision 不变时变化；客户端不能只凭 revision 相等忽略它，也不能让旧轮询覆盖刚完成的恢复操作。写操作期间暂停轮询并使在途轮询失效，其他快照仍按 revision 防倒退。
 
 收藏、分享内容和社区内容可返回 `assetId`、`customImage`、`modelId`、`modelUrl`、`modelCamera`、`generation`；收藏另有 `version` 和任务状态字段。模型 ready 必须已有真实对象。媒体链接均为同源受保护 `/api/...` 路径，不能因为知道哈希或模型 ID 就跳过授权。
 
@@ -38,7 +40,7 @@
 | `POST /api/collections` | `{id,title,category,tags,note,date,art,assetId}`；草稿 ID 仅在当前账号内幂等；tags=null 时匹配本人历史名称 |
 | `PATCH /api/collections/{id}` | `{version,title,category,tags,note,date?,art,assetId?}`；版本冲突 409，纯文字编辑复用模型 |
 | `DELETE /api/collections/{id}` | `{version}`；取消对应未完成任务，不删除其他记录仍引用的文件 |
-| `POST /api/collections/{id}/retry-generation` | 重试当前账户自己的失败/阻塞任务 |
+| `POST /api/collections/{id}/retry-generation` | 有待保存完成结果时只重新发布，不重复推理/上传；否则重试当前账户自己的失败/阻塞任务 |
 | `GET /api/jobs/{jobId}` | 仅当前账户自己的任务 |
 | `GET /api/models/{modelId}/model.glb` | 仅有模型授权的账户可读取真实 GLB |
 | `PATCH /api/profile` | `{name,bio}`，只修改本人资料 |
@@ -50,3 +52,5 @@
 | `GET /api/backup` | 本人数据、原图和模型的完整 ZIP，包含本人模板分享/社区引用；不包含全站数据库或身份令牌 |
 
 图片与模型从私有对象存储经认证后端流式返回，退出后同一 URL 返回 401。对象传输不持 SQLite 写事务；上传、生成或对象存储失败不能报告 ready。全站迁移和备份是运维操作，不是普通用户接口。
+
+创建的稳定 ID 只对相同请求内容幂等。如果保存已成功但响应超时，随后修改了草稿，同 ID 的再次 POST 返回 409；客户端明确读取已有记录及 version 后，可保留草稿改用 PATCH。超时只表示结果未确认，不能据此创建第二个随机 ID。

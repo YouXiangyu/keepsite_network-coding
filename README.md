@@ -31,27 +31,25 @@
 | 想修改什么 | 从哪里开始 | 验证入口 |
 | --- | --- | --- |
 | 登录、会话、账号隔离 | `backend/auth.py`、`demo/src/AuthGate.tsx`、`demo/src/api.ts` | `backend/tests/test_auth_integration.py`、`demo/tests/api.test.mjs`、Web 账户切换测试 |
-| 收藏增删改、版本冲突 | `backend/app.py`、`backend/store.py`；前端见[责任地图](demo/README.md#代码责任地图) | `backend/tests/test_api.py`、`demo/browser/web-app.spec.ts` |
+| 收藏增删改、版本冲突 | `backend/services/collections.py`、`backend/contracts.py`；前端见[责任地图](demo/README.md#代码责任地图) | `backend/tests/test_api.py`、`demo/browser/web-app.spec.ts` |
 | 生成任务调度、生成流水线、结果发布 | [后端责任地图](backend/README.md#生成业务责任地图) | `backend/tests/test_jobs.py` |
-| 原图与模型存储、授权读取 | `backend/object_storage.py`、`backend/store.py`、`backend/app.py` | 后端对象存储与账号隔离测试 |
+| 原图与模型存储、授权读取 | `backend/object_storage.py`、`backend/store.py`、`backend/api.py` | 后端对象存储与账号隔离测试 |
 | 页面路由、探索、朋友分享、展示组件 | [前端责任地图](demo/README.md#代码责任地图) | `npm run check:runtime`、`npm run test:unit`、`npm run test:web`、`npm run build`（在 `demo` 执行） |
-| 浮雕展示与模型加载 | `demo/src/ReliefViewer.tsx`、`demo/src/api.ts` | `demo/tests/relief-angle.test.mjs`、Web 浮雕测试 |
+| 浮雕展示、加载失败与正文超时 | `demo/src/features/relief/`、`demo/src/ReliefViewer.tsx`、`demo/src/api.ts` | `demo/reliability/failures.spec.ts`、角度与 API 测试 |
+| 账户初始化、状态与资料 | `backend/accounts.py`、`backend/state.py`、`backend/services/profiles.py` | 后端账户测试；前端 `useAccountWorkspace.ts` 相关 Web 回归 |
+| 分享、社区互动 | `backend/services/social.py`、`demo/src/features/shares/`、`demo/src/features/explore/` | API 与 Web 分享/探索回归 |
+| 账户备份与隔离恢复 | `backend/backups.py`、`scripts/restore-account-backup.py` | `backend/tests/test_backup_restore.py`、真实生成闭环测试 |
 | 制品准备、发布激活与回滚 | `scripts/deploy-ubuntu.ps1`、`deploy/ubuntu/prepare-release.py`、`deploy/ubuntu/activate.sh` | `deploy/ubuntu/tests/test_deployment.py`；真实服务器另行验收 |
 
 修改前先沿对应入口追踪调用和测试。公共规则只保留一个实现：前端网络请求集中于 `api.ts`，业务写操作共用账户级协调入口；后端网络与推理不占 SQLite 写事务，最终发布保留账户、任务、输入版本和原图校验。生产目前只支持一个应用进程与一个生成 worker，模块拆分不意味着可以直接增加 worker 数量。
 
-## 后续解耦与恢复验证
+## 解耦与恢复验证
 
-首轮拆分生成流程、路由及探索/分享展示；账户状态协调、收藏编辑、后端 HTTP 路由与其业务 SQL 仍有集中职责。后续按以下顺序完成独立修改单元，每项先保持契约并验证，再提交：
+账户协调、收藏编辑、后台生成、业务服务、HTTP 适配、备份恢复与部署事务已经分开。`app.py` 负责装配，`api.py` 负责请求/响应，`services/` 负责业务事务，`store.py` 负责数据库与授权存取；前端账户 hook 统一管理状态与操作锁，业务组件接收所需数据和动作。
 
-1. 在生成执行与发布边界上解决 **F01**：保留已生成结果，有限预算重试最终事务，每次重新检查归属与版本；验证事务开始和提交失败、写入失败状态再次失败、持续故障。
-2. 解决 **F02**：引入任务级取消，在阶段边界和推理子进程中响应删除/换图；保留服务停止后的重启恢复语义，实测取消时延。
-3. 为浮雕加载建立 **F03** 错误隔离，验证失败的 lazy Promise 确实能重新加载。**F04** 的 API 正文与模型超时已有实现，补挂起正文、忙状态释放、草稿保留和退出/换号回归。
-4. 集中提取前端账户状态协调（初始化、轮询、revision、单写锁），再提取收藏编辑器。后端再按收藏、探索/分享、备份拆路由和业务逻辑；共享存储和鉴权保持单一入口，不给每个功能复制一套状态或权限规则。
-5. 更新 **F05/F06**：激活脚本已有锁，继续验证真实锁竞争，并处理制品准备的并发/中断与激活阶段可捕获信号恢复。强杀和断电需要另行设计恢复流程。
-6. 持续补 **F07** 的完整业务和故障恢复证据，包括隔离目录备份恢复、真实生成与双账号媒体/任务隔离。模拟测试与历史验收不替代新改动的必要验证。
+F01—F07 的实现、验收映射、复现命令及边界集中在[可靠性与解耦验收](docs/可靠性与解耦验收.md)。本分支提供有界结果发布重试、任务级取消、浮雕加载隔离、完整正文超时、发布互斥和信号恢复，并验证真实 CPU 生成、隔离备份恢复及两个账户的资源隔离。
 
-以上是待完成工作，不是本轮结构拆分已解决的缺陷。最新运行状态与线上验证仍以部署验收记录为准。
+代码与测试通过不等于已部署。当前分支保留在 PR 中待用户 review，生产运行状态仍以部署验收记录和现场查询为准；没有因此启动 EC2 或变更自动关机规则。
 
 ## 服务器与运行
 
