@@ -36,6 +36,20 @@ Cognito 提供邮箱密码、验证码确认、重置密码以及 Google 联合�
 
 部署入口与配置切换见 [Ubuntu 部署说明](../deploy/ubuntu/README.md)，实时资源定位见[项目运行信息](../.agents/skills/memoverse-delivery/references/project-context.md)。不得将真实配置或凭据写入 Git。
 
+## 生成业务责任地图
+
+| 模块 | 负责什么 | 边界 |
+| --- | --- | --- |
+| `jobs.py` | `JobWorker` 的线程、唤醒、停止与一次任务的协调；引擎可用性入口 | 应用仍从这里创建 worker；不在调度层展开 SQL 或文件流水线 |
+| `generation/repository.py` | 启动恢复、领取任务、最终结果发布的数据库事务 | 每次发布核对账户、任务、输入版本与原图；只在短事务内写库 |
+| `generation/pipeline.py` | 下载原图、调用生成器、校验产物、上传不可变模型文件 | 完成全部上传后才返回模型结果，不自行发布数据库状态 |
+| `relief_engine.py` | 推理子进程、超时与进程终止 | 生成算法与进程执行入口，保持资源清理 |
+| `object_storage.py` | 本地/S3 对象访问与完整性校验 | 存储 I/O 不占任务写事务 |
+
+调用顺序是 `JobWorker → repository 领取 → pipeline 执行 → repository 发布`。账户初始化、数据库 schema 和通用权限查询仍由 `store.py` 负责，HTTP 协议与业务路由仍在 `app.py`；这两处后续应按业务逐步拆分，勿将它们视为已经解耦完成。
+
+本轮提取不改变任务状态机，也不引入多 worker 租约。最终写库失败后的同进程恢复（F01）、运行中的任务级取消（F02）仍待独立实现和故障验证；现有删除/换图的最终版本检查必须一直保留。
+
 ## 开发验证
 
 Python 3.12/3.13，依赖放 `backend/.venv`。配置有效身份服务和模板后，开发可显式选择 `MEMOVERSE_STORAGE=local`，通过 Vite `/api` 代理同源访问；生产验收在 EC2 进行。

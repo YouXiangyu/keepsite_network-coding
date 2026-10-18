@@ -39,14 +39,25 @@ def test_model_is_published_only_after_all_files_are_stored(workspace, monkeypat
     client, worker, app, _ = workspace
     item = create_collection(client)
     put = app.state.store.storage.put_file
+    download = app.state.store.storage.download
     calls = []
-    def observe(key, path, digest, mime):
+    def assert_processing_without_write_lock():
         assert current(client, item)["generation"] == "processing"
         assert "modelUrl" not in current(client, item)
         with app.state.store.transaction(True):
             pass
+    def observe_download(*args):
+        assert_processing_without_write_lock()
+        return download(*args)
+    def observe_inference(*args, **kwargs):
+        assert_processing_without_write_lock()
+        return fixture_generate(*args, **kwargs)
+    def observe(key, path, digest, mime):
+        assert_processing_without_write_lock()
         calls.append(key)
         return put(key, path, digest, mime)
+    monkeypatch.setattr(app.state.store.storage, "download", observe_download)
+    monkeypatch.setattr(relief_engine, "generate_relief", observe_inference)
     monkeypatch.setattr(app.state.store.storage, "put_file", observe)
     assert worker.run_one()
     ready = current(client, item)
