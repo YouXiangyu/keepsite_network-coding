@@ -32,6 +32,16 @@ def _matches(current, job):
                 and current["input_revision"] == job["input_revision"] and current["asset_id"] == job["asset_id"])
 
 
+def is_current(store: Store, job):
+    """Check after registering cancellation, closing the claim/register race."""
+    with store.transaction(timeout=1) as db:
+        current = db.execute("SELECT * FROM collections WHERE user_id=? AND id=?", (job["user_id"], job["collection_id"])).fetchone()
+        persisted = db.execute("SELECT * FROM jobs WHERE user_id=? AND id=?", (job["user_id"], job["id"])).fetchone()
+        return bool(_matches(current, job) and persisted and persisted["status"] == "processing"
+                    and persisted["collection_id"] == job["collection_id"]
+                    and persisted["input_revision"] == job["input_revision"] and persisted["asset_id"] == job["asset_id"])
+
+
 def claim_next(store: Store, status) -> ClaimResult:
     with store.transaction(True) as db:
         if not status["available"]:
@@ -55,13 +65,31 @@ def claim_next(store: Store, status) -> ClaimResult:
     return ClaimResult(progressed=True, task=GenerationTask(job=job, asset=asset))
 
 
-def finalize(store: Store, job, model, error: str, is_stopping: Callable[[], bool]):
-    with store.transaction(True) as db:
+def finalize(store: Store, job, model, error: str, is_stopping: Callable[[], bool], *, timeout=1):
+    with store.transaction(True, timeout=timeout) as db:
         current = db.execute("SELECT * FROM collections WHERE user_id=? AND id=?", (job["user_id"], job["collection_id"])).fetchone()
-        if not _matches(current, job):
-            db.execute("UPDATE jobs SET status='cancelled',updated_at=? WHERE user_id=? AND id=?", (now_ms(), job["user_id"], job["id"]))
-        elif error:
-            state = "queued" if is_stopping() else "failed"
+        persisted = db.execute("SELECT * FROM jobs WHERE user_id=? AND id=?", (job["user_id"], job["id"])).fetchone()
+        if not persisted:
+            return
+        if (not _matches(current, job) or persisted["status"] == "cancelled"
+                or persisted["collection_id"] != job["collection_id"]
+                or persisted["input_revision"] != job["input_revision"] or persisted["asset_id"] != job["asset_id"]):
+            if persisted["status"] not in {"cancelled", "ready"}:
+                db.execute("UPDATE jobs SET status='cancelled',updated_at=? WHERE user_id=? AND id=?", (now_ms(), job["user_id"], job["id"]))
+                store.bump(db, job["user_id"])
+            return
+        # A commit can succeed even when its caller receives an exception.
+        # Replaying the same completion must not cancel or republish that result.
+        if persisted["status"] == "ready":
+            if model and persisted["model_id"] == model["id"] and current["model_id"] == model["id"]:
+                return
+            raise RuntimeError("生成任务已由不同结果完成。")
+        state = "queued" if is_stopping() else "failed"
+        if error and persisted["status"] == state and persisted["error"] == ("" if state == "queued" else error):
+            return
+        if persisted["status"] != "processing":
+            raise RuntimeError("生成任务状态已改变，拒绝发布旧结果。")
+        if error:
             db.execute("UPDATE jobs SET status=?,error=?,result=NULL,updated_at=? WHERE user_id=? AND id=?", (state, "" if state == "queued" else error, now_ms(), job["user_id"], job["id"]))
             store.bump(db, job["user_id"])
         else:

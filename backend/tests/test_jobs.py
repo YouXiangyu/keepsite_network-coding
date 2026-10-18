@@ -51,6 +51,7 @@ def test_model_is_published_only_after_all_files_are_stored(workspace, monkeypat
         return download(*args)
     def observe_inference(*args, **kwargs):
         assert_processing_without_write_lock()
+        assert worker.run_one() is False  # The in-flight task is never reclaimed.
         return fixture_generate(*args, **kwargs)
     def observe(key, path, digest, mime):
         assert_processing_without_write_lock()

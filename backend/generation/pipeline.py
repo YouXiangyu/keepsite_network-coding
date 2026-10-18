@@ -5,22 +5,23 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
-import threading
 
 from ..object_storage import ObjectStore, sha_file
 from ..template import canonical, portable, safe_file, validate_model_outputs
+from .cancellation import Cancellation
 
 
-def prepare_model(storage: ObjectStore, temporary_root: Path, asset, stop_event: threading.Event):
+def prepare_model(storage: ObjectStore, temporary_root: Path, asset, cancellation: Cancellation):
     from ..relief_engine import generate_relief
     with tempfile.TemporaryDirectory(prefix="generation-", dir=temporary_root) as temporary:
         folder = Path(temporary)
         source = folder / ("original" + Path(asset["object_key"]).suffix)
+        cancellation.check()
         storage.download(asset["object_key"], source, asset["id"])
-        if stop_event.is_set():
-            raise RuntimeError("服务停止，生成任务将在下次启动时恢复。")
+        cancellation.check()
         output = folder / "output"
-        result = generate_relief(source, output, cancel_event=stop_event)
+        result = generate_relief(source, output, cancel_event=cancellation)
+        cancellation.check()
         model_path = safe_file(output, "model.glb")
         if Path(result["model_path"]).resolve() != model_path.resolve():
             raise RuntimeError("生成程序返回了非当前任务的模型文件。")
@@ -33,11 +34,11 @@ def prepare_model(storage: ObjectStore, temporary_root: Path, asset, stop_event:
         model_id = hashlib.sha256(canonical({"assetId": asset["id"], "files": records, "camera": geometry["camera"]})).hexdigest()
         files = []
         for record in records:
-            if stop_event.is_set():
-                raise RuntimeError("服务停止，生成任务将在下次启动时恢复。")
+            cancellation.check()
             key = f"models/{model_id}/{record['name']}"
             mime = "model/gltf-binary" if record["name"].endswith(".glb") else "application/json" if record["name"].endswith(".json") else "application/octet-stream"
             storage.put_file(key, safe_file(output, record["name"]), record["sha256"], mime)
+            cancellation.check()
             files.append({"path": key, "size": record["size"], "sha256": record["sha256"]})
         return {"id": model_id, "assetId": asset["id"], "path": f"models/{model_id}/model.glb",
                 "depthPath": f"models/{model_id}/depth.npy", "geometryPath": f"models/{model_id}/geometry.json",

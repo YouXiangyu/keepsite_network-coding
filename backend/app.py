@@ -167,6 +167,7 @@ def create_app(data_dir: Path | None = None, run_worker: bool = True, *, auth_pr
             store.bump(db, user_id)
         response = store.state(db, user_id)
         response["generationEngine"] = engine_status()
+        response["generationRecovery"] = worker.recovery_for(user_id)
         return response
 
     @app.get("/api/health")
@@ -251,6 +252,9 @@ def create_app(data_dir: Path | None = None, run_worker: bool = True, *, auth_pr
                     db.execute("UPDATE jobs SET status='cancelled',updated_at=? WHERE user_id=? AND id=? AND status!='ready'", (now_ms(), user_id, row["job_id"]))
                 store.enqueue(db, user_id, identifier, asset_id, revision)
             result = state_for(db, user_id, changed=True)
+        if regenerate and row["job_id"]:
+            worker.cancel(user_id, row["job_id"])
+            result["generationRecovery"] = worker.recovery_for(user_id)
         worker.wake()
         return result
 
@@ -263,7 +267,11 @@ def create_app(data_dir: Path | None = None, run_worker: bool = True, *, auth_pr
                 raise StoreError(409, "收藏已更新，请刷新后再删除。")
             db.execute("DELETE FROM collections WHERE user_id=? AND id=?", (user_id, identifier))
             db.execute("UPDATE jobs SET status='cancelled',updated_at=? WHERE user_id=? AND collection_id=? AND status!='ready'", (now_ms(), user_id, identifier))
-            return state_for(db, user_id, changed=True)
+            result = state_for(db, user_id, changed=True)
+        if row["job_id"]:
+            worker.cancel(user_id, row["job_id"])
+            result["generationRecovery"] = worker.recovery_for(user_id)
+        return result
 
     @app.post("/api/collections/{identifier}/retry-generation")
     def retry(request: Request, identifier: str):
@@ -273,10 +281,14 @@ def create_app(data_dir: Path | None = None, run_worker: bool = True, *, auth_pr
             if not row["job_id"]:
                 raise StoreError(422, "此模板模型已经就绪，无需重新生成。")
             job = store.job(db, user_id, row["job_id"])
-            changed = job["status"] in {"failed", "blocked"}
+            pending = worker.has_completion(user_id, job["id"])
+            changed = not pending and job["status"] in {"failed", "blocked"}
             if changed:
                 db.execute("UPDATE jobs SET status='queued',error='',updated_at=? WHERE user_id=? AND id=?", (now_ms(), user_id, job["id"]))
             result = state_for(db, user_id, changed=changed)
+        if pending:
+            worker.retry_publication(user_id, job["id"])
+            result["generationRecovery"] = worker.recovery_for(user_id)
         worker.wake()
         return result
 

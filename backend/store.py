@@ -119,15 +119,15 @@ class Store:
                 db.execute("INSERT OR IGNORE INTO meta VALUES (?,?)", (key, value))
             db.commit()
 
-    def connect(self):
-        db = sqlite3.connect(self.database, timeout=15)
+    def connect(self, *, timeout=15):
+        db = sqlite3.connect(self.database, timeout=timeout)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys=ON")
         return db
 
     @contextmanager
-    def transaction(self, write=False):
-        db = self.connect()
+    def transaction(self, write=False, *, timeout=15):
+        db = self.connect(timeout=timeout)
         try:
             db.execute("BEGIN IMMEDIATE" if write else "BEGIN")
             yield db
