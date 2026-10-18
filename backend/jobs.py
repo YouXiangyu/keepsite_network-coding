@@ -3,10 +3,12 @@ from __future__ import annotations
 import logging
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 
 from .generation.cancellation import Cancellation, GenerationCancelled
 from .generation.pipeline import prepare_model
+from .generation.observability import RunObservations
 from .generation.repository import claim_next, finalize, is_current, recover_interrupted
 from .store import Store
 
@@ -24,6 +26,8 @@ class PendingCompletion:
     cancellation: Cancellation
     publication_error: str = ""
     retry_requested: bool = False
+    attempt_id: str = ""
+    was_paused: bool = False
 
 
 def engine_status():
@@ -37,6 +41,7 @@ def engine_status():
 class JobWorker:
     def __init__(self, store: Store):
         self.store = store
+        self.observations = RunObservations()
         self.stop_event = threading.Event()
         self.wake_event = threading.Event()
         self.lock = threading.Lock()
@@ -124,17 +129,25 @@ class JobWorker:
         with self.lock:
             self.active[key] = cancellation
         model, error = None, ""
+        started, attempt_id, outcome = None, "", "failed"
         try:
             try:
                 if not is_current(self.store, job):
                     return True
+                attempt_id = str(uuid.uuid4())
+                started = self.observations.clock()
                 model = prepare_model(self.store.storage, self.store.root / "tmp", asset, cancellation)
+                outcome = "succeeded"
             except Exception as exc:
+                outcome = "cancelled" if cancellation.cancelled.is_set() else "interrupted" if self.stop_event.is_set() else "failed"
                 if not isinstance(exc, GenerationCancelled) and not self.stop_event.is_set():
                     log.exception("AnyImage job %s failed", job["id"])
                 error = str(exc)[-500:] or "生成失败，原图已保留。"
+            finally:
+                if started is not None:
+                    self.observations.finished(attempt_id, started, outcome)
             # Only publication is retried; the completed pipeline is never rerun.
-            self._publish(PendingCompletion(job, model, error, cancellation))
+            self._publish(PendingCompletion(job, model, error, cancellation, attempt_id=attempt_id))
         finally:
             with self.lock:
                 self.active.pop(key, None)
@@ -163,12 +176,19 @@ class JobWorker:
             else:
                 with self.lock:
                     self.pending.pop(key, None)
+                if completion.was_paused:
+                    self.observations.record("publication_recovered", attemptId=completion.attempt_id)
                 return
             if attempt + 1 < PUBLICATION_ATTEMPTS:
                 remaining = deadline - time.monotonic()
                 if remaining > 0:
                     self.stop_event.wait(min(0.25 * (attempt + 1), remaining))
+        paused = False
         with self.lock:
             if key in self.pending:
                 completion.publication_error = "生成结果尚未写入数据库，自动恢复已暂停。请点击重试恢复保存；不会重复推理或上传。"
+                completion.was_paused = True
+                paused = True
+        if paused:
+            self.observations.record("publication_paused", attemptId=completion.attempt_id)
         log.error("Publication recovery exhausted for job %s; explicit retry or service restart required", completion.job["id"])
