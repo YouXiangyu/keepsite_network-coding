@@ -8,7 +8,8 @@ from __future__ import annotations
 import numpy as np
 
 
-def whole_image_relief(depth, valid, foreground, *, amplitude=0.32, transition_pixels=2.0):
+def whole_image_relief(depth, valid, foreground, *, amplitude=0.32, transition_pixels=2.0,
+                       low_percentile=2, high_percentile=98, background_flatten=1.0):
     """Keep globally normalized scene geometry, flattening only the background.
 
     Heights are artistic offsets from the original far plane, not metric depth.
@@ -25,6 +26,10 @@ def whole_image_relief(depth, valid, foreground, *, amplitude=0.32, transition_p
     if (not np.isfinite([amplitude, transition_pixels]).all()
             or amplitude <= 0 or transition_pixels < 0):
         raise ValueError('amplitude must be positive and transition_pixels nonnegative and finite')
+    if (not np.isfinite([low_percentile, high_percentile, background_flatten]).all()
+            or not 0 <= low_percentile < high_percentile <= 100
+            or not 0 <= background_flatten <= 1):
+        raise ValueError('percentiles must be ordered in 0..100 and background_flatten in 0..1')
     selected = valid & np.isfinite(depth) & (depth > 0)
     if selected.sum() < 16:
         raise ValueError('whole-image relief requires at least sixteen valid depth samples')
@@ -33,18 +38,21 @@ def whole_image_relief(depth, valid, foreground, *, amplitude=0.32, transition_p
         inverse[selected] = 1.0 / depth[selected]
     if not np.isfinite(inverse[selected]).all():
         raise ValueError('whole-image inverse depth exceeds the supported numeric range')
-    low, high = np.percentile(inverse[selected], [2, 98])
+    low, high = np.percentile(inverse[selected], [low_percentile, high_percentile])
     if high - low < 1e-8:
         raise ValueError('whole-image depth is effectively flat; no relief range is available')
     original = np.clip((inverse - low) / (high - low), 0, 1) * amplitude
     original[~selected] = 0
     distance = distance_transform_edt(np.pad(foreground, 1))[1:-1, 1:-1]
     weights = np.ones(depth.shape) if transition_pixels == 0 else np.minimum(distance / transition_pixels, 1)
-    heights = np.where(foreground & selected, original * weights, 0)
+    foreground_weights = np.where(foreground, weights, 0)
+    heights = original * ((1 - background_flatten) + background_flatten * foreground_weights)
     stable = foreground & selected & (weights == 1)
     transition = foreground & selected & (weights < 1)
     return heights, {
-        'normalization': 'whole-image valid inverse depth, percentiles 2 and 98',
+        'normalization': 'whole-image valid inverse depth',
+        'percentiles': [float(low_percentile), float(high_percentile)],
+        'background_flatten': float(background_flatten),
         'inverse_depth_percentiles': [float(low), float(high)],
         'original_height_range': [float(original[selected].min()), float(original[selected].max())],
         'amplitude': float(amplitude), 'transition_pixels': float(transition_pixels),

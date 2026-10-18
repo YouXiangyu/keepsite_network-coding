@@ -39,10 +39,13 @@ def augmentations(passes):
     return [(scale, flipped) for scale in scales[passes] for flipped in (False, True)]
 
 
-def unique_views(image, preset):
+def unique_views(image, preset, *, scales=None, mirror=True):
     """Do not spend extra passes on duplicate pixels after bounded resizing."""
     seen = set()
-    for scale, flipped in augmentations(preset['passes']):
+    views = augmentations(preset['passes']) if scales is None else [
+        (scale, flipped) for scale in scales for flipped in ((False, True) if mirror else (False,))
+    ]
+    for scale, flipped in views:
         sample = image.copy()
         side = max(32, round(preset['side'] * scale))
         sample.thumbnail((side, side), Image.Resampling.BICUBIC)
@@ -74,12 +77,14 @@ def resize_prediction(depth, valid, shape):
     return resized_depth, selected
 
 
-def fuse_predictions(predictions):
-    """Align each full-frame inverse-depth range to the first, then median-fuse.
+def fuse_predictions(predictions, *, method='median'):
+    """Align full-frame inverse-depth ranges, then fuse by median or mean.
 
     All images must already be unflipped. Alignment is global, never per object.
     A pixel needs at least half of the requested views to provide valid depth.
     """
+    if method not in ('median', 'mean'):
+        raise ValueError('fusion method must be median or mean')
     if not predictions:
         raise ValueError('at least one prediction is required')
     reference, reference_valid = resize_prediction(*predictions[0], predictions[0][0].shape)
@@ -113,7 +118,12 @@ def fuse_predictions(predictions):
     valid = np.isfinite(stack).sum(axis=0) >= math.ceil(len(predictions) / 2)
     with warnings.catch_warnings():
         warnings.filterwarnings('ignore', message='All-NaN slice encountered', category=RuntimeWarning)
-        inverse = np.nanmedian(stack, axis=0)
+        if method == 'median':
+            inverse = np.nanmedian(stack, axis=0)
+        else:
+            counts = np.isfinite(stack).sum(axis=0)
+            inverse = np.divide(np.nansum(stack, axis=0), counts,
+                                out=np.full(reference.shape, np.nan), where=counts > 0)
     valid &= np.isfinite(inverse) & (inverse > 0)
     depth = np.zeros_like(inverse)
     depth[valid] = 1 / inverse[valid]

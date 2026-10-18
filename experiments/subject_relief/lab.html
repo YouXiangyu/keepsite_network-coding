@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>本地浮雕实验台 · MemoVerse</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#workspace">跳转到实验台</a>
+    <main class="app-shell">
+      <header class="page-header">
+        <div><p class="eyebrow">MEMOVERSE / LOCAL LAB</p><h1>本地浮雕实验台</h1></div>
+        <p class="header-note">保留整图起伏，只调整背景与模型形状。<br />所有生成在本机运行。</p>
+      </header>
+      <section class="run-bar" aria-label="生成与运行状态">
+        <div class="run-bar-main">
+          <div class="run-copy">
+            <div class="run-headline"><span id="run-state" class="state-badge">正在连接</span><span id="draft-state" class="draft-state">读取参数中…</span></div>
+            <p id="job-message" class="job-message" role="status" aria-live="polite">正在读取本地实验台…</p>
+            <p id="job-detail" class="muted small"></p>
+          </div>
+          <div class="run-actions">
+            <button id="generate-button" class="button primary" type="submit" form="generation-form" disabled>生成模型</button>
+            <button id="cancel-button" class="button danger" type="button" hidden>取消生成</button>
+          </div>
+        </div>
+        <div class="mobile-tabs" role="tablist" aria-label="实验台视图">
+          <button id="parameters-tab" type="button" role="tab" aria-selected="true" aria-controls="parameters-panel">参数设置</button>
+          <button id="results-tab" type="button" role="tab" aria-selected="false" aria-controls="results-panel">结果对照</button>
+        </div>
+      </section>
+      <div id="app-error" class="notice error-notice" role="alert" hidden><p id="app-error-text"></p><button id="refresh-state" class="text-button" type="button">刷新状态</button></div>
+      <div id="app-notice" class="notice" role="status" aria-live="polite" hidden></div>
+      <div id="workspace" class="workspace" data-mobile-view="parameters">
+        <aside id="parameters-panel" class="parameters-panel" aria-labelledby="parameters-tab">
+          <form id="generation-form" novalidate>
+            <section class="panel source-panel" aria-labelledby="source-title">
+              <div class="section-heading"><h2 id="source-title">照片与保留区域</h2><span id="image-size" class="muted small"></span></div>
+              <label for="image-select">选择照片</label>
+              <select id="image-select" disabled><option value="">正在读取照片…</option></select>
+              <label class="upload-label" for="image-file">或上传新照片</label>
+              <input id="image-file" type="file" accept="image/*" disabled />
+              <div id="image-stage" class="image-stage" aria-label="在照片上拖动新增保留框">
+                <img id="source-image" alt="当前待生成照片" draggable="false" hidden />
+                <svg id="boxes-overlay" viewBox="0 0 1000 1000" preserveAspectRatio="none" aria-hidden="true"></svg>
+                <p id="image-placeholder" class="image-placeholder">载入照片后可框选保留区域</p>
+              </div>
+              <p id="boxes-help" class="field-help">在照片上拖动添加保留框；框内区域用于补充保留起伏，最多 8 个。</p>
+              <div class="box-actions"><button id="add-box" class="button subtle" type="button" disabled>添加居中框</button><button id="clear-boxes" class="text-button" type="button" disabled>清除全部框</button><span id="box-count" class="muted small">0 / 8</span></div>
+              <details id="boxes-details" class="boxes-details"><summary>编辑保留框坐标</summary><div id="box-list"></div></details>
+              <div id="mask-upload" class="mask-upload" hidden>
+                <label for="mask-select">黑白保留蒙版</label>
+                <select id="mask-select"><option value="">选择已上传蒙版</option></select>
+                <label class="upload-label" for="mask-file">上传蒙版</label>
+                <input id="mask-file" type="file" accept="image/*" />
+                <p id="mask-note" class="field-help">白色保留起伏，黑色压平；须与照片方向和宽高比一致。</p>
+                <img id="mask-preview" class="mask-preview" alt="当前黑白保留蒙版" hidden />
+              </div>
+              <p id="mask-mode-note" class="field-help"></p>
+            </section>
+            <section class="panel settings-panel" aria-labelledby="settings-title">
+              <div class="section-heading"><h2 id="settings-title">生成参数</h2><span id="preset-status" class="muted small">—</span></div>
+              <p class="field-help">修改参数后需要重新生成。下方参数决定模型文件；右侧显示设置仅改变观察方式。</p>
+              <div id="preset-buttons" class="preset-buttons" role="group" aria-label="填入生成预设"></div>
+              <p id="expected-passes" class="expected-passes">正在读取推理设置…</p>
+              <div id="parameter-groups"></div>
+              <label class="run-title-label" for="run-title">运行名称 <span class="muted">（可选）</span></label>
+              <input id="run-title" type="text" maxlength="120" placeholder="留空使用照片与时间命名" />
+              <p class="field-help">推理精度不等于凸起高度；更高档位会改变计算预算，不保证视觉效果更好。</p>
+            </section>
+          </form>
+        </aside>
+        <section id="results-panel" class="results-panel" aria-labelledby="results-tab">
+          <section class="panel comparison-panel" aria-labelledby="comparison-title">
+            <div class="section-heading"><h2 id="comparison-title">模型对照</h2><span class="muted small">同步正交视角</span></div>
+            <div class="display-controls" aria-label="即时显示设置">
+              <div class="view-buttons" role="group" aria-label="观察角度"><button id="display-front" class="button subtle" type="button" aria-pressed="false">正面</button><button id="display-angle" class="button subtle" type="button" aria-pressed="true">斜侧</button></div>
+              <label class="check-control"><input id="display-texture" type="checkbox" />照片纹理</label>
+              <label class="range-control" for="display-height"><span>显示 Z 倍率</span><input id="display-height" type="range" min="1" max="3" step="0.1" value="1" /><output id="display-height-value" for="display-height">1.0×</output></label>
+              <label class="range-control" for="display-light"><span>侧光强度</span><input id="display-light" type="range" min="0.2" max="2.5" step="0.1" value="1" /><output id="display-light-value" for="display-light">1.0×</output></label>
+            </div>
+            <p class="field-help">拖动旋转，滚轮缩放；选中模型后也可用方向键与 + / −。视角偏离最多 40°，显示设置不修改模型文件。</p>
+            <p id="retained-result-note" class="retained-result-note" hidden></p>
+            <div class="model-grid">
+              <article class="model-card">
+                <div class="model-heading"><label for="left-result">左侧模型</label><select id="left-result" disabled><option value="">暂无结果</option></select><h3 id="left-title">等待模型</h3></div>
+                <div id="left-viewport" class="model-viewport"><p id="left-model-status" class="model-status" role="status">选择已有模型开始对照</p></div>
+                <p id="left-summary" class="model-summary"></p>
+                <div class="download-links"><a id="left-model-download" hidden>下载 GLB</a><a id="left-parameters-download" hidden>参数 JSON</a></div>
+              </article>
+              <article class="model-card">
+                <div class="model-heading"><label for="right-result">右侧模型</label><select id="right-result" disabled><option value="">暂无结果</option></select><h3 id="right-title">等待模型</h3></div>
+                <div id="right-viewport" class="model-viewport"><p id="right-model-status" class="model-status" role="status">生成后，新结果会显示在这里</p></div>
+                <p id="right-summary" class="model-summary"></p>
+                <div class="download-links"><a id="right-model-download" hidden>下载 GLB</a><a id="right-parameters-download" hidden>参数 JSON</a></div>
+              </article>
+            </div>
+            <details id="result-images-details" class="result-images-details" hidden><summary>查看右侧结果使用的照片与保留区域</summary><div class="result-image-grid"><figure><img id="result-original" alt="右侧模型实际使用的照片" /><figcaption>生成时的输入照片</figcaption></figure><figure><img id="result-overlay" alt="右侧模型实际使用的保留区域" /><figcaption>色块已合为保留起伏区域，颜色不代表凹凸。</figcaption></figure></div></details>
+          </section>
+          <section class="panel diff-panel" aria-labelledby="diff-title">
+            <div class="section-heading"><h2 id="diff-title">两侧参数差异</h2><span class="muted small">来自已生成结果</span></div>
+            <p id="diff-empty" class="field-help">两侧选择模型后，只显示不同的生成参数。</p>
+            <div id="diff-table-wrap" class="table-wrap" tabindex="0" role="region" aria-label="模型参数差异，可横向滚动" hidden><table><thead><tr><th scope="col">参数</th><th id="diff-left-label" scope="col">左侧</th><th id="diff-right-label" scope="col">右侧</th></tr></thead><tbody id="diff-rows"></tbody></table></div>
+          </section>
+          <section class="panel history-panel" aria-labelledby="history-title">
+            <div class="section-heading"><h2 id="history-title">运行记录</h2><button id="history-refresh" class="text-button" type="button">刷新</button></div>
+            <label for="history-select">选择历史运行</label>
+            <select id="history-select" disabled><option value="">暂无运行记录</option></select>
+            <div class="history-actions"><button id="load-parameters" class="button subtle" type="button" disabled>载入这次参数</button><button id="show-history-result" class="button subtle" type="button" disabled>在右侧查看</button></div>
+            <p id="history-summary" class="field-help">生成任务及参数会保留在本地，刷新页面可以继续查看。</p>
+            <p id="history-cache" class="cache-summary"></p>
+            <p id="history-error" class="inline-error" hidden></p>
+          </section>
+          <p class="workspace-footer">这是照片浮雕实验，不代表完整的 360° 物体重建。关闭页面只停止查看，不会取消正在运行的任务。</p>
+        </section>
+      </div>
+      <noscript><p class="notice error-notice">此实验台需要启用 JavaScript。</p></noscript>
+    </main>
+    <script type="module" src="./lab.bundle.js"></script>
+  </body>
+</html>

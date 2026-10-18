@@ -166,10 +166,13 @@ def _validate_prediction(semantic_map, confidence_map, labels_by_id, image_shape
         raise ValueError(f"Semantic adapter returned IDs without labels: {sorted(unknown_ids)}.")
 
 
-def _refine_mask(image_rgb: np.ndarray, mask: np.ndarray) -> tuple[np.ndarray, dict]:
+def _refine_mask(image_rgb: np.ndarray, mask: np.ndarray, *, radius=0, iterations=3) -> tuple[np.ndarray, dict]:
     """Shrink only the uncertain inner rim; preserve core, holes and exclusion."""
     height, width = mask.shape
-    radius = max(1, round(min(height, width) / 256))
+    if (isinstance(radius, bool) or not isinstance(radius, int) or not 0 <= radius <= 12
+            or isinstance(iterations, bool) or not isinstance(iterations, int) or not 1 <= iterations <= 10):
+        raise ValueError('refinement radius must be 0..12 and iterations 1..10')
+    radius = radius or max(1, round(min(height, width) / 256))
     rows, columns = np.flatnonzero(mask.any(axis=1)), np.flatnonzero(mask.any(axis=0))
     if not len(rows):
         raise RefinementError("Cannot refine an empty subject mask.")
@@ -202,7 +205,7 @@ def _refine_mask(image_rgb: np.ndarray, mask: np.ndarray) -> tuple[np.ndarray, d
         cv2.grabCut(
             np.ascontiguousarray(work_image), graph_labels, None,
             np.zeros((1, 65), np.float64), np.zeros((1, 65), np.float64),
-            3, cv2.GC_INIT_WITH_MASK,
+            iterations, cv2.GC_INIT_WITH_MASK,
         )
     except cv2.error as exc:
         raise RefinementError(f"GraphCut boundary refinement failed: {exc}") from exc
@@ -220,6 +223,7 @@ def _refine_mask(image_rgb: np.ndarray, mask: np.ndarray) -> tuple[np.ndarray, d
     return refined, {
         "method": "graphcut-inner-boundary",
         "radius_pixels": radius,
+        "iterations": iterations,
         "working_size": list(working_size),
         "removed_pixels": int(mask.sum() - refined.sum()),
         "added_pixels": 0,
@@ -374,6 +378,9 @@ def automatic_foreground(
     min_component_fraction: float = 0.02,
     preserve_mask: np.ndarray | None = None,
     refine: bool = True,
+    refine_radius: int = 0,
+    refine_iterations: int = 3,
+    prediction=None,
 ) -> tuple[np.ndarray, dict]:
     """Make one foreground mask for a shared, whole-image depth prediction.
 
@@ -387,9 +394,9 @@ def automatic_foreground(
         isinstance(min_component_fraction, bool)
         or not isinstance(min_component_fraction, (int, float))
         or not math.isfinite(min_component_fraction)
-        or not 0 < min_component_fraction <= 1
+        or not 0 <= min_component_fraction <= 1
     ):
-        raise ValueError("min_component_fraction must be finite and in (0, 1].")
+        raise ValueError("min_component_fraction must be finite and in [0, 1].")
     if not isinstance(refine, bool):
         raise ValueError("refine must be a boolean.")
     shape = image_rgb.shape[:2]
@@ -401,7 +408,11 @@ def automatic_foreground(
         raise ValueError("preserve_mask must be a boolean array matching the image height and width.")
     manual = np.zeros(shape, dtype=bool) if preserve_mask is None else preserve_mask.copy()
 
-    semantic_map, confidence_map, labels_by_id, metadata = _infer_semantics(image_rgb, Path(model_dir))
+    # A supplied raw prediction is used by the local cache; validation and all
+    # mask postprocessing remain identical to a fresh model invocation.
+    semantic_map, confidence_map, labels_by_id, metadata = (
+        _infer_semantics(image_rgb, Path(model_dir)) if prediction is None else prediction
+    )
     _validate_prediction(semantic_map, confidence_map, labels_by_id, shape)
     selected_ids = {
         class_id for class_id, label in labels_by_id.items()
@@ -487,7 +498,9 @@ def automatic_foreground(
             "lower the threshold explicitly, or preserve a manual mask.", diagnostics
         )
     if refine and np.any(kept & ~manual):
-        kept, diagnostics["refinement"] = _refine_mask(image_rgb, kept)
+        kept, diagnostics["refinement"] = _refine_mask(
+            image_rgb, kept, radius=refine_radius, iterations=refine_iterations,
+        )
     elif refine:
         diagnostics["refinement"]["method"] = "manual-only-no-automatic-refinement"
     kept |= manual

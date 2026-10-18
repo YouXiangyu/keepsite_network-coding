@@ -308,9 +308,9 @@ def test_foreground_refines_union_once_without_internal_semantic_seam(monkeypatc
     original_refine = subject._refine_mask
     calls = []
 
-    def tracked_refine(rgb, mask):
+    def tracked_refine(rgb, mask, **options):
         calls.append(mask.copy())
-        return original_refine(rgb, mask)
+        return original_refine(rgb, mask, **options)
 
     monkeypatch.setattr(subject, "_refine_mask", tracked_refine)
     mask, diagnostics = subject.automatic_foreground(image, Path("unused"))
@@ -343,7 +343,7 @@ def test_foreground_restores_manual_pixels_after_one_refinement(monkeypatch):
     inject_semantics(monkeypatch, semantic)
     calls = []
 
-    def remove_manual(rgb, mask):
+    def remove_manual(rgb, mask, **options):
         calls.append(1)
         return mask & ~manual, {"method": "test-refinement", "removed_pixels": 4, "added_pixels": 0}
 
@@ -362,7 +362,7 @@ def test_foreground_rechecks_small_components_severed_by_refinement(monkeypatch)
     semantic[35:45, 35:45] = 1
     inject_semantics(monkeypatch, semantic)
 
-    def sever_small_piece(rgb, mask):
+    def sever_small_piece(rgb, mask, **options):
         refined = mask.copy()
         refined[35:40, 35:40] = False
         refined[35:40, 40:45] = False
@@ -388,7 +388,7 @@ def test_foreground_no_subject_is_explicit_with_json_diagnostics(monkeypatch):
 
 
 @pytest.mark.parametrize("arguments", [
-    {"min_component_fraction": 0}, {"min_component_fraction": 1.1},
+    {"min_component_fraction": -0.01}, {"min_component_fraction": 1.1},
     {"min_component_fraction": float("nan")}, {"min_component_fraction": True},
     {"refine": 1}, {"preserve_mask": np.zeros((4, 4), bool)},
     {"preserve_mask": np.zeros((40, 40), np.uint8)},
@@ -403,3 +403,36 @@ def test_foreground_empty_image_fails_before_inference(monkeypatch):
     monkeypatch.setattr(subject, "_infer_semantics", lambda *args: pytest.fail("model must not load"))
     with pytest.raises(ValueError):
         subject.automatic_foreground(np.zeros((0, 40, 3), np.uint8), Path("unused"))
+
+
+def test_foreground_zero_area_threshold_preserves_a_single_pixel_without_inference(monkeypatch):
+    image = np.zeros((40, 40, 3), np.uint8)
+    semantic = np.zeros((40, 40), np.int32)
+    semantic[20, 20] = 1
+    prediction = (semantic, np.ones((40, 40), np.float32), {0: 'floor', 1: 'bed'}, {'cached': True})
+    monkeypatch.setattr(subject, '_infer_semantics', lambda *args: pytest.fail('cached prediction must bypass inference'))
+    mask, diagnostics = subject.automatic_foreground(
+        image, Path('unused'), min_component_fraction=0, refine=False, prediction=prediction,
+    )
+    assert mask.sum() == 1 and mask[20, 20]
+    assert diagnostics['threshold']['fraction'] == 0
+
+
+def test_foreground_refinement_controls_reach_graphcut(monkeypatch):
+    image = np.zeros((80, 100, 3), np.uint8)
+    semantic = np.zeros((80, 100), np.int32)
+    semantic[15:65, 15:85] = 1
+    image[semantic == 1] = 240
+    inject_semantics(monkeypatch, semantic)
+    original = cv2.grabCut
+    iterations = []
+
+    def tracked(*args, **kwargs):
+        iterations.append(args[5])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(cv2, 'grabCut', tracked)
+    _, diagnostics = subject.automatic_foreground(image, Path('unused'), refine_radius=4, refine_iterations=6)
+    assert iterations == [6]
+    assert diagnostics['refinement']['radius_pixels'] == 4
+    assert diagnostics['refinement']['iterations'] == 6
