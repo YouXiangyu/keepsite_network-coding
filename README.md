@@ -76,7 +76,7 @@ F01—F07 的实现、验收映射、复现命令及边界集中在[可靠性与
 
 | 检查 | 内容 |
 | --- | --- |
-| `Backend tests` | Python 3.13 安装固定测试依赖，运行完整 `backend/tests`，覆盖接口、身份与账户隔离、对象存储、任务取消/恢复和备份恢复 |
+| `Backend tests` | Python 3.13 安装固定测试依赖，运行完整 `backend/tests` 与容量基线脚本自测，覆盖接口、身份与账户隔离、对象存储、任务取消/恢复、观测和备份恢复 |
 | `Frontend tests` | Node 24 + `npm ci`，执行单元测试、Web 契约检查、TypeScript/生产构建、Chromium Web 交互及生产构建 HTTP 故障测试 |
 | `deployment-recovery` | Ubuntu 上运行发布恢复测试，包括真实文件锁、进程信号和版本竞争；系统服务使用隔离夹具 |
 

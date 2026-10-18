@@ -76,6 +76,34 @@ backend/.venv/Scripts/python.exe -B scripts/restore-account-backup.py --archive 
 
 恢复目录内含 SQLite 和本地 `objects/`，不会上传 S3、改变 Cognito 或自动切换运行环境。恢复中的 processing/blocked 任务转 queued，重新运行时可继续；新 serverId 让旧客户端识别恢复后的空间。若发布恢复目录时中断，`RESTORE_INCOMPLETE` 标记会阻止应用启动；保留现场检查，另选新目录重新恢复，不手动移除标记冒充完整。
 
+## 生成队列观测
+
+管理员可在服务所在机器读取聚合状态，不需要登录配置或 AWS 凭据：
+
+```powershell
+backend/.venv/Scripts/python.exe -B scripts/inspect-generation.py --data-dir D:/memoverse/data-v2
+```
+
+必须显式指定已存在的绝对数据目录。CLI 以 `mode=ro`、`query_only` 在同一读事务中校验 schema 2 并查询业务数据库；不实例化应用、初始化账户或连接对象存储。活跃数据库读取已提交 WAL，不使用 immutable 模式绕过 WAL。未知 schema、恢复未完成标记和不存在目录均拒绝，不创建业务数据库、不修改业务记录。SQLite 可能创建或管理读取所需的 WAL/SHM 与锁状态，因此这不是保证目录逐字节不变的离线文件取证工具。
+
+输出仅含 `sampledAt`（Unix 毫秒）、六种持久任务状态计数、`waitingDepth`（queued + blocked）和 `oldestWaitingJobAgeSeconds`。最后一项是仍在等待的任务中最老的**创建年龄**，包含历史重试时间，不是本次连续排队时长；空队列为 null。`processing` 包含等待恢复发布的任务，不能等同 CPU 正在推理数；ready/failed 是当前状态数量，不是历史成功率。该命令属于本机运维入口，未增加全局指标 HTTP 接口，也不向每次全量状态响应增加聚合查询。
+
+worker 的 `memoverse.generation.metrics` 专用 INFO 日志输出单行 JSON 到 stderr，可由服务日志收集（例如 `journalctl -u memoverse`，使用实际部署 unit 名）。每个 worker 实例产生独立 `runId`；每次实际执行产生无业务含义的随机 `attemptId`。`generation_attempt_finished` 的 `pipelineDurationSeconds` 用单调时钟测量下载、推理、校验及上传总耗时，排除排队和最终数据库发布；`outcome` 为 succeeded/failed/cancelled/interrupted，`totals` 是该 worker 本轮实际执行的分类累计次数。succeeded 仅表示产物准备成功，不代表最终数据库已 ready；服务重启计数重新开始。
+
+发布恢复耗尽记录 `publication_paused`，后续显式重试成功完成状态核对记录 `publication_recovered`；后者也可能确认任务已经失效，不应当作“新增成功模型”计数。发布重试不重新计算执行次数或流水线耗时。日志不携带用户、收藏、任务业务 ID、文件路径、凭据或原始异常；写入失败不影响任务发布。已有诊断异常日志独立保留，结构化观测事件不是这些诊断日志的脱敏替代品。
+
+## 本机容量基线
+
+在仓库根目录使用项目开发依赖运行合成数据基线，输出必须指定新的文件名：
+
+```powershell
+backend/.venv/Scripts/python.exe -B scripts/benchmark-capacity.py --counts 100 1000 --warmup 5 --samples 30 --sql-samples 3 --temp-root D:/100-code/110-Project/network-coding/.cache/capacity-baseline --output D:/100-code/110-Project/network-coding/.cache/capacity-baseline/result-001.json
+```
+
+脚本通过显式 FakeAuth、临时 SQLite 与 LocalObjectStore 生成两类数据：ready 收藏共享合成模板原图与模型；queued 收藏使用各自的微型 PNG 和未启动任务。worker、真实推理、云存储和备份均不执行。准备、预热与 SQL trace 不计入请求计时；报告包含完整响应正文大小、p50/p95/max、SELECT 数与按当前页面代码推导的图片资源清单。每个测试目录由脚本新建，结束后只清理自己的目录，不接受已有业务库作为工作目录，不覆盖已有报告。
+
+这些是串行 TestClient 的本机基线，不包含真实网络、TLS、Cognito、S3、并发或浏览器解码/渲染；合成图片字节数不代表真实用户照片，也不能作为 t3.small 容量保证。报告记录 Git 提交、工作区是否有未提交改动及运行环境；比较时应使用干净提交和相同画像。首轮不设置未经测量的耗时及格线。脚本的小样本、隔离与报告校验测试随后端 PR CI 一起执行。
+
 ## 开发验证
 
 Python 3.12/3.13，依赖放 `backend/.venv`。配置有效身份服务和模板后，开发可显式选择 `MEMOVERSE_STORAGE=local`，通过 Vite `/api` 代理同源访问；生产验收在 EC2 进行。
