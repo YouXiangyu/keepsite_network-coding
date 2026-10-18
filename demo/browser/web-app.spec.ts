@@ -117,6 +117,22 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
     } else if (path === '/api/profile') data.profile = body;
     else if (path === '/api/shares/read-all') data.shares.forEach(share => { share.unread = false; });
     else if (path.match(/^\/api\/shares\/[^/]+\/read$/)) data.shares.find(share => share.id === path.split('/')[3])!.unread = false;
+    else if (path.match(/^\/api\/community\/[^/]+\/view$/)) data.community.find(item => item.id === path.split('/')[3])!.exposures += 1;
+    else if (path.match(/^\/api\/community\/[^/]+\/like$/) && method === 'PUT') {
+      const item = data.community.find(item => item.id === path.split('/')[3])!;
+      const wasLiked = data.likedCommunityIds.includes(item.id);
+      data.likedCommunityIds = data.likedCommunityIds.filter(id => id !== item.id);
+      if (body.liked) data.likedCommunityIds.push(item.id);
+      item.likes += Number(body.liked) - Number(wasLiked);
+    } else if (path.match(/^\/api\/(community|shares)\/[^/]+\/collect$/) && method === 'POST') {
+      const [, , source, id] = path.split('/');
+      const shared = source === 'shares' ? data.shares.find(share => share.id === id)!.item : undefined;
+      const community = source === 'community' ? data.community.find(item => item.id === id)! : undefined;
+      data.collections.push(shared ? { ...shared, id: `collected-${id}` } : {
+        ...data.collections[0], ...community, id: `collected-${id}`, source: 'friend', sender: community!.author,
+        note: community!.description,
+      });
+    }
     server.revision += 1;
     return respond(route, state());
   });
@@ -421,4 +437,50 @@ test('gallery supporting text retains readable contrast on its light surfaces', 
   });
   expect(ratios.length).toBeGreaterThan(0);
   expect(Math.min(...ratios)).toBeGreaterThanOrEqual(4.5);
+});
+
+
+test('explore filtering survives detail navigation and community actions update the account', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' });
+  await page.goto('/explore');
+  await page.getByRole('group', { name: '探索分类' }).getByRole('button', { name: '旅行', exact: true }).click();
+  await expect(page.locator('.explore-grid .photo-card')).toHaveCount(2);
+  await page.locator('.explore-grid .photo-card').first().click();
+  await expect(page.getByRole('heading', { name: '社区灵感 1', exact: true })).toBeVisible();
+  await expect.poll(() => api.requests.some(request => request.path === '/api/community/community-0/view')).toBeTruthy();
+  await page.getByRole('button', { name: '喜欢这件纪念品', exact: true }).click();
+  await expect(page.getByRole('button', { name: '取消喜欢', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '加入我的收藏', exact: true }).click();
+  await expect(page.getByText('已加入我的收藏', { exact: true })).toBeVisible();
+  const liked = api.requests.find(request => request.path === '/api/community/community-0/like')!;
+  expect(liked.method).toBe('PUT');
+  expect(liked.body).toEqual({ liked: true });
+  expect(liked.headers['x-csrf-token']).toBe('csrf-a');
+  await page.goBack();
+  await expect(page.getByRole('group', { name: '探索分类' }).getByRole('button', { name: '旅行', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.explore-grid .photo-card')).toHaveCount(2);
+  await expect(page.locator('.community-byline').first()).toContainText('21 人喜欢');
+  await page.getByRole('navigation', { name: '主导航', exact: true }).getByRole('link', { name: '我的收藏', exact: true }).click();
+  await expect(page.locator('.recent-grid').getByRole('heading', { name: '社区灵感 1', exact: true })).toBeVisible();
+});
+
+test('shares preserve unread filtering across detail navigation and add the received item to collections', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' });
+  await page.goto('/friends');
+  await page.getByRole('group', { name: '分享筛选' }).getByRole('button', { name: /未查看/ }).click();
+  await expect(page.locator('.friend-card')).toHaveCount(2);
+  await page.locator('.friend-card .photo-card').first().click();
+  await expect(page.getByRole('heading', { name: 'A 的海边', exact: true })).toBeVisible();
+  await expect.poll(() => api.requests.some(request => request.path === '/api/shares/share-0/read')).toBeTruthy();
+  await expect(page.locator('#main-content')).toHaveAttribute('aria-busy', 'false');
+  await page.goBack();
+  await expect(page.getByRole('group', { name: '分享筛选' }).getByRole('button', { name: /未查看/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.friend-card')).toHaveCount(1);
+  await page.getByRole('button', { name: '收藏这份分享', exact: true }).click();
+  await expect(page.getByText('已加入我的收藏', { exact: true })).toBeVisible();
+  const collect = api.requests.find(request => request.path === '/api/shares/share-1/collect')!;
+  expect(collect.method).toBe('POST');
+  expect(collect.headers['x-csrf-token']).toBe('csrf-a');
+  await page.getByRole('navigation', { name: '主导航', exact: true }).getByRole('link', { name: '我的收藏', exact: true }).click();
+  await expect(page.locator('a[href="/collection/collected-share-1"]').first()).toBeVisible();
 });

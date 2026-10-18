@@ -12,6 +12,26 @@
 
 当前测试模板包含 17 件收藏、4 条分享、6 条社区内容。曝光、喜欢和推荐人物仍是测试示例；新用户拥有独立记录和互动，不会自动发布个人新上传。
 
+## 代码责任地图
+
+| 模块 | 修改入口与职责 |
+| --- | --- |
+| `src/App.tsx`、`src/AuthGate.tsx` | 登录门禁、会话续查、按账户挂载/卸载业务树 |
+| `src/api.ts` | 唯一网络入口；超时、CSRF、会话 epoch、请求取消与响应归属校验 |
+| `src/Prototype.tsx` | 应用组装、账户快照/轮询、统一写锁、收藏草稿和操作回调；后续仍需按账户协调与收藏编辑拆分 |
+| `src/app/routes.ts` | 路由类型、解析与导航标签；直接链接的协议入口 |
+| `src/navigation.ts`、`src/app/Link.tsx` | 浏览器历史与应用内链接，保留原生修饰键行为 |
+| `src/features/collections/PhotoCard.tsx`、`presentation.ts` | 收藏卡片、分类和日期显示；不发请求、不维护账户状态 |
+| `src/features/explore/ExplorePage.tsx`、`communityItem.ts` | 探索页展示与社区条目转换；互动通过明确回调交给应用协调 |
+| `src/features/shares/SharesPage.tsx` | 分享页展示；未读筛选与操作仍由应用持有，路由切换保留原有行为 |
+| `src/shared/ui.tsx` | 跨页面纯展示组件；不依赖业务页面、会话或请求层 |
+| `src/ReliefViewer.tsx` | Three.js 模型展示、40° 限制与资源释放；下载仍经过 `api.ts` |
+| `src/data.ts` | 服务端快照的共享数据类型与校验契约 |
+
+页面组件只接受所需数据、忙状态和动作回调，不接收整个账户 store 或各自调用网络。依赖方向为应用组装 → 业务页面 → 共享展示/数据类型；共享组件不反向依赖业务页面。不要为每个页面复制 transport、revision 防倒退逻辑或写锁。
+
+当前拆分保留原有行为：探索分类与未读筛选的状态所有权不迁移，统一写锁仍在 `Prototype`。F03 的懒加载错误隔离、F04 的挂起正文超时回归是后续独立任务，不能因页面提取或构建通过而视为完成。
+
 ## 开发与验证
 
 正式环境运行于 AWS EC2，身份使用 Cognito，文件使用私有 S3。详情见 [后端说明](../backend/README.md)、[API 约定](../docs/local-api-contract.md) 与 [EC2 部署验收](../docs/EC2部署验收.md)。本机开发也使用同源 `/api`，Vite 将其代理至 `127.0.0.1:8000`；无需跨域 Cookie 或旧浏览器迁移配置。后端必须先配置有效身份服务与初始化模板。

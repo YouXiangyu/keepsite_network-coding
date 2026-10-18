@@ -1,91 +1,24 @@
-import { lazy, Suspense, useEffect, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
-import { Books, Compass, Users, User, Plus, Bell, MagnifyingGlass, CaretRight, CaretDown, ArrowLeft, BookmarkSimple, Cloud, GearSix, Camera, PencilSimple, Trash, Check, Heart, Export, WarningCircle, SignOut, ArrowUpRight } from '@phosphor-icons/react';
-import { Art, Tilt } from './art';
+import { lazy, Suspense, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { Plus, Bell, MagnifyingGlass, CaretRight, CaretDown, ArrowLeft, BookmarkSimple, Cloud, GearSix, Camera, PencilSimple, Trash, Check, Heart, Export, WarningCircle, SignOut } from '@phosphor-icons/react';
+import { Art } from './art';
 import { Brand } from './AuthGate';
 import WebDialog from './WebDialog';
-import { type AppData, type Category, type CollectionItem, type CommunityItem } from './data';
+import { type AppData, type Category, type CollectionItem } from './data';
 import { getState, mutate, uploadMedia, downloadBackup, signOut, sessionEpoch, assertSessionEpoch, errorMessage, ApiError, type ServerState, type SignedInSession } from './api';
 import { navigate, useLocationPath } from './navigation';
+import { parseRoute, tabs, type Tab } from './app/routes';
+import Link from './app/Link';
+import { Empty, IconButton, PageHeading, SectionHeading } from './shared/ui';
+import PhotoCard from './features/collections/PhotoCard';
+import { categories, catName, dateLabel } from './features/collections/presentation';
+import { communityItem } from './features/explore/communityItem';
+import ExplorePage from './features/explore/ExplorePage';
+import SharesPage from './features/shares/SharesPage';
 
 const ReliefViewer = lazy(() => import('./ReliefViewer'));
-type Tab = 'collection' | 'explore' | 'friends' | 'profile';
-type Route = { type: 'main'; tab: Tab } | { type: 'category'; category: Category }
-  | { type: 'detail'; source: 'collection' | 'community' | 'shares'; id: string }
-  | { type: 'add'; editId?: string } | { type: 'month'; month: string }
-  | { type: 'notifications' } | { type: 'search'; scope: Tab } | { type: 'not-found' };
 type Sheet = 'profile' | 'sync' | 'settings' | 'sort' | 'delete' | 'share' | null;
-const categories: { id: Category; label: string }[] = [
-  { id: 'movie', label: '电影' }, { id: 'travel', label: '旅行' },
-  { id: 'daily', label: '日常' }, { id: 'exhibition', label: '展览' },
-];
-const tabs = [
-  { id: 'collection' as const, label: '我的收藏', icon: Books },
-  { id: 'explore' as const, label: '探索', icon: Compass },
-  { id: 'friends' as const, label: '朋友分享', icon: Users },
-  { id: 'profile' as const, label: '我的', icon: User },
-];
-const catName = (id: Category) => categories.find(category => category.id === id)?.label ?? '日常';
-const dateLabel = (date: string) => date.replaceAll('-', '.');
 const emptyData = (): AppData => ({ collections: [], shares: [], community: [], profile: { name: '', bio: '' }, likedCommunityIds: [] });
 const encoded = encodeURIComponent;
-
-function parseRoute(path: string): Route {
-  const url = new URL(path, window.location.origin);
-  let parts: string[];
-  try { parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent); }
-  catch { return { type: 'not-found' }; }
-  if (!parts.length) return { type: 'main', tab: 'collection' };
-  if (parts.length === 1 && tabs.some(tab => tab.id === parts[0])) return { type: 'main', tab: parts[0] as Tab };
-  if (parts[0] === 'category' && parts.length === 2 && categories.some(category => category.id === parts[1])) return { type: 'category', category: parts[1] as Category };
-  if (parts[0] === 'collection' && parts.length === 3 && parts[2] === 'edit') return { type: 'add', editId: parts[1] };
-  if (['collection', 'community', 'shares'].includes(parts[0]) && parts.length === 2) return { type: 'detail', source: parts[0] as 'collection' | 'community' | 'shares', id: parts[1] };
-  if (parts[0] === 'add' && parts.length === 1) return { type: 'add' };
-  if (parts[0] === 'month' && parts.length === 2 && /^\d{4}-(0[1-9]|1[0-2])$/.test(parts[1])) return { type: 'month', month: parts[1] };
-  if (parts[0] === 'notifications' && parts.length === 1) return { type: 'notifications' };
-  if (parts[0] === 'search' && parts.length === 1) {
-    const scope = url.searchParams.get('scope');
-    return { type: 'search', scope: tabs.some(tab => tab.id === scope) ? scope as Tab : 'collection' };
-  }
-  return { type: 'not-found' };
-}
-
-function Link({ to, children, className = '', onNavigate, current, disabled = false }: {
-  to: string; children: ReactNode; className?: string; onNavigate?: () => void; current?: boolean; disabled?: boolean;
-}) {
-  const click = (event: MouseEvent<HTMLAnchorElement>) => {
-    if (disabled) { event.preventDefault(); return; }
-    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    event.preventDefault();
-    onNavigate?.();
-    navigate(to);
-  };
-  return <a href={to} className={className} onClick={click} aria-current={current ? 'page' : undefined} aria-disabled={disabled || undefined}>{children}</a>;
-}
-function IconButton({ label, children, onClick, className = '', disabled = false }: {
-  label: string; children: ReactNode; onClick: () => void; className?: string; disabled?: boolean;
-}) {
-  return <button type="button" className={`icon-button ${className}`} aria-label={label} onClick={onClick} disabled={disabled}>{children}</button>;
-}
-function Empty({ title = '这里还没有收藏', text = '留下一张照片，让喜欢的瞬间有处可寻。', children }: {
-  title?: string; text?: string; children?: ReactNode;
-}) {
-  return <div className="empty-state"><Books size={38} weight="light" /><h2>{title}</h2><p>{text}</p>{children}</div>;
-}
-function PhotoCard({ item, to, onNavigate, hero = false }: {
-  item: CollectionItem; to?: string; onNavigate?: () => void; hero?: boolean;
-}) {
-  return <Link to={to ?? `/collection/${encoded(item.id)}`} className={`photo-card ${hero ? 'hero-card' : ''}`} onNavigate={onNavigate}>
-    <Tilt><Art name={item.art} src={item.customImage} alt={item.title} ratio={hero ? 1.5 : 1} />
-      {item.generation === 'ready' && item.modelUrl && <span className="relief-badge">立体收藏</span>}
-    </Tilt><div className="card-caption"><div><h3>{item.title}</h3><p>{catName(item.category)}{item.date && <> · {dateLabel(item.date)}</>}</p></div><ArrowUpRight size={18} /></div>
-  </Link>;
-}
-function communityItem(item: CommunityItem): CollectionItem {
-  return { id: `community-${item.id}`, title: item.title, category: item.category, tags: [catName(item.category)],
-    note: item.description, date: '', addedAt: 0, source: 'friend', sender: item.author, art: item.art, version: 1,
-    customImage: item.customImage, assetId: item.assetId, modelId: item.modelId, modelUrl: item.modelUrl,
-    modelCamera: item.modelCamera, generation: item.generation, generationJobId: item.generationJobId };
-}
 
 export default function Prototype({ session }: { session: SignedInSession }) {
   const path = useLocationPath();
@@ -284,8 +217,8 @@ export default function Prototype({ session }: { session: SignedInSession }) {
     .sort((left, right) => sort === 'name' ? left.title.localeCompare(right.title, 'zh-CN')
       : sort === 'oldest' ? left.addedAt - right.addedAt : right.addedAt - left.addedAt);
   const backBar = () => <button className="back-link" onClick={back}><ArrowLeft size={19} />返回{tabs.find(item => item.id === tab)?.label}</button>;
-  const headingBlock = (title: string, subtitle?: string, action?: ReactNode) => <header className="page-heading"><div><span className="eyebrow">YOUR LIFE, COLLECTED</span><h1>{title}</h1>{subtitle && <p>{subtitle}</p>}</div>{action}</header>;
-  const sectionHeading = (title: string, to?: string, count?: number) => <div className="section-heading"><h2>{title}{count !== undefined && <span>{count}</span>}</h2>{to && <Link to={to}>查看全部<CaretRight size={16} /></Link>}</div>;
+  const headingBlock = (title: string, subtitle?: string, action?: ReactNode) => <PageHeading title={title} subtitle={subtitle} action={action} />;
+  const sectionHeading = (title: string, to?: string, count?: number) => <SectionHeading title={title} to={to} count={count} />;
   const searchField = (placeholder: string) => <label className="search-field"><MagnifyingGlass size={20} /><span className="visually-hidden">{placeholder}</span><input type="search" placeholder={placeholder} value={query} onChange={event => setQuery(event.target.value)} /></label>;
   const sourceTabs = <div className="filter-tabs" role="group" aria-label="收藏来源">{[['all', '全部'], ['mine', '我的经历'], ['friend', '朋友推荐']].map(([value, label]) => <button key={value} aria-pressed={source === value} className={source === value ? 'active' : ''} onClick={() => setSource(value)}>{label}</button>)}</div>;
   const grid = (items: CollectionItem[]) => items.length ? <div className="collection-grid">{items.map(item => <PhotoCard key={item.id} item={item} />)}</div> : <Empty title="没有找到这件收藏" text="试试其他名字、标签或分类。" />;
@@ -301,19 +234,6 @@ export default function Prototype({ session }: { session: SignedInSession }) {
       </section>)}</> : <Empty><Link to="/add" className="primary-button">添加第一件收藏</Link></Empty>}</>;
   const renderCategory = (category: Category) => <>{backBar()}{headingBlock(catName(category), `${data.collections.filter(item => item.category === category).length} 件收藏`)}
     <div className="collection-toolbar">{searchField(`搜索${catName(category)}收藏`)}<button className="sort-button" onClick={() => showSheet('sort')}>{sort === 'recent' ? '最近添加' : sort === 'oldest' ? '最早添加' : '按名称排序'}<CaretDown size={17} /></button></div>{sourceTabs}{grid(filtered(data.collections.filter(item => item.category === category)))}</>;
-  const exploreItems = data.community.filter(item => exploreCategory === 'featured' || item.category === exploreCategory)
-    .sort((a, b) => (b.saves * 3 + b.likes * 2 + Math.log1p(b.exposures)) - (a.saves * 3 + a.likes * 2 + Math.log1p(a.exposures)));
-  const renderExplore = () => <>{toolbar}{headingBlock('探索', '从别人的珍藏里，遇见下一份生活灵感。')}
-    <div className="filter-tabs" role="group" aria-label="探索分类">{[{ id: 'featured', label: '精选' }, ...categories].map(category => <button key={category.id} aria-pressed={exploreCategory === category.id} className={exploreCategory === category.id ? 'active' : ''} onClick={() => setExploreCategory(category.id)}>{category.label}</button>)}</div>
-    <div className="collection-grid explore-grid">{exploreItems.map(item => <div key={item.id}><PhotoCard item={communityItem(item)} to={`/community/${encoded(item.id)}`} onNavigate={() => viewCommunity(item.id)} /><p className="community-byline">{item.author}<span>{item.saves} 次收藏 · {item.likes} 人喜欢</span></p></div>)}</div>
-    <section className="collection-section">{sectionHeading('社区人气榜')}<div className="ranking-list">{exploreItems.slice(0, 5).map((item, index) => <Link key={item.id} to={`/community/${encoded(item.id)}`} className="rank-row" onNavigate={() => viewCommunity(item.id)}><span className="rank-number">{String(index + 1).padStart(2, '0')}</span><Art name={item.art} src={item.customImage} alt={item.title} ratio={1} /><span><strong>{item.title}</strong><small>{catName(item.category)} · {item.author}</small></span><ArrowUpRight size={18} /></Link>)}</div><p className="section-footnote">当前为本次测试的统一初始内容，互动只影响你的账户。</p></section></>;
-  const renderFriends = () => {
-    const shares = data.shares.filter(item => !onlyUnread || item.unread);
-    return <>{toolbar}{headingBlock('朋友分享', '收到的每一份美好，都可以留在自己的收藏里。')}
-      <div className="filter-tabs" role="group" aria-label="分享筛选"><button aria-pressed={!onlyUnread} className={!onlyUnread ? 'active' : ''} onClick={() => setOnlyUnread(false)}>全部分享</button><button aria-pressed={onlyUnread} className={onlyUnread ? 'active' : ''} onClick={() => setOnlyUnread(true)}>未查看{unseen > 0 && <span className="count-pill">{unseen}</span>}</button></div>
-      {shares.length ? <div className="collection-grid friends-grid">{shares.map(item => <article className="friend-card" key={item.id}><div className="sender-line"><span className="letter-avatar">{item.sender.slice(0, 1)}</span><span><strong>{item.sender}</strong><small>{dateLabel(item.receivedAt)}</small></span>{item.unread && <span className="notice-label">未查看</span>}</div>
-        <PhotoCard item={item.item} to={`/shares/${encoded(item.id)}`} onNavigate={() => viewShare(item.id)} hero /><p className="share-note">{item.item.note}</p><button className="text-button" disabled={busy} onClick={() => addShared(item.id)}><BookmarkSimple size={18} />收藏这份分享</button></article>)}</div> : <Empty title="都已经看过了" text="下一份来自朋友的美好，正在路上。" />}</>;
-  };
   const renderProfile = () => {
     const months = [...new Set(data.collections.map(item => item.date.slice(0, 7)))].sort().reverse();
     return <>{headingBlock('我的', '把喜欢的日子，收成自己的故事。')}<div className="profile-card"><span className="profile-avatar">{(data.profile.name || session.user.name || session.user.email).slice(0, 1)}</span><div><h2>{data.profile.name || session.user.name}</h2><p>{data.profile.bio}</p><small>{session.user.email}</small></div><button className="secondary-button" onClick={() => showSheet('profile')}><PencilSimple size={17} />编辑资料</button></div>
@@ -368,7 +288,7 @@ export default function Prototype({ session }: { session: SignedInSession }) {
         : scope === 'friends' ? <div className="collection-grid search-results">{data.shares.filter(item => !query || `${item.sender} ${item.item.title}`.includes(query)).map(item => <PhotoCard key={item.id} item={item.item} to={`/shares/${encoded(item.id)}`} />)}</div> : <>{sourceTabs}{grid(filtered(data.collections))}</>}</>;
   };
   let content: ReactNode;
-  if (route.type === 'main') content = route.tab === 'collection' ? renderCollection() : route.tab === 'explore' ? renderExplore() : route.tab === 'friends' ? renderFriends() : renderProfile();
+  if (route.type === 'main') content = route.tab === 'collection' ? renderCollection() : route.tab === 'explore' ? <ExplorePage items={data.community} exploreCategory={exploreCategory} onCategoryChange={setExploreCategory} onView={viewCommunity} toolbar={toolbar} /> : route.tab === 'friends' ? <SharesPage items={data.shares} onlyUnread={onlyUnread} unseen={unseen} busy={busy} onUnreadChange={setOnlyUnread} onView={viewShare} onCollect={addShared} toolbar={toolbar} /> : renderProfile();
   else if (route.type === 'category') content = renderCategory(route.category);
   else if (route.type === 'detail') content = renderDetail();
   else if (route.type === 'add') content = renderAdd();
