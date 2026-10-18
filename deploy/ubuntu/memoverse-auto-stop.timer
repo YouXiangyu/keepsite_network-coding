@@ -1,8 +1,8 @@
 [Unit]
-Description=Stop the MemoVerse EC2 instance one hour after each boot
+Description=Stop the MemoVerse EC2 instance 58 minutes after each boot
 
 [Timer]
-OnBootSec=1h
+OnBootSec=58min
 AccuracySec=1s
 Unit=memoverse-auto-stop.service
 

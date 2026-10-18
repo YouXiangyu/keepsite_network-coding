@@ -53,13 +53,13 @@
 - Nginx access 格式不含查询字符串，OAuth callback 的 access/error 日志单独关闭；Uvicorn 同样去除认证回调查询。应用日志不记录密码、验证码或令牌。
 - 应用依赖实例角色，不保存长期 AWS 访问密钥。按测试规模评估 S3 访问日志、CloudTrail 数据事件和 CloudWatch 指标的可观测性与额外费用，不默认启用与本轮无关的收费服务。
 - systemd 默认 MemoryHigh=1200M、MemoryMax=1500M、swap 上限 2 GB，针对当前 2 GB 测试机；更大图片/并发仍需实测。以应用行为判断容量，不把单样例当作压测结果。
-- 每次开机一小时后自动发起正常关机；等待验收不暂停倒计时。用户确认通过或明确要求后可提前停机，核验 DDNS 撤回。延长或取消本次倒计时须用户明确授权。停机仍保留磁盘及 S3 数据计费。
+- 每次开机 58 分钟后自动发起正常关机；等待验收不暂停倒计时。用户确认通过或明确要求后可提前停机，核验 DDNS 撤回。延长或取消本次倒计时须用户明确授权。停机仍保留磁盘及 S3 数据计费。
 
-## 开机一小时自动关机
+## 开机 58 分钟自动关机
 
-`memoverse-auto-stop.timer` 使用 `OnBootSec=1h`，从系统启动计时，触发同名 service 执行正常 `systemctl poweroff`。本机已核验 EC2 `InstanceInitiatedShutdownBehavior=stop`；迁移到其他实例时必须重新核验，不能假定系统关机一定不会删除实例。配置不依赖 Codex 或 AWS 登录会话继续在线。
+`memoverse-auto-stop.timer` 使用 `OnBootSec=58min`，从系统启动计时，触发同名 service 执行正常 `systemctl poweroff`。本机已核验 EC2 `InstanceInitiatedShutdownBehavior=stop`；迁移到其他实例时必须重新核验，不能假定系统关机一定不会删除实例。配置不依赖 Codex 或 AWS 登录会话继续在线。
 
-首次安装前查看 `cat /proc/uptime`。如果本次运行已超过一小时，启动该 timer 会立即触发关机；应在刚启动的维护窗口安装。只启用 timer，不启用 service。以下命令针对已审查、位于当前工作目录的两个 unit：
+首次安装前查看 `cat /proc/uptime`。如果本次运行已超过 58 分钟，启动该 timer 会立即触发关机；应在刚启动的维护窗口安装。只启用 timer，不启用 service。以下命令针对已审查、位于当前工作目录的两个 unit：
 
 ```bash
 sudo install -o root -g root -m 0644 memoverse-auto-stop.service memoverse-auto-stop.timer /etc/systemd/system/
@@ -71,7 +71,7 @@ systemctl list-timers memoverse-auto-stop.timer --all
 systemctl show memoverse-auto-stop.timer -p NextElapseUSecMonotonic -p TimersMonotonic -p AccuracyUSec
 ```
 
-这是独立的主机配置，普通应用发布不会替换或重新计时。应用重启不会延长；系统重新开机重新计时。到点发起正常关机，仍需等待应用和 DDNS 的退出流程，不能承诺恰在第 3600 秒已经进入 AWS `stopped`。若用户明确授权延长，另行调整并记录本次期限，不要仅重启 timer 冒充延长。
+这是独立的主机配置，普通应用发布不会替换或重新计时。应用重启不会延长；系统重新开机重新计时。在第 58 分钟发起正常关机，预留约两分钟等待应用、DDNS 退出和 AWS 状态转换；该缓冲不保证严格在开机后 60 分钟内进入 AWS `stopped`。若用户明确授权延长，另行调整并记录本次期限，不要仅重启 timer 冒充延长。
 
 配置语义参考 [systemd timer](https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html) 与 [EC2 系统关机行为](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Using_ChangingInstanceInitiatedShutdownBehavior.html)。
 
