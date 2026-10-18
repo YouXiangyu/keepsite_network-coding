@@ -1,0 +1,82 @@
+name: Application CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AWS_EC2_METADATA_DISABLED: 'true'
+      MEMOVERSE_RUN_REAL_GENERATION: '0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - name: Install test dependencies
+        run: python -m pip install -r backend/requirements-dev.txt
+      - name: Test backend contracts, isolation, and recovery
+        run: python -B -m pytest backend/tests -q -ra --basetemp .cache/pytest-ci --junitxml=test-results/backend.xml
+      - name: Upload backend failure report
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-failure-report
+          path: test-results/backend.xml
+          if-no-files-found: ignore
+          retention-days: 7
+
+  frontend:
+    name: Frontend tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: demo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: demo/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Check Web runtime contract
+        run: npm run check:runtime
+      - name: Test frontend logic
+        run: npm run test:unit
+      - name: Type-check and build production assets
+        run: npm run build
+      - name: Install Chromium and system dependencies
+        run: npx playwright install --with-deps chromium
+      - name: Test Web interactions
+        run: npm run test:web -- --reporter=line,junit --output=test-results/web
+        env:
+          PLAYWRIGHT_JUNIT_OUTPUT_FILE: test-results/web-junit.xml
+      - name: Test production loading and HTTP failure recovery
+        run: npx playwright test --config=playwright.reliability.config.ts --reporter=line,junit --output=test-results/reliability
+        env:
+          PLAYWRIGHT_JUNIT_OUTPUT_FILE: test-results/reliability-junit.xml
+      - name: Upload frontend failure reports and traces
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-failure-reports
+          path: demo/test-results/
+          if-no-files-found: ignore
+          retention-days: 7

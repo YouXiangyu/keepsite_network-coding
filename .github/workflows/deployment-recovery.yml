@@ -2,7 +2,7 @@ name: Deployment recovery
 on:
   pull_request:
   push:
-    branches: [codex/decouple-business-boundaries]
+    branches: [main]
 permissions:
   contents: read
 jobs:
