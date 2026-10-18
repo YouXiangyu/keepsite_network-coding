@@ -1,10 +1,22 @@
 # EC2 部署验收
 
-验收日期：2026-10-18，北京时间。最近应用运行提交：`80d7681556823f81372b9c6cc5d32450ddc7961f`；当前主机自动关机配置提交：`622486b`（58 分钟），没有重新发布应用。
+验收日期：2026-10-18，北京时间。最近应用运行提交：`2e74f23408afb26410c45b6c86515cd7964c3f13`；主机自动关机配置仍为 `622486b`（58 分钟），本轮未修改或延长。PR #2 尚待用户授权合并，当前 `main` 仍为 `e0c5085`；运行提交与默认分支分别记录。
 
-当前状态：用户简单测试后明确要求停机，随后将自动关机规则从一小时改为开机后 58 分钟。2026-10-18 12:19 已核验 EC2 `i-0e9ba9bc6f4b1c019` 为 `stopped`、无公网 IP，Cloudflare A 记录数为 0，网站暂不可访问。10 GB 加密根卷仍附着，业务数据、S3 和账号配置保留。下文发布时 active 等表述均为当时验收事实。
+当前状态：用户 19:40 确认 Google 登录和邮箱收件均已验证，完成本轮 QA 精确清理后，19:45 正常 StopInstances 提前停机。19:46 AWS 核验 EC2 `i-0e9ba9bc6f4b1c019` 为 `stopped`、无公网 IP；公共 DNS DoH 查询没有 A 回答，本次未用 Cloudflare API 查询记录数量。网站暂不可访问，业务数据、S3 和账号配置保留。下文 active 等状态均对应各自验收时点。
 
-## 用户测试后停机与自动关机配置
+## 19:27—19:46：运行观测版本线上验收（最新）
+
+19:27 启动上述实例，本次动态公网 IP 为 `54.150.236.186`，停机后已释放。全程核查 `memoverse-auto-stop.timer` 为 58 分钟、enabled/active，未更改、延长或取消。发布后 `/opt/memoverse/current` 和 MainPID `1451` 的 cwd 均指向 `2e74f23408afb26410c45b6c86515cd7964c3f13`。配置、unit 与链接的回滚元数据保存在 `/opt/memoverse/activation-backups/activation-VrKJ5JL0`；这不是新增业务数据备份，本轮没有执行业务数据备份。
+
+临时 A/B 账号的真实 HTTPS 验收通过：匿名业务访问 401、Secure/HttpOnly 会话 cookie、原图 SHA、GLB 及跨账号图片/模型/任务 404。临时账号使用 `MessageAction=SUPPRESS`，不作为邮件送达证据。用户于 19:40 明确确认“Google 登录和邮箱收件都已验证”，这是本人交互验收，与脚本测试证据分别记录。初次 QA 输入将 Cognito raw sub 当作应用内部 ID，改为 issuer + NUL + sub 的 SHA-256 后通过；属于测试输入纠正，没有因此修改应用。
+
+本次单任务 GLB 为 3,663,024 bytes，轮询首次观察到 ready 为 109.005 秒；结构化日志的 `pipelineDurationSeconds=107.20122` 包括下载、推理、校验及上传，不是纯推理耗时。队列 CLI 实际观察到 processing=1 → ready=1。MemoryPeak=830,328,832 bytes、Swap=0、OOM=0、NRestarts=0；健康请求最大往返 288.203 ms 包含公网网络，不等于纯 API 处理耗时。该单样例不构成并发容量或最大吞吐保证。
+
+脚本删除本轮收藏并退出两个 QA 账号；随后停止应用，防止新登录和 worker 与清理竞态。SQL dry-run 与精确 apply 清除两个 QA 业务账号及其授权、一个新增 asset/model/job，其他账号数据保持为 1 user、17 collections、18 assets、18 models、0 jobs；QA auth 活动 session 为 0，integrity/FK 检查通过。仅对四个本轮 S3 key 精确删除版本，读回 versions/deleteMarkers 均为空；删除两个临时 Cognito 身份后，针对各目标的 ListUsers 查询为空，未删除用户本人账号。共享模板及既有用户数据保留。
+
+本机本轮 `credentials.json` 已删除，验收浏览器页已关闭。证据集中在 `.cache/operations-acceptance/`：`deploy-2e74f23.log`、`online-2e74f23-02.json`、`queue-during-generation.json`、`metrics-after-generation.json`、`cleanup-business-plan.json`、`cleanup-business-result.json`、`cloud-cleanup.json`、`before-stop.json`、`live-after-deploy.jpg`。本次仅补记文档无需再次发布应用；合并仍按用户授权和最新 CI/审查流程处理，不宣称私有仓库套餐已强制实施合并门禁。
+
+## 历史：用户测试后停机与自动关机配置
 
 ### 58 分钟配置（当前）
 
@@ -24,9 +36,9 @@
 
 此设置不依赖 Codex 在线或 AWS 临时登录有效。每次系统开机重新计时，普通应用重启、发布和等待验收不暂停或重置倒计时；一小时到点发起正常关机，实例进入 stopped 还需服务退出时间。需要延长时必须事先获得用户明确授权。用户本次只表示简单测试，不能据此补记 Google 本人授权或真实邮件投递已专项验收。
 
-## Web / 账号 / 私有 S3 发布验收
+## 历史：Web / 账号 / 私有 S3 发布验收
 
-本轮基础提交：`95cae17` 初始化模板、`96e23d2` 账号后端、`7535cfd` 响应式 Web、`61e6bd2` 安全部署。先以 `-PrepareOnly` 准备准确制品，再在 `127.0.0.1:8001` 候选服务验证真实 Cognito 与 S3；停止候选后正式激活。随后发布退出修复 `80d7681`，`/opt/memoverse/current` 已读回指向上述完整运行提交；本次切换备份为 `/opt/memoverse/activation-backups/activation-LJTXEZwD`。
+该历史阶段基础提交：`95cae17` 初始化模板、`96e23d2` 账号后端、`7535cfd` 响应式 Web、`61e6bd2` 安全部署。先以 `-PrepareOnly` 准备准确制品，再在 `127.0.0.1:8001` 候选服务验证真实 Cognito 与 S3；停止候选后正式激活。随后发布退出修复 `80d7681`，当时 `/opt/memoverse/current` 读回指向 `80d7681556823f81372b9c6cc5d32450ddc7961f`；该次切换备份为 `/opt/memoverse/activation-backups/activation-LJTXEZwD`。
 
 此前 `61e6bd2` 阶段，服务器以同 commit、相同环境和站点配置重复激活，返回 `Already active`，当时 MainPID 保持 `2314`，未重启应用；新增备份 `/opt/memoverse/activation-backups/activation-WKPhdvkQ` 记录重复激活时状态。真正切换前的原始回滚备份仍为 `activation-m1rFC4fz`，不可混用。
 
@@ -40,7 +52,7 @@
 
 真实服务器候选验证使用临时 Cognito A/B 和未验证账号，设置 `MessageAction=SUPPRESS`，因此不代表邮件投递验收。实际登录、邮箱验证状态拦截、双账号独立初始化、CSRF、私有 S3 图片/GLB SHA、上传、真实 AnyImage 生成、仅改文字复用模型、备份不串号、删除和退出后原图片/模型 401 全部通过。生成等待时间 48.878 秒（非纯推理分段计时），GLB 2,586,268 字节，健康查询最大观测 0.0045 秒；候选 MemoryPeak=820,273,152 字节、Swap=0、OOM/max=0、NRestarts=0，未作负载压测。强制 QA 会话 refresh_at 后，真实 Cognito 刷新令牌变更及版本递增通过，退出后该令牌被上游拒绝。
 
-真实 HTTPS 浏览器登录后显示 17 件收藏，新生成“雨夜列车”GLB 加载和方向按钮操作通过；本机截图证据为 `.cache/qa-auth/web-login-live.png`、`web-collection-live.png`、`web-relief-live.png`，私有图片不提交。Cognito authorize 实际 302 到已登记 Google client 的 `accounts.google.com` 通过；**用户本人 Google consent 完成和真实邮件收件仍待用户验收**，不能宣称认证全链路已完成。
+真实 HTTPS 浏览器登录后显示 17 件收藏，新生成“雨夜列车”GLB 加载和方向按钮操作通过；本机截图证据为 `.cache/qa-auth/web-login-live.png`、`web-collection-live.png`、`web-relief-live.png`，私有图片不提交。Cognito authorize 实际 302 到已登记 Google client 的 `accounts.google.com` 通过；**当时用户本人 Google consent 和真实邮件收件尚待验收**，该历史阶段不能宣称认证全链路已完成。本人于同日 19:40 的补充确认见顶部最新验收。
 
 浏览器补充验收发现的两个退出时序问题已在 `80d7681` 修复并发布：前端先取消旧请求、卸载私人界面，再跳转严格校验的 Cognito `/logout`；后端只撤销请求携带的旧 sid，迟到响应不清除另一标签页后来登录或 OAuth 流程的 cookie。无效旧 sid 不再有任何访问权限，由新登录覆盖或自然过期。该流程退出 Cognito 托管会话，不退出 Google 自身会话。
 
