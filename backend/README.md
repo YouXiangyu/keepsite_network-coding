@@ -92,6 +92,18 @@ worker 的 `memoverse.generation.metrics` 专用 INFO 日志输出单行 JSON �
 
 发布恢复耗尽记录 `publication_paused`，后续显式重试成功完成状态核对记录 `publication_recovered`；后者也可能确认任务已经失效，不应当作“新增成功模型”计数。发布重试不重新计算执行次数或流水线耗时。日志不携带用户、收藏、任务业务 ID、文件路径、凭据或原始异常；写入失败不影响任务发布。已有诊断异常日志独立保留，结构化观测事件不是这些诊断日志的脱敏替代品。
 
+## 本机容量基线
+
+在仓库根目录使用项目开发依赖运行合成数据基线，输出必须指定新的文件名：
+
+```powershell
+backend/.venv/Scripts/python.exe -B scripts/benchmark-capacity.py --counts 100 1000 --warmup 5 --samples 30 --sql-samples 3 --temp-root D:/100-code/110-Project/network-coding/.cache/capacity-baseline --output D:/100-code/110-Project/network-coding/.cache/capacity-baseline/result-001.json
+```
+
+脚本通过显式 FakeAuth、临时 SQLite 与 LocalObjectStore 生成两类数据：ready 收藏共享合成模板原图与模型；queued 收藏使用各自的微型 PNG 和未启动任务。worker、真实推理、云存储和备份均不执行。准备、预热与 SQL trace 不计入请求计时；报告包含完整响应正文大小、p50/p95/max、SELECT 数与按当前页面代码推导的图片资源清单。每个测试目录由脚本新建，结束后只清理自己的目录，不接受已有业务库作为工作目录，不覆盖已有报告。
+
+这些是串行 TestClient 的本机基线，不包含真实网络、TLS、Cognito、S3、并发或浏览器解码/渲染；合成图片字节数不代表真实用户照片，也不能作为 t3.small 容量保证。报告记录 Git 提交、工作区是否有未提交改动及运行环境；比较时应使用干净提交和相同画像。首轮不设置未经测量的耗时及格线。脚本的小样本、隔离与报告校验测试随后端 PR CI 一起执行。
+
 ## 开发验证
 
 Python 3.12/3.13，依赖放 `backend/.venv`。配置有效身份服务和模板后，开发可显式选择 `MEMOVERSE_STORAGE=local`，通过 Vite `/api` 代理同源访问；生产验收在 EC2 进行。
