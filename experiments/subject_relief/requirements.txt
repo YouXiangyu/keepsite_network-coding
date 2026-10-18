@@ -1,0 +1,11 @@
+# Separate local prototype dependencies; not installed by production deployment.
+numpy==2.3.5
+Pillow==12.1.0
+scipy==1.17.0
+opencv-python==4.13.0.92
+torch==2.11.0
+torchvision==0.26.0
+transformers==5.5.0
+safetensors==0.7.0
+onnxruntime==1.24.4
+trimesh==4.11.2
