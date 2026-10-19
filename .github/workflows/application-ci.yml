@@ -49,8 +49,6 @@ jobs:
       PYTHONDONTWRITEBYTECODE: '1'
       HF_HUB_OFFLINE: '1'
       TRANSFORMERS_OFFLINE: '1'
-      HF_HOME: ${{ runner.temp }}/subject-relief-huggingface
-      TORCH_HOME: ${{ runner.temp }}/subject-relief-torch
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -66,6 +64,9 @@ jobs:
       - name: Install pinned CPU tensor runtime
         run: python -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.11.0
       - name: Test geometry, segmentation contracts, lab API and workers
+        env:
+          HF_HOME: ${{ runner.temp }}/subject-relief-huggingface
+          TORCH_HOME: ${{ runner.temp }}/subject-relief-torch
         run: python -B -m pytest experiments/subject_relief -q -ra -p no:cacheprovider --basetemp "$RUNNER_TEMP/pytest-subject-relief" --junitxml=test-results/subject-relief.xml
       - name: Upload experiment failure report
         if: ${{ failure() }}
