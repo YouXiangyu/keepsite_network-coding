@@ -4,7 +4,7 @@ Updated: 2026-10-20.
 
 ## Current platform decision
 
-- On 2026-10-18 the user explicitly required a real responsive Web App. Android APK development is a separate later phase. The five mobile design references describe the future APK; preserve their white, photo-led visual language without rendering a simulated phone in the website.
+- On 2026-10-18 the user explicitly required a real responsive Web App. The Android app is a separate native Kotlin project outside `demo/` (see `docs/开发计划.md`). The five mobile design references describe the Android app; preserve their white, photo-led visual language without rendering a simulated phone in the website.
 - The production Web entry must not mount PhoneFrame, MobileRuntime, fake status bars, device selectors, simulated keyboards, or phone-scoped scroll/portal contexts. Use browser-native forms, scrolling, keyboard behavior, responsive layout, and document-level dialogs.
 - This decision authorizes changing the former protected Web entry, global CSS, Vite configuration and runtime validation contract. Do not add compatibility adapters around mobile hooks. Avoid unrelated changes to unused reference assets or runtime modules.
 - Desktop uses a wide content area and suitable navigation; small browser viewports remain responsive. Preserve collection, category, explore, shares and profile workflows. Browser back, refresh and direct links must work.
@@ -27,7 +27,7 @@ Updated: 2026-10-20.
 - The relief viewer permits at most 40 degrees of total deviation from the front, including diagonals. Pointer position presses that edge/corner away from the camera. A hover effect is not proof of actual model generation.
 - AnyImage currently provides official MoGe2 CPU depth inference plus project relief mesh/GLB export. Do not call it a complete 360-degree object reconstruction.
 - Explore and received-share initial content are test examples. New user uploads stay private unless the user explicitly shares them. Do not add check-in or wanted/experienced states.
-- AWS S3 is the selected object storage. No Google Cloud Storage, paid model API, Meshy integration or APK implementation is implied by this phase.
+- AWS S3 is the selected object storage. No Google Cloud Storage, paid model API or Meshy integration is implied, and Android code does not belong in `demo/`.
 
 ## Verification and delivery
 

@@ -92,7 +92,7 @@ HTTPS 由源站 Nginx 使用 Let's Encrypt 证书提供，`certbot.timer` 续期
 - 2026-10-18 合并流程核验：`main` 已包含 PR #1 的解耦、可靠性修复及前后端 CI。PR 和 main push 自动运行 `Backend tests`、`Frontend tests` 与 `deployment-recovery`。Codex 仓库自动代码审查已设置为“所有 PR”“每次推送时”；这不自动批准或合并 PR。
 - 同日读取 GitHub 设置：当前私有仓库没有 classic branch protection 或 ruleset；两类设置页面均提示当前套餐不会强制执行私有仓库保护规则。未创建无效规则，未改变仓库可见性或账户套餐。因此当前是代理遵循的合并检查流程，不能宣称平台已强制拦截；后续套餐或配置变化须重新核验。
 - 根 `AGENTS.md` 与 `demo/AGENTS.md`：一般工作规则、响应式 Web 运行契约和账号隔离要求。
-- `docs/项目定义与决策主文档.md`：当前产品规格与有效决定；`docs/history/`（旧版主文档与访谈原话、退役记录）和 `docs/sources/`（开题报告与两份调研）只读。
+- `docs/项目定义与决策主文档.md`：当前产品规格与有效决定；`docs/开发计划.md`：执行代理的工作包与顺序；`docs/history/`（旧版主文档与访谈原话、退役记录）和 `docs/sources/`（开题报告与两份调研）只读。
 - `deploy/ubuntu/README.md`：安装、发布与恢复流程。
 - `docs/history/Lightsail部署验收.md`：旧环境历史证据与退役说明，不能用于定位当前实例。
 - `docs/EC2部署验收.md`：当前环境验收与 DDNS 验证范围。
