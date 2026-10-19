@@ -1,6 +1,6 @@
 # 项目运行信息
 
-核验基准：2026-10-18，北京时间。以下是定位信息，不能替代操作前的实时查询。
+云资源核验基准：2026-10-18，北京时间；Git 合并与分支状态于 2026-10-19 单独核验。以下是定位信息，不能替代操作前的实时查询。
 
 ## 位置与入口
 
@@ -17,7 +17,7 @@
 | 规格 | `t3.small`：x86_64、2 vCPU、2 GB RAM；CPU credits 为 standard，避免 surplus credit 费用 |
 | 系统与磁盘 | Canonical Ubuntu 24.04；10 GB 加密 gp3 根卷 `vol-0bb6aa01805d28c75`，旧 20 GB 卷已删除 |
 | 最近运行状态 | 2026-10-18 19:46（北京时间）AWS 确认 `stopped`；19:40 用户确认 Google 登录和邮箱收件后，完成 QA 清理，19:45 正常提前停机；操作前仍须实时查询 |
-| 最近应用运行提交 | `2e74f23408afb26410c45b6c86515cd7964c3f13`，current 与当时 MainPID 1451 的 cwd 均核验一致；PR #2 尚待用户授权合并，main 仍为 `e0c5085`。主机自动关机配置仍为 `622486b`（58 分钟） |
+| 最近应用运行提交 | `2e74f23408afb26410c45b6c86515cd7964c3f13`，current 与当时 MainPID 1451 的 cwd 均核验一致。后续 PR #2 已于 2026-10-19 02:57 合并，`main` 为 `eb486c9`；此为 Git 状态，不代表重新发布或实例实时状态。主机自动关机配置仍为 `622486b`（58 分钟） |
 | 公网 IPv4 | 当前无公网 IP；本次 19:27 开机使用 `54.150.236.186`，停机后已释放；`43.207.114.190`、`18.181.150.249`、`13.230.191.15` 均为历史地址，每次启动必须重新查询 |
 | Launch template / 新建默认版本 | `lt-016bca8507ac81480` / `2`，根盘默认 10 GB |
 | 安全组 / SSH key pair | `sg-0f472ac3891c65681` / `memoverse-ec2-20261017` |
@@ -88,6 +88,7 @@ HTTPS 由源站 Nginx 使用 Let's Encrypt 证书提供，`certbot.timer` 续期
 
 ## 现有约束与文档
 
+- 2026-10-19 分支整理：PR #1、#2 均已合并；确认没有独有提交和 worktree 占用后，删除 `codex/lightsail-deploy`、`codex/decouple-business-boundaries`、`codex/operations-observability` 的本地与远端引用。其历史提交完整保留在 `main`。保留 `main` 和 `codex/subject-relief-prototype`；后者作为独立本地浮雕实验工具准备 PR，不据此合并或部署。
 - 2026-10-18 合并流程核验：`main` 已包含 PR #1 的解耦、可靠性修复及前后端 CI。PR 和 main push 自动运行 `Backend tests`、`Frontend tests` 与 `deployment-recovery`。Codex 仓库自动代码审查已设置为“所有 PR”“每次推送时”；这不自动批准或合并 PR。
 - 同日读取 GitHub 设置：当前私有仓库没有 classic branch protection 或 ruleset；两类设置页面均提示当前套餐不会强制执行私有仓库保护规则。未创建无效规则，未改变仓库可见性或账户套餐。因此当前是代理遵循的合并检查流程，不能宣称平台已强制拦截；后续套餐或配置变化须重新核验。
 - 根 `AGENTS.md` 与 `demo/AGENTS.md`：一般工作规则、响应式 Web 运行契约和账号隔离要求。
