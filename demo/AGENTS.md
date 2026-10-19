@@ -1,5 +1,7 @@
 # MemoVerse Web App Agent Guide
 
+Updated: 2026-10-20.
+
 ## Current platform decision
 
 - On 2026-10-18 the user explicitly required a real responsive Web App. Android APK development is a separate later phase. The five mobile design references describe the future APK; preserve their white, photo-led visual language without rendering a simulated phone in the website.
@@ -32,5 +34,5 @@
 - Follow the root AGENTS.md and memoverse-delivery skill. Keep changes on D:, announce writes/builds/downloads first, commit completed logical units and obtain independent review for the stage.
 - Run npm run check:runtime and the meaningful Web/auth tests before preview or handoff. Update the former mobile lock/contract only for the explicitly authorized Web runtime replacement, after checking the new behavior. Do not weaken checks to conceal failures.
 - Verify anonymous gating; registration/verification/login/logout/expired sessions; two-account isolation; upload/edit/delete/generation/export; responsive widths 360/390, 768 and 1280/1440; native keyboard navigation; browser back/refresh; and the 40-degree relief constraint.
-- In Codex Desktop, start the needed local preview and inspect it with browser tools. Keep a useful preview available for user handoff, and close temporary tabs and idle owned processes. AWS deployment uses the existing Ubuntu/EC2 workflow; do not publish to Sites unless requested.
+- In Codex Desktop, start the needed local preview and inspect it with browser tools. Keep a useful preview available for user handoff, and close temporary tabs and idle owned processes. Deploy to AWS, start/stop EC2 or merge PRs only when the user explicitly requests it; deployment uses the existing Ubuntu/EC2 workflow. Do not publish to Sites unless requested.
 - Keep credentials, databases, templates containing user data, model artifacts, caches and temporary packages out of Git. Preserve still-needed data, models, credentials and exact deployment artifacts. Respect previously blocked cleanup decisions.
