@@ -10,6 +10,16 @@ def test_presets_and_editable_fields_use_the_same_validated_contract():
         assert validate_parameters(preset['parameters']) == preset['parameters']
     config['defaults']['scales'].append(0.5)
     assert DEFAULTS['scales'] == [1]
+    assert all(field['help'] and field['effect'] for field in config['fields'])
+
+
+def test_main_branch_preset_matches_the_production_worker_settings():
+    main = next(preset for preset in config_payload()['presets'] if preset['id'] == 'main')['parameters']
+    assert {key: main[key] for key in ('depth_level', 'input_side', 'grid_side', 'mirror', 'scales',
+                                       'background_flatten', 'amplitude', 'low_percentile', 'high_percentile')} == {
+        'depth_level': 0, 'input_side': 256, 'grid_side': 256, 'mirror': False, 'scales': [1.0],
+        'background_flatten': 0.0, 'amplitude': 0.32, 'low_percentile': 2.0, 'high_percentile': 98.0,
+    }
 
 
 @pytest.mark.parametrize('parameters', [

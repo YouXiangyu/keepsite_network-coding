@@ -29,10 +29,6 @@ from .lab_process import start_managed_process
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_IMAGE = ROOT / '.cache/initial-template-v1/media/3a4b33dd86f71205b1116cf9cb2715c179d39ed6fdccd8a6223df3c2f32becbb.jpg'
-REFERENCE_ROOT = ROOT / '.cache/subject-relief/room-background-study-v1'
-REFERENCE_LABELS = {
-    'original': '原流程', 'average': '平均', 'fine': '精细', 'finer': '更精细', 'maximal': '最高',
-}
 FILE_NAMES = {
     'model': 'model.glb', 'original': 'source.png', 'overlay': 'overlay.png',
     'mask': 'foreground-mask.png', 'report': 'report.json', 'parameters': 'parameters.json',
@@ -576,12 +572,6 @@ def create_app(*, data_dir=None, ui_dir=None, worker_command_factory: Callable |
                 'token': runtime.token, 'config': config_payload(),
                 'images': [runtime.image_public(record) for record in runtime.images.values()],
                 'default_image_id': runtime.default_image_id,
-                'references': [
-                    {'id': identifier, 'name': label, 'label': label, 'parameters': None,
-                     'model_url': f'/api/references/{identifier}/model'}
-                    for identifier, label in REFERENCE_LABELS.items()
-                    if (REFERENCE_ROOT / identifier / 'model.glb').is_file()
-                ],
                 **runtime.list_runs(),
             }
 
@@ -617,12 +607,6 @@ def create_app(*, data_dir=None, ui_dir=None, worker_command_factory: Callable |
             path = runtime.image_path(identifier)
             mime = runtime.images[identifier]['mime_type']
         return FileResponse(path, media_type=mime)
-
-    @app.get('/api/references/{identifier}/model')
-    def reference(identifier: str):
-        if identifier not in REFERENCE_LABELS:
-            raise HTTPException(404, '参考模型不存在。')
-        return FileResponse(_safe_file(REFERENCE_ROOT / identifier, 'model.glb'), media_type='model/gltf-binary')
 
     @app.get('/api/runs/{identifier}/files/{filename}')
     def artifact(identifier: str, filename: str):

@@ -53,9 +53,12 @@ const defaults = { input_side: 512, scales: [1], mirror: false, background_flatt
 const config = {
   defaults,
   groups: [{ id: 'depth', label: '参数', description: '测试参数' }],
-  fields: [{ key: 'input_side', label: '深度输入最长边', group: 'depth', kind: 'integer', min: 128, max: 1536, step: 64, impact: 'depth', help: '测试参数' }],
+  fields: [{ key: 'input_side', label: '深度输入最长边', group: 'depth', kind: 'integer', min: 128, max: 1536, step: 64, impact: 'depth', help: '测试参数', effect: '测试效果' }],
   presets: [{ id: 'test', label: '测试预设', parameters: { ...defaults, input_side: 1024 } }],
 };
+const loadButton = (page, id) => page.locator(`#history-rows tr[data-run-id="${id}"] button[data-action="load"]`);
+const images = ['current', 'a', 'b'].map(id => ({ id, kind: 'image', name: `照片 ${id}`, width: 400, height: 300, preview_url: `/api/images/${id}/preview` }));
+const preview = route => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="#aabbcc"/></svg>' });
 const job = (id, inputSide) => ({
   id, title: `历史 ${id}`, status: 'ready', image_id: id, image_name: `照片 ${id}`, mask_image_id: null,
   parameters: { ...defaults, input_side: inputSide }, boxes: [[0.1, 0.1, 0.8, 0.8]], files: {},
@@ -74,19 +77,19 @@ async function withPendingHistory(run, prepare = async () => {}) {
     const pathname = new URL(route.request().url()).pathname;
     const respond = value => route.fulfill({ contentType: 'application/json', body: JSON.stringify(value) });
     if (pathname === '/api/bootstrap') return respond({
-      token: 'test', config, default_image_id: 'current', references: [], runs: jobs, active_run_id: null,
-      images: ['current', 'a', 'b'].map(id => ({ id, kind: 'image', name: `照片 ${id}`, width: 400, height: 300, preview_url: `/api/images/${id}/preview` })),
+      token: 'test', config, default_image_id: 'current', runs: jobs, active_run_id: null, images,
     });
     if (pathname === '/api/runs/a') { requested(); await held; return respond({ ...jobs[0], report: {} }).catch(() => {}); }
     if (pathname === '/api/runs/b') return respond({ ...jobs[1], report: {} });
-    if (pathname.endsWith('/preview')) return route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="#aabbcc"/></svg>' });
+    if (pathname.endsWith('/preview')) return preview(route);
     throw new Error(`Unexpected API request: ${pathname}`);
   });
   try {
     await page.goto(origin);
-    await started;
+    await page.locator('#region-details > summary').click();
     await prepare(page);
-    await page.locator('#load-parameters').click();
+    await loadButton(page, 'a').click();
+    await started;
     const finishOldRead = async () => {
       const response = page.waitForResponse(value => new URL(value.url()).pathname === '/api/runs/a');
       release();
@@ -102,14 +105,64 @@ async function withPendingHistory(run, prepare = async () => {}) {
 
 test('the actual history loader keeps B when the older A response arrives last', async () => {
   await withPendingHistory(async (page, finishOldRead) => {
-    await page.locator('#history-select').selectOption('b');
-    await page.locator('#load-parameters').click();
+    await loadButton(page, 'b').click();
     await page.waitForFunction(() => document.getElementById('parameter-input_side').value === '256');
     await finishOldRead();
     assert.equal(await page.locator('#parameter-input_side').inputValue(), '256');
     assert.equal(await page.locator('#image-select').inputValue(), 'b');
-    assert.equal(await page.locator('#history-select').inputValue(), 'b');
   });
+});
+
+test('history numbers runs in order and lists flags against the automatic or chosen baseline', async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+  const page = await context.newPage();
+  const mainConfig = { ...config, presets: [{ id: 'main', label: '主分支默认', parameters: { ...defaults, input_side: 128 } }] };
+  const ready = (id, inputSide, imageId, createdAt) => ({
+    ...job(id, inputSide), image_id: imageId, image_name: `照片 ${imageId}`, created_at: createdAt,
+    files: { model: `/api/runs/${id}/files/model.glb` },
+  });
+  const runs = [ready('b', 256, 'b', '2026-10-19T00:02:00Z'), ready('a', 128, 'current', '2026-10-19T00:01:00Z')];
+  let submitted;
+  await page.route('**/api/**', async route => {
+    const pathname = new URL(route.request().url()).pathname;
+    const respond = value => route.fulfill({ contentType: 'application/json', body: JSON.stringify(value) });
+    if (pathname === '/api/runs' && route.request().method() === 'POST') {
+      submitted = route.request().postDataJSON();
+      return route.fulfill({ status: 422, contentType: 'application/json', body: JSON.stringify({ detail: '测试拦截' }) });
+    }
+    if (pathname === '/api/bootstrap') return respond({ token: 'test', config: mainConfig, default_image_id: 'current', runs, active_run_id: null, images });
+    const run = runs.find(candidate => pathname === `/api/runs/${candidate.id}`);
+    if (run) return respond({ ...run, report: {} });
+    if (pathname.endsWith('/model.glb')) return route.fulfill({ status: 404, body: '' });
+    if (pathname.endsWith('/preview')) return preview(route);
+    throw new Error(`Unexpected API request: ${pathname}`);
+  });
+  const row = id => page.locator(`#history-rows tr[data-run-id="${id}"]`);
+  try {
+    await page.goto(origin);
+    await row('a').waitFor();
+    assert.equal(await row('a').locator('.run-number').textContent(), '#1');
+    assert.equal(await row('b').locator('.run-number').textContent(), '#2');
+    assert.equal(await row('a').locator('.row-tag.baseline').count(), 1);
+    assert.deepEqual(await row('b').locator('.flag').allTextContents(), ['--input_side 256', '--image 照片 b']);
+    assert.equal(await page.locator('#draft-diff-label').textContent(), '相对基准 #1');
+    assert.deepEqual(await page.locator('#draft-diff .flag').allTextContents(), ['--input_side 512', '--boxes 0']);
+
+    await row('b').locator('button[data-action="baseline"]').click();
+    await row('b').locator('.row-tag.baseline').waitFor();
+    assert.deepEqual(await row('a').locator('.flag').allTextContents(), ['--input_side 128', '--image 照片 current']);
+    assert.equal(await page.evaluate(() => localStorage.getItem('memoverse-relief-lab:baseline-run')), 'b');
+
+    await page.reload();
+    await row('b').locator('.row-tag.baseline').waitFor();
+    assert.equal(await row('a').locator('.row-tag.baseline').count(), 0);
+
+    await page.locator('#generate-button').click();
+    await page.locator('#app-error-text', { hasText: '测试拦截' }).waitFor();
+    assert.deepEqual(Object.keys(submitted).sort(), ['boxes', 'image_id', 'mask_image_id', 'parameters']);
+  } finally {
+    await context.close();
+  }
 });
 
 for (const [name, change, expectedSide, expectedImage, expectedLeft, prepare] of [

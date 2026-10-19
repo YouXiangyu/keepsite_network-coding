@@ -1,5 +1,5 @@
 import { ReliefComparison } from './lab_viewer.js';
-import { STALE_TASK_READ, TaskEpoch, totalElapsedSeconds } from './lab_state.js';
+import { STALE_TASK_READ, TaskEpoch, flagValue, snapshotChanges, totalElapsedSeconds } from './lab_state.js';
 
 const byId = (id) => document.getElementById(id);
 const lifecycle = new AbortController();
@@ -8,13 +8,15 @@ const parameterLoadEpoch = new TaskEpoch();
 const compactViewport = window.matchMedia('(max-width: 980px)');
 const ACTIVE_STATUSES = new Set(['running', 'cancelling']);
 const STATUS_LABELS = { running: '生成中', cancelling: '正在取消', cancelled: '已取消', ready: '已完成', failed: '失败', interrupted: '已中断' };
+const BASELINE_STORAGE_KEY = 'memoverse-relief-lab:baseline-run';
+const INPUT_CHANGE_LABELS = { image: '输入照片', mask: '上传蒙版', boxes: '保留框' };
 const state = {
-  token: null, config: null, parameters: {}, images: [], references: [], runs: [],
-  fields: new Map(), controls: new Map(), details: new Map(), detailRequests: new Map(), entries: new Map(),
+  token: null, config: null, parameters: {}, images: [], runs: [], baselineId: null,
+  fields: new Map(), controls: new Map(), groupChanges: new Map(), details: new Map(), detailRequests: new Map(), entries: new Map(),
   imageId: null, maskId: null, boxes: [], imageReady: false, drag: null,
   activeId: null, activeJob: null, watched: new Set(), handled: new Set(),
-  selected: { left: null, right: null }, pendingSelection: { left: null, right: null }, selectionSequence: { left: 0, right: 0 },
-  downloadBlobs: { left: null, right: null }, historySequence: 0,
+  selected: { left: null, right: null }, selectionSequence: { left: 0, right: 0 }, baselineChoice: null,
+  downloadBlobs: { left: null, right: null },
   uploading: 0, submitting: false, cancellingRequest: false, polling: false, pollingEpoch: null, pollTimer: null, disposed: false,
 };
 
@@ -90,6 +92,7 @@ function timeLabel(value) {
 function snapshot(job) {
   return {
     image_id: job.image_id ?? null,
+    image_name: job.image_name ?? null,
     mask_image_id: job.mask_image_id ?? null,
     parameters: clone(job.parameters ?? {}),
     boxes: clone(job.boxes ?? []),
@@ -98,6 +101,86 @@ function snapshot(job) {
 
 function draftSnapshot() {
   return { image_id: state.imageId, mask_image_id: maskIsActive() && state.parameters.mask_mode === 'provided' ? state.maskId : null, parameters: clone(state.parameters), boxes: clone(state.boxes) };
+}
+
+const viewable = (job) => job?.status === 'ready' && Boolean(job.files?.model);
+const mainPreset = () => state.config?.presets.find((preset) => preset.id === 'main') || null;
+
+function chronological(runs) {
+  return [...runs].sort((a, b) => (Date.parse(a.created_at || '') || 0) - (Date.parse(b.created_at || '') || 0)
+    || String(a.id).localeCompare(String(b.id)));
+}
+
+function runNumbers() {
+  return new Map(chronological(state.runs).map((job, index) => [job.id, index + 1]));
+}
+
+function runLabel(job, numbers = runNumbers()) {
+  const number = numbers.get(job.id);
+  return [number ? `#${number}` : null, job.title || job.image_name || '生成结果'].filter(Boolean).join(' · ');
+}
+
+function storedBaseline() {
+  try { return window.localStorage.getItem(BASELINE_STORAGE_KEY); } catch { return null; }
+}
+
+function resolveBaselineId() {
+  const stored = state.baselineChoice || storedBaseline();
+  if (stored && viewable(state.runs.find((job) => job.id === stored))) return stored;
+  const main = mainPreset();
+  if (!main) return null;
+  return chronological(state.runs).find((job) => viewable(job)
+    && state.config.fields.every((field) => same(job.parameters?.[field.key], main.parameters[field.key])))?.id ?? null;
+}
+
+// Without a baseline run, parameters are still compared with the main-branch preset; inputs are not.
+function baselineSnapshot() {
+  const run = state.runs.find((job) => job.id === state.baselineId);
+  if (run) return snapshot(run);
+  const main = mainPreset();
+  return main ? { parameters: clone(main.parameters) } : null;
+}
+
+function syncBaseline() {
+  const next = resolveBaselineId();
+  if (next === state.baselineId) return;
+  state.baselineId = next;
+  renderDifferences();
+  if (next) void selectResult('left', `run:${next}`);
+}
+
+async function setBaseline(id) {
+  state.baselineChoice = id;
+  try { window.localStorage.setItem(BASELINE_STORAGE_KEY, id); } catch { notice('浏览器未能保存基准选择；本次页面内仍然生效。'); }
+  state.baselineId = id;
+  renderHistory();
+  renderDifferences();
+  updateDraft();
+  await selectResult('left', `run:${id}`);
+}
+
+function changeFlag(change) {
+  if (change.key === 'mask') return `--mask ${change.after ? '已上传' : 'none'}`;
+  if (change.key === 'boxes') return `--boxes ${change.after}`;
+  return `--${change.key} ${flagValue(change.field, change.after)}`;
+}
+
+function changeValues(change) {
+  if (change.field) return [formatParameter(change.field, change.before), formatParameter(change.field, change.after)];
+  if (change.key === 'mask') return [change.before ? '已上传蒙版' : '未使用', change.after ? '已上传蒙版' : '未使用'];
+  if (change.key === 'boxes') return [`${change.before} 个`, `${change.after} 个（坐标不同）`];
+  return [String(change.before), String(change.after)];
+}
+
+function flagElements(changes) {
+  return changes.map((change) => {
+    const flag = document.createElement('code');
+    flag.className = 'flag';
+    flag.textContent = changeFlag(change);
+    const [before, after] = changeValues(change);
+    flag.title = `${change.field?.label || INPUT_CHANGE_LABELS[change.key]}：${before} → ${after}`;
+    return flag;
+  });
 }
 
 function matchingSnapshot(a, b) {
@@ -125,6 +208,7 @@ function updateDraft() {
     : matchesJob ? '当前参数已提交'
       : matchesResult ? '与右侧结果参数一致' : '当前参数尚未生成';
   byId('draft-state').classList.toggle('dirty', invalid || (!matchesJob && !matchesResult));
+  renderDraftChanges(draft, invalid);
   const retained = byId('retained-result-note');
   if (state.activeId) {
     retained.textContent = state.selected.right
@@ -141,6 +225,28 @@ function updateDraft() {
   byId('generate-button').textContent = state.submitting ? '正在提交…' : '生成模型';
   byId('image-file').disabled = state.uploading > 0;
   byId('mask-file').disabled = state.uploading > 0;
+}
+
+function renderDraftChanges(draft, invalid) {
+  const base = baselineSnapshot();
+  byId('draft-diff-label').textContent = state.baselineId ? `相对基准 #${runNumbers().get(state.baselineId)}` : '相对主分支默认';
+  const changes = base && !invalid ? snapshotChanges(base, { ...draft, image_name: currentImage()?.name }, state.config.fields) : [];
+  const target = byId('draft-diff');
+  if (!base) target.textContent = '—';
+  else if (invalid) target.textContent = '参数待检查';
+  else if (!changes.length) target.textContent = '无改动';
+  else target.replaceChildren(...flagElements(changes));
+  const changed = new Set(changes.map((change) => change.key));
+  const counts = new Map();
+  for (const [key, input] of state.controls) {
+    const isChanged = changed.has(key);
+    input.closest('.param-field').classList.toggle('changed', isChanged);
+    if (isChanged) counts.set(state.fields.get(key).group, (counts.get(state.fields.get(key).group) || 0) + 1);
+  }
+  for (const [group, element] of state.groupChanges) {
+    element.textContent = `改动 ${counts.get(group) || 0}`;
+    element.hidden = !counts.get(group);
+  }
 }
 
 function formatParameter(field, value) {
@@ -213,6 +319,7 @@ function updateParameterState() {
     input.closest('.param-field').classList.toggle('disabled', disabled);
   }
   byId('mask-upload').hidden = !(active && provided);
+  byId('region-state').textContent = !active ? '未启用（背景压平 0%）' : provided ? '使用上传蒙版' : '自动识别 + 保留框';
   byId('mask-mode-note').textContent = !active ? '背景压平为 0%：保留整图原始起伏，跳过分割。保留框和蒙版设置会留存，但本次不使用。'
     : provided ? '使用上传蒙版；自动面积过滤和自动图割选项暂停使用，原设置保留。' : '自动前景与手工保留框合并使用；色块只表示保留区域，不代表不同高度。';
   byId('image-stage').classList.toggle('inactive', !active || !state.imageReady);
@@ -225,13 +332,18 @@ function updateParameterState() {
 
 function createParameterControls() {
   const groups = byId('parameter-groups');
-  const impactLabels = { depth: '影响深度计算预算', inference: '影响推理次数', fusion: '影响融合，可复用原始深度', mask: '影响保留区域', shape: '影响几何形状，可复用深度', advanced: '影响边界、范围或计算资源' };
   for (const group of state.config.groups) {
     const details = document.createElement('details');
     details.className = 'parameter-group';
-    details.open = group.id === state.config.groups[0].id;
+    details.open = group.id === state.config.groups[0].id || group.id === 'shape';
     const summary = document.createElement('summary');
-    summary.textContent = group.label;
+    const title = document.createElement('span');
+    title.textContent = group.label;
+    const changes = document.createElement('span');
+    changes.className = 'group-changes';
+    changes.hidden = true;
+    state.groupChanges.set(group.id, changes);
+    summary.append(title, changes);
     const description = document.createElement('p');
     description.className = 'group-description';
     description.textContent = group.description;
@@ -239,14 +351,16 @@ function createParameterControls() {
     for (const field of state.config.fields.filter((candidate) => candidate.group === group.id)) {
       state.fields.set(field.key, field);
       const wrapper = document.createElement('div');
-      wrapper.className = `param-field${field.kind === 'boolean' ? ' is-boolean' : ''}`;
+      wrapper.className = `param-field${field.kind === 'boolean' ? ' is-boolean' : ''}${['choice', 'scales'].includes(field.kind) ? ' stacked' : ''}`;
+      const row = document.createElement('div');
+      row.className = 'param-row';
       const label = document.createElement('label');
       label.htmlFor = `parameter-${field.key}`;
       label.textContent = `${field.label}${field.unit ? `（${field.unit}）` : ''}`;
       const input = document.createElement(field.kind === 'choice' ? 'select' : 'input');
       input.id = label.htmlFor;
       input.name = field.key;
-      input.setAttribute('aria-describedby', `${input.id}-help ${input.id}-impact`);
+      input.setAttribute('aria-describedby', `${input.id}-effect ${input.id}-help`);
       if (field.kind === 'choice') {
         for (const option of field.options) {
           const node = document.createElement('option');
@@ -269,16 +383,18 @@ function createParameterControls() {
         input.step = String(Number((field.step * scale).toFixed(8)));
         input.inputMode = field.kind === 'integer' ? 'numeric' : 'decimal';
       }
+      const note = document.createElement('details');
+      note.className = 'param-note';
+      const effect = document.createElement('summary');
+      effect.id = `${input.id}-effect`;
+      effect.textContent = `效果：${field.effect}`;
       const help = document.createElement('p');
       help.id = `${input.id}-help`;
-      help.className = 'field-help';
-      help.textContent = field.help;
-      const impact = document.createElement('p');
-      impact.id = `${input.id}-impact`;
-      impact.className = 'field-impact';
-      impact.textContent = impactLabels[field.impact] || field.impact || '';
-      if (field.kind === 'boolean') { label.append(input); wrapper.append(label, help, impact); }
-      else wrapper.append(label, input, help, impact);
+      help.className = 'param-meaning';
+      help.textContent = `含义：${field.help}`;
+      note.append(effect, help);
+      row.append(label, input);
+      wrapper.append(row, note);
       on(input, field.kind === 'boolean' || field.kind === 'choice' ? 'change' : 'input', () => {
         const value = readControl(field, input);
         if (value !== undefined && input.validity.valid) state.parameters[field.key] = value;
@@ -339,10 +455,18 @@ function setSourceImage(id, { boxes, maskId = null } = {}) {
   byId('image-placeholder').hidden = false;
   byId('image-placeholder').textContent = image ? '正在载入照片…' : '选择或上传照片后开始实验';
   byId('image-size').textContent = image ? `${image.width} × ${image.height}` : '';
+  const thumb = byId('source-thumb');
+  thumb.hidden = !image;
   if (image) {
     byId('image-stage').style.aspectRatio = `${image.width} / ${image.height}`;
-    try { element.src = localUrl(image.preview_url); } catch (error) { showError(error); }
-  } else element.removeAttribute('src');
+    try {
+      element.src = localUrl(image.preview_url);
+      thumb.src = element.src;
+    } catch (error) { showError(error); }
+  } else {
+    element.removeAttribute('src');
+    thumb.removeAttribute('src');
+  }
   renderImageChoices();
   renderBoxes();
   updateParameterState();
@@ -511,53 +635,13 @@ async function getRun(id, fresh = false) {
 
 function runEntry(job) {
   return {
-    key: `run:${job.id}`, kind: 'run', id: job.id, label: job.title || `${job.image_name || '生成结果'} · ${timeLabel(job.created_at)}`,
+    key: `run:${job.id}`, id: job.id, label: runLabel(job),
     model: job.files?.model, parameters: clone(job.parameters || {}), snapshot: snapshot(job), job,
   };
 }
 
 function refreshEntries() {
-  const entries = new Map();
-  for (const reference of state.references) {
-    entries.set(`reference:${reference.id}`, {
-      key: `reference:${reference.id}`, kind: 'reference', id: reference.id,
-      label: reference.label, model: reference.model_url,
-      parameters: reference.parameters ? clone(reference.parameters) : null,
-    });
-  }
-  for (const job of state.runs.filter((run) => run.status === 'ready' && run.files?.model)) {
-    const entry = runEntry(job);
-    entries.set(entry.key, entry);
-  }
-  state.entries = entries;
-  for (const slot of ['left', 'right']) {
-    const select = byId(`${slot}-result`);
-    const selected = state.pendingSelection[slot] || state.selected[slot]?.key || select.value;
-    const signature = [...entries.values()].map((entry) => [entry.key, entry.label]);
-    if (select.dataset.signature !== JSON.stringify(signature)) {
-      select.dataset.signature = JSON.stringify(signature);
-      select.replaceChildren();
-      const empty = document.createElement('option');
-      empty.value = '';
-      empty.textContent = entries.size ? '选择对照模型' : '暂无已生成模型';
-      empty.disabled = true;
-      select.append(empty);
-      for (const [kind, label] of [['reference', '已有参考模型'], ['run', '本地运行结果']]) {
-        const group = document.createElement('optgroup');
-        group.label = label;
-        for (const entry of entries.values()) {
-          if (entry.kind !== kind) continue;
-          const option = document.createElement('option');
-          option.value = entry.key;
-          option.textContent = entry.label;
-          group.append(option);
-        }
-        if (group.children.length) select.append(group);
-      }
-    }
-    select.value = entries.has(selected) ? selected : '';
-    select.disabled = !entries.size;
-  }
+  state.entries = new Map(state.runs.filter(viewable).map((job) => [`run:${job.id}`, runEntry(job)]));
 }
 
 function renderModelStatus(slot, status) {
@@ -596,19 +680,15 @@ function setDownload(link, url, filename) {
 
 function renderEntry(slot, entry) {
   byId(`${slot}-title`).textContent = entry.label;
-  byId(`${slot}-result`).value = entry.key;
-  const completeReference = entry.parameters && state.config.fields.every((field) => Object.hasOwn(entry.parameters, field.key));
-  const description = entry.kind === 'run'
-    ? [entry.job.image_name, `生成耗时 ${duration(elapsed(entry.job))}`, cacheSummary(entry.job.report)].filter(Boolean).join(' · ')
-    : completeReference ? '已生成参考模型；生成参数以保存的快照为准。' : '参考模型：未保存完整参数快照，不将当前表单当作它的生成参数。';
-  byId(`${slot}-summary`).textContent = description;
+  byId(`${slot}-summary`).textContent = [entry.job.image_name, timeLabel(entry.job.created_at),
+    `生成耗时 ${duration(elapsed(entry.job))}`, cacheSummary(entry.job.report)].filter(Boolean).join(' · ');
   setDownload(byId(`${slot}-model-download`), entry.model, `${entry.id}.glb`);
   if (state.downloadBlobs[slot]) {
     URL.revokeObjectURL(state.downloadBlobs[slot]);
     state.downloadBlobs[slot] = null;
   }
   const parameterLink = byId(`${slot}-parameters-download`);
-  if (entry.job?.files?.parameters) setDownload(parameterLink, entry.job.files.parameters, `${entry.id}-parameters.json`);
+  if (entry.job.files?.parameters) setDownload(parameterLink, entry.job.files.parameters, `${entry.id}-parameters.json`);
   else if (entry.parameters) {
     const url = URL.createObjectURL(new Blob([JSON.stringify(entry.parameters, null, 2)], { type: 'application/json' }));
     state.downloadBlobs[slot] = url;
@@ -629,147 +709,172 @@ function renderEntry(slot, entry) {
 }
 
 function renderDifferences() {
-  const left = state.selected.left;
+  const base = state.baselineId ? baselineSnapshot() : null;
   const right = state.selected.right;
   const empty = byId('diff-empty');
-  byId('diff-rows').replaceChildren();
-  byId('diff-table-wrap').hidden = true;
+  const list = byId('diff-list');
+  list.replaceChildren();
+  list.hidden = true;
   empty.hidden = false;
-  if (!left || !right) { empty.textContent = '两侧选择模型后，只显示不同的生成参数。'; return; }
-  if (!left.parameters || !right.parameters) { empty.textContent = '其中一个参考模型没有保存生成参数，无法逐项比较。'; return; }
-  byId('diff-left-label').textContent = left.label;
-  byId('diff-right-label').textContent = right.label;
-  const keys = Object.keys(left.parameters).filter((key) => Object.hasOwn(right.parameters, key));
-  const incomplete = [...state.fields.keys()].some((key) => !Object.hasOwn(left.parameters, key) || !Object.hasOwn(right.parameters, key));
-  let count = 0;
-  for (const key of keys) {
-    if (same(left.parameters[key], right.parameters[key])) continue;
-    const field = state.fields.get(key);
-    const row = document.createElement('tr');
-    const label = document.createElement('th');
-    label.scope = 'row';
-    label.textContent = field?.label || key;
-    const leftCell = document.createElement('td');
-    leftCell.textContent = formatParameter(field, left.parameters[key]);
-    const rightCell = document.createElement('td');
-    rightCell.textContent = formatParameter(field, right.parameters[key]);
-    row.append(label, leftCell, rightCell);
-    byId('diff-rows').append(row);
-    count += 1;
-  }
-  if (left.snapshot && right.snapshot) {
-    const additions = [];
-    if (left.snapshot.image_id !== right.snapshot.image_id) additions.push(['输入照片', left.job.image_name || left.snapshot.image_id, right.job.image_name || right.snapshot.image_id]);
-    if (left.snapshot.mask_image_id !== right.snapshot.mask_image_id) additions.push(['上传蒙版', left.snapshot.mask_image_id || '未使用', right.snapshot.mask_image_id || '未使用']);
-    if (!same(left.snapshot.boxes, right.snapshot.boxes)) additions.push(['保留框', `${left.snapshot.boxes.length} 个（坐标不同）`, `${right.snapshot.boxes.length} 个（坐标不同）`]);
-    for (const values of additions) {
-      const row = document.createElement('tr');
-      values.forEach((value, index) => {
-        const cell = document.createElement(index === 0 ? 'th' : 'td');
-        if (index === 0) cell.scope = 'row';
-        cell.textContent = value;
-        row.append(cell);
-      });
-      byId('diff-rows').append(row);
-      count += 1;
+  if (!base || !right) { empty.textContent = '基准和这一轮都有模型后，这里列出不同的生成参数。'; return; }
+  if (state.baselineId === right.id) { empty.textContent = '两侧是同一轮结果。生成新的一轮，或在下方历史中选择其他结果放到右侧。'; return; }
+  const changes = snapshotChanges(base, right.snapshot, state.config.fields);
+  if (!changes.length) { empty.textContent = '两侧记录的生成参数与输入相同；差异只可能来自重新推理的微小数值波动。'; return; }
+  const flags = flagElements(changes);
+  for (const [index, change] of changes.entries()) {
+    const item = document.createElement('li');
+    const name = document.createElement('span');
+    name.textContent = change.field?.label || INPUT_CHANGE_LABELS[change.key];
+    const values = document.createElement('span');
+    values.className = 'diff-values';
+    const [before, after] = changeValues(change);
+    const removed = document.createElement('del');
+    removed.textContent = before;
+    const added = document.createElement('ins');
+    added.textContent = after;
+    values.append(removed, ' → ', added);
+    item.append(flags[index], name, values);
+    if (change.field?.effect) {
+      const effect = document.createElement('span');
+      effect.className = 'muted small';
+      effect.textContent = change.field.effect;
+      item.append(effect);
     }
+    list.append(item);
   }
-  if (count) {
-    empty.hidden = !incomplete;
-    if (incomplete) empty.textContent = '参考参数快照不完整；这里只比较两侧均有记录的参数，缺失值不当作参数变化。';
-    byId('diff-table-wrap').hidden = false;
-  } else empty.textContent = incomplete ? '两侧共同记录的参数没有差异；参考参数快照不完整，未记录部分无法比较。'
-    : '两侧记录的生成参数相同。此处始终比较模型快照，不读取当前编辑中的表单。';
+  empty.hidden = true;
+  list.hidden = false;
 }
 
 async function selectResult(slot, key) {
   if (!key || !state.entries.has(key)) return;
   const sequence = ++state.selectionSequence[slot];
-  state.pendingSelection[slot] = key;
-  byId(`${slot}-result`).value = key;
   let entry = state.entries.get(key);
   comparison.cancelPending(slot);
   renderModelStatus(slot, { loading: true, label: entry.label, retainedLabel: state.selected[slot]?.label });
   try {
-    if (entry.kind === 'run') {
-      const job = await getRun(entry.id);
-      if (state.disposed || sequence !== state.selectionSequence[slot]) return;
-      entry = runEntry(job);
-      state.entries.set(key, entry);
-    }
+    const job = await getRun(entry.id);
+    if (state.disposed || sequence !== state.selectionSequence[slot]) return;
+    entry = runEntry(job);
+    state.entries.set(key, entry);
     const ready = await comparison.setModel(slot, entry.model, entry.label);
     if (state.disposed || sequence !== state.selectionSequence[slot]) return;
     if (ready === true || !comparison.views.has(slot)) {
       state.selected[slot] = entry;
       renderEntry(slot, entry);
       renderDifferences();
+      renderHistory();
       updateDraft();
-    } else byId(`${slot}-result`).value = state.selected[slot]?.key || '';
+      return true;
+    }
+    return ready === null ? undefined : false;
   } catch (error) {
     if (state.disposed || sequence !== state.selectionSequence[slot]) return;
     renderModelStatus(slot, { error: error.message, retainedLabel: state.selected[slot]?.label });
-    byId(`${slot}-result`).value = state.selected[slot]?.key || '';
-  } finally {
-    if (sequence === state.selectionSequence[slot]) state.pendingSelection[slot] = null;
+    return false;
   }
 }
 
-function renderHistory(preferredId = null) {
-  const select = byId('history-select');
-  const chosen = preferredId || select.value || state.activeId || state.runs[0]?.id || '';
-  const signature = JSON.stringify(state.runs.map((job) => [job.id, job.status, job.title]));
-  if (select.dataset.signature !== signature) {
-    select.dataset.signature = signature;
-    select.replaceChildren();
-    if (!state.runs.length) {
-      const option = document.createElement('option');
-      option.value = ''; option.textContent = '暂无运行记录'; select.append(option);
+function historyCell(row, ...content) {
+  const cell = document.createElement('td');
+  cell.append(...content);
+  row.append(cell);
+  return cell;
+}
+
+function historyButton(kind, text, label, disabled) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'text-button';
+  button.dataset.action = kind;
+  button.textContent = text;
+  button.setAttribute('aria-label', label);
+  button.disabled = disabled;
+  return button;
+}
+
+function renderHistory() {
+  const numbers = runNumbers();
+  const base = baselineSnapshot();
+  const rightId = state.selected.right?.id;
+  const signature = JSON.stringify([state.baselineId, rightId, base,
+    state.runs.map((job) => [job.id, job.status, job.title, job.error, ACTIVE_STATUSES.has(job.status) ? null : job.elapsed_seconds, Boolean(job.files?.model)])]);
+  const rows = byId('history-rows');
+  if (rows.dataset.signature === signature) return;
+  rows.dataset.signature = signature;
+  const focused = document.activeElement?.closest?.('#history-rows button[data-action]');
+  const focus = focused ? [focused.closest('tr').dataset.runId, focused.dataset.action] : null;
+  rows.replaceChildren();
+  for (const job of state.runs) {
+    const number = numbers.get(job.id);
+    const isBaseline = job.id === state.baselineId;
+    const row = document.createElement('tr');
+    row.dataset.runId = job.id;
+    row.classList.toggle('is-baseline', isBaseline);
+    row.classList.toggle('is-right', job.id === rightId);
+    const numberText = document.createElement('span');
+    numberText.className = 'run-number';
+    numberText.textContent = `#${number}`;
+    const first = historyCell(row, numberText);
+    for (const [shown, text, className] of [[isBaseline, '基准', 'row-tag baseline'], [job.id === rightId, '右侧', 'row-tag']]) {
+      if (!shown) continue;
+      const tag = document.createElement('span');
+      tag.className = className;
+      tag.textContent = text;
+      first.append(tag);
     }
-    for (const job of state.runs) {
-      const option = document.createElement('option');
-      option.value = job.id;
-      option.textContent = `${job.title || job.image_name || job.id} · ${STATUS_LABELS[job.status] || job.status}`;
-      select.append(option);
+    if (job.title) {
+      const title = document.createElement('span');
+      title.className = 'row-title';
+      title.textContent = job.title;
+      first.append(title);
     }
+    historyCell(row, timeLabel(job.created_at));
+    historyCell(row, STATUS_LABELS[job.status] || job.status).className = `status-${job.status}`;
+    historyCell(row, ACTIVE_STATUSES.has(job.status) ? '—' : duration(elapsed(job)));
+    const changes = isBaseline ? null : snapshotChanges(base, snapshot(job), state.config.fields);
+    const changeCell = historyCell(row);
+    if (isBaseline) changeCell.textContent = '基准本身';
+    else if (changes.length) changeCell.append(...flagElements(changes));
+    else {
+      const sameText = document.createElement('span');
+      sameText.className = 'flag-same';
+      sameText.textContent = state.baselineId ? '与基准相同' : '与主分支默认相同';
+      changeCell.append(sameText);
+    }
+    if (job.error) {
+      const error = document.createElement('p');
+      error.className = 'row-error';
+      error.textContent = job.error;
+      changeCell.append(error);
+    }
+    const actions = document.createElement('div');
+    actions.className = 'row-actions';
+    actions.append(
+      historyButton('baseline', '设为基准', `把 #${number} 设为基准`, !viewable(job) || isBaseline),
+      historyButton('view', '右侧查看', `在右侧查看 #${number}`, !viewable(job) || job.id === rightId),
+      historyButton('load', '载入参数', `把 #${number} 的参数载入左侧`, !job.parameters),
+    );
+    historyCell(row, actions);
+    rows.append(row);
   }
-  select.value = state.runs.some((job) => job.id === chosen) ? chosen : state.runs[0]?.id || '';
-  select.disabled = !state.runs.length;
-  const selected = state.runs.find((job) => job.id === select.value);
-  byId('load-parameters').disabled = !selected;
-  byId('show-history-result').disabled = selected?.status !== 'ready' || !selected?.files?.model;
+  if (focus) rows.querySelector(`tr[data-run-id="${CSS.escape(focus[0])}"] button[data-action="${focus[1]}"]`)?.focus();
+  byId('history-empty').hidden = state.runs.length > 0;
+  byId('history-table-wrap').hidden = !state.runs.length;
+  byId('history-count').textContent = state.runs.length ? `共 ${state.runs.length} 轮` : '';
 }
 
-async function showHistory(id = byId('history-select').value, knownJob = null) {
-  if (!id) return;
-  const epoch = taskEpoch.capture();
-  const sequence = ++state.historySequence;
-  const job = knownJob || await getRun(id);
-  if (state.disposed || !taskEpoch.isCurrent(epoch) || sequence !== state.historySequence || id !== byId('history-select').value) return;
-  byId('history-summary').textContent = [
-    STATUS_LABELS[job.status] || job.status,
-    job.image_name,
-    timeLabel(job.created_at),
-    `${ACTIVE_STATUSES.has(job.status) ? '已运行' : '耗时'} ${duration(elapsed(job))}`,
-  ].filter(Boolean).join(' · ');
-  byId('history-cache').textContent = cacheSummary(job.report);
-  byId('history-error').hidden = !job.error;
-  byId('history-error').textContent = job.error || '';
-  byId('show-history-result').disabled = job.status !== 'ready' || !job.files?.model;
-}
-
-async function loadHistoryParameters() {
-  const id = byId('history-select').value;
-  if (!id) return;
+async function loadHistoryParameters(id) {
   const epoch = parameterLoadEpoch.invalidate();
   const job = await parameterLoadEpoch.read(epoch, getRun(id));
-  if (job === STALE_TASK_READ || state.disposed || id !== byId('history-select').value) return;
+  if (job === STALE_TASK_READ || state.disposed) return;
   if (!state.images.some((image) => image.id === job.image_id)) throw new Error('该记录使用的照片已不可用，无法载入参数。');
   state.parameters = clone(job.parameters);
   writeControls();
   setSourceImage(job.image_id, { boxes: job.boxes || [], maskId: job.mask_image_id || null });
   byId('run-title').value = '';
   setMobileView('parameters');
-  notice('已载入这次运行的照片、保留框和参数；已有模型不变，点击生成可开始新的运行。');
+  notice(`已载入 #${runNumbers().get(id)} 的照片、保留框和参数；已有模型不变，点击生成可开始新的一轮。`);
 }
 
 function renderJob() {
@@ -822,10 +927,17 @@ function schedulePoll() {
 function acceptFinishedRun(job) {
   if (ACTIVE_STATUSES.has(job.status) || !state.watched.has(job.id) || state.handled.has(job.id)) return;
   state.handled.add(job.id);
-  if (job.status === 'ready' && job.files?.model) {
+  if (viewable(job)) {
     refreshEntries();
-    void selectResult('right', `run:${job.id}`);
-    notice(`“${job.title || '新模型'}”已生成。${cacheSummary(job.report)}`);
+    syncBaseline();
+    const label = runLabel(job);
+    if (job.id === state.baselineId) notice(`${label} 已生成，并自动设为基准；之后每一轮都和它对比。`);
+    else {
+      void selectResult('right', `run:${job.id}`).then((shown) => {
+        if (shown === true) notice(`${label} 已生成，显示在右侧。${cacheSummary(job.report)}`);
+        else if (shown === false) notice(`${label} 已生成，但右侧模型未能载入；可在下方历史中点“右侧查看”重试。`);
+      });
+    }
   }
 }
 
@@ -867,11 +979,9 @@ async function refreshRuns() {
     if (active) acceptFinishedRun(active);
     state.runs.sort((a, b) => Date.parse(b.created_at || '') - Date.parse(a.created_at || ''));
     refreshEntries();
+    syncBaseline();
     renderHistory();
     renderJob();
-    const publishedEpoch = taskEpoch.capture();
-    await showHistory();
-    if (!taskEpoch.isCurrent(publishedEpoch) || state.disposed) return;
   } finally {
     if (state.pollingEpoch === epoch) {
       state.polling = false;
@@ -901,7 +1011,7 @@ async function generate(event) {
   if (maskIsActive() && state.parameters.mask_mode === 'provided') {
     const image = currentImage();
     const mask = currentMask();
-    if (!mask) { setMobileView('parameters'); byId('mask-select').focus(); throw new Error('请上传或选择黑白保留蒙版。'); }
+    if (!mask) { setMobileView('parameters'); byId('region-details').open = true; byId('mask-select').focus(); throw new Error('请上传或选择黑白保留蒙版。'); }
     if (mask.width * image.height !== image.width * mask.height) throw new Error('蒙版与照片宽高比不同，请重新选择。');
   }
   const submitted = draftSnapshot();
@@ -924,7 +1034,6 @@ async function generate(event) {
     state.activeJob = upsertRun(created);
     renderJob();
     renderHistory();
-    byId('history-select').value = created.id;
     setMobileView('results');
     notice('任务已提交。生成参数已保存为快照，接下来修改表单不会改变这个任务。');
     schedulePoll();
@@ -964,8 +1073,7 @@ async function cancelRun() {
       acceptFinishedRun(cancelled);
     }
     renderJob();
-    renderHistory(cancelled.id);
-    await showHistory(cancelled.id, cancelled);
+    renderHistory();
     await refreshRuns();
   } finally {
     state.cancellingRequest = false;
@@ -1042,6 +1150,7 @@ on(byId('source-image'), 'error', () => {
   byId('image-placeholder').hidden = false;
   byId('image-placeholder').textContent = '照片预览读取失败；可重新选择照片后重试。';
 });
+on(byId('source-thumb'), 'error', () => { byId('source-thumb').hidden = true; });
 on(byId('mask-preview'), 'error', () => { byId('mask-preview').hidden = true; byId('mask-note').textContent = '蒙版预览读取失败，请重新选择或上传。'; });
 on(byId('image-select'), 'change', (event) => setSourceImage(event.target.value));
 on(byId('mask-select'), 'change', (event) => { state.maskId = event.target.value || null; updateMaskPreview(); updateDraft(); });
@@ -1086,13 +1195,13 @@ on(byId('display-light'), 'input', (event) => {
   byId('display-light-value').textContent = `${value.toFixed(1)}×`;
   comparison.setLightIntensity(value);
 });
-for (const slot of ['left', 'right']) on(byId(`${slot}-result`), 'change', () => void selectResult(slot, byId(`${slot}-result`).value));
-on(byId('history-select'), 'change', action(() => { parameterLoadEpoch.invalidate(); renderHistory(); return showHistory(); }));
-on(byId('load-parameters'), 'click', action(loadHistoryParameters));
-on(byId('show-history-result'), 'click', action(() => {
-  const id = byId('history-select').value;
-  if (!id) return;
+on(byId('history-rows'), 'click', action((event) => {
+  const button = event.target.closest('button[data-action]');
+  if (!button || button.disabled) return;
+  const id = button.closest('tr').dataset.runId;
+  if (button.dataset.action === 'load') return loadHistoryParameters(id);
   setMobileView('results');
+  if (button.dataset.action === 'baseline') return setBaseline(id);
   return selectResult('right', `run:${id}`);
 }));
 on(byId('history-refresh'), 'click', action(async () => { clearError(); await refreshRuns(); }));
@@ -1105,8 +1214,13 @@ on(document, 'visibilitychange', () => {
   if (document.hidden) schedulePoll();
   else { comparison.resize(); void refreshRuns().catch(showError); }
 });
+const runBarObserver = new ResizeObserver(() => {
+  document.documentElement.style.setProperty('--run-bar-height', `${Math.ceil(byId('run-bar').getBoundingClientRect().height)}px`);
+});
+runBarObserver.observe(byId('run-bar'));
 on(window, 'pagehide', () => {
   state.disposed = true;
+  runBarObserver.disconnect();
   taskEpoch.invalidate();
   parameterLoadEpoch.invalidate();
   clearTimeout(state.pollTimer);
@@ -1131,15 +1245,16 @@ async function bootstrap() {
   state.config = payload.config;
   state.parameters = clone(payload.config.defaults);
   state.images = payload.images || [];
-  state.references = payload.references || [];
   state.runs = payload.runs || [];
   for (const job of state.runs) state.details.set(job.id, job);
   state.activeId = payload.active_run_id || null;
   state.controls.clear();
   state.fields.clear();
+  state.groupChanges.clear();
   byId('parameter-groups').replaceChildren();
   byId('preset-buttons').replaceChildren();
   createParameterControls();
+  state.baselineId = resolveBaselineId();
   let imageId = payload.default_image_id || state.images.find((image) => image.kind === 'image')?.id || null;
   if (restored) {
     state.watched.add(state.activeId);
@@ -1148,22 +1263,21 @@ async function bootstrap() {
     state.parameters = clone(restored.parameters);
     writeControls();
     imageId = restored.image_id;
+  } else if (!state.baselineId && mainPreset()) {
+    state.parameters = clone(mainPreset().parameters);
+    writeControls();
+    notice('还没有基准：已填入“主分支默认”参数，点击生成后这一轮会自动成为基准。');
   }
   setSourceImage(imageId, restored ? { boxes: restored.boxes, maskId: restored.mask_image_id } : {});
   refreshEntries();
   renderHistory();
   renderJob();
   setMobileView(state.activeId ? 'results' : 'parameters');
-  const original = state.references.find((reference) => reference.id === 'original') || state.references[0];
-  const latest = state.runs.find((job) => job.status === 'ready' && job.files?.model);
-  const fine = state.references.find((reference) => reference.id === 'fine') || state.references[1] || original;
+  const latest = state.runs.find((job) => viewable(job) && job.id !== state.baselineId);
   schedulePoll();
   const selections = [];
-  if (original) selections.push(selectResult('left', `reference:${original.id}`));
-  else if (latest) selections.push(selectResult('left', `run:${latest.id}`));
+  if (state.baselineId) selections.push(selectResult('left', `run:${state.baselineId}`));
   if (latest) selections.push(selectResult('right', `run:${latest.id}`));
-  else if (fine) selections.push(selectResult('right', `reference:${fine.id}`));
-  selections.push(showHistory());
   await Promise.allSettled(selections);
 }
 

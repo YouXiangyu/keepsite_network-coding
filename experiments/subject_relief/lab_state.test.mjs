@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { STALE_TASK_READ, TaskEpoch, totalElapsedSeconds } from './lab_state.js';
+import { STALE_TASK_READ, TaskEpoch, flagValue, snapshotChanges, totalElapsedSeconds } from './lab_state.js';
 
 function deferred() {
   let resolve;
@@ -56,6 +56,23 @@ test('current read failures are reported, obsolete read failures are ignored', a
   epoch.invalidate();
   oldRead.reject(new Error('obsolete failure'));
   assert.equal(await reading, STALE_TASK_READ);
+});
+
+test('changes list only differing recorded parameters and inputs', () => {
+  const fields = [
+    { key: 'amplitude', unit: '' }, { key: 'mirror' }, { key: 'scales' },
+    { key: 'background_flatten', unit: '%', display_scale: 100 }, { key: 'threads' },
+  ];
+  const base = { image_id: 'a', image_name: '房间', mask_image_id: null, boxes: [],
+    parameters: { amplitude: 0.32, mirror: false, scales: [1], background_flatten: 0, threads: 4 } };
+  const next = { image_id: 'b', image_name: '客厅', mask_image_id: null, boxes: [[0, 0, 1, 1]],
+    parameters: { amplitude: 0.48, mirror: true, scales: [1], background_flatten: 0.5 } };
+  const changes = snapshotChanges(base, next, fields);
+  assert.deepEqual(changes.map((change) => change.key), ['amplitude', 'mirror', 'background_flatten', 'image', 'boxes']);
+  assert.deepEqual(changes.map((change) => flagValue(change.field, change.after)), ['0.48', 'on', '50%', '客厅', '1']);
+  assert.deepEqual(snapshotChanges({ parameters: base.parameters }, next, fields).map((change) => change.key),
+    ['amplitude', 'mirror', 'background_flatten']);
+  assert.deepEqual(snapshotChanges(base, null, fields), []);
 });
 
 test('total time includes startup and never substitutes computation-only report time', () => {
