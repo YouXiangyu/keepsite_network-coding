@@ -1,0 +1,6 @@
+# Additional test dependencies on top of backend/requirements-dev.txt.
+# CPU-only torch==2.11.0 is installed separately from the official CPU index.
+# No model downloads or full local inference dependency bundle are required.
+scipy==1.17.0
+opencv-python==4.13.0.92
+trimesh==4.11.2

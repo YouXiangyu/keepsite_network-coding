@@ -245,3 +245,13 @@ CPU/线程与热身状态不同于服务器，且首次导入/加载有额外开
 ```
 
 本轮收尾时，以下新建测试临时目录的删除被自动审批策略拦截（工具仅返回 blocked by policy），已停止重试，没有绕过：`.cache/subject-relief/` 下的 `pytest-all-01`、`pytest-geometry-02`、`pytest-segmentation-20261019-a`、`pytest-segmentation-20261019-b`、`pytest-bevel-01`。它们与保留供对照的图片、模型和报告目录分别管理，均不纳入 Git。
+
+### 持续集成检查
+
+`.github/workflows/application-ci.yml` 为此实验增加独立检查，不改变现有 Backend、Frontend 或部署恢复检查，也不启动实验页面或执行部署：
+
+- **Subject relief tests**：Linux / Python 3.13 运行本目录全部 Python 测试。安装后端测试依赖、`requirements-ci.txt` 中的 scipy/OpenCV/trimesh，以及官方 CPU 索引的 `torch==2.11.0`。PyTorch 用于分割适配器的真实张量运算契约测试；模型加载器被测试替换，不下载或执行模型推理。无需安装完整 `requirements.txt` 的 torchvision、transformers、safetensors 和 onnxruntime。
+- **Subject process tests**：Windows / Python 3.13 仅安装 pytest，运行 `test_lab_process.py`，覆盖真实 Job Object 句柄关闭、监督进程强制退出及失败清理。Linux 全套会明确跳过三个 Windows 专属测试，由此检查补齐。
+- **Frontend tests**：使用现有 Node 24 执行 `node --test ../experiments/subject_relief/lab_state.test.mjs`（工作目录为 `demo`），不额外安装 npm 包。
+
+CI 使用干净 checkout；测试临时目录、Hugging Face 与 Torch 缓存均位于 runner 临时目录，并设置离线模型环境变量。不会恢复本机 `.cache/anyimage-deps` 或实验图片/模型缓存。实验检查失败时只上传 JUnit XML，不上传输入图片、GLB、权重或实验目录。绿灯表示上述自动化契约通过，不等于真实模型视觉质量验收。
