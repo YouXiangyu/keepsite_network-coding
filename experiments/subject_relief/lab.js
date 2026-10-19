@@ -4,6 +4,7 @@ import { STALE_TASK_READ, TaskEpoch, totalElapsedSeconds } from './lab_state.js'
 const byId = (id) => document.getElementById(id);
 const lifecycle = new AbortController();
 const taskEpoch = new TaskEpoch();
+const parameterLoadEpoch = new TaskEpoch();
 const compactViewport = window.matchMedia('(max-width: 980px)');
 const ACTIVE_STATUSES = new Set(['running', 'cancelling']);
 const STATUS_LABELS = { running: '生成中', cancelling: '正在取消', cancelled: '已取消', ready: '已完成', failed: '失败', interrupted: '已中断' };
@@ -759,7 +760,9 @@ async function showHistory(id = byId('history-select').value, knownJob = null) {
 async function loadHistoryParameters() {
   const id = byId('history-select').value;
   if (!id) return;
-  const job = await getRun(id);
+  const epoch = parameterLoadEpoch.invalidate();
+  const job = await parameterLoadEpoch.read(epoch, getRun(id));
+  if (job === STALE_TASK_READ || state.disposed || id !== byId('history-select').value) return;
   if (!state.images.some((image) => image.id === job.image_id)) throw new Error('该记录使用的照片已不可用，无法载入参数。');
   state.parameters = clone(job.parameters);
   writeControls();
@@ -902,6 +905,7 @@ async function generate(event) {
     if (mask.width * image.height !== image.width * mask.height) throw new Error('蒙版与照片宽高比不同，请重新选择。');
   }
   const submitted = draftSnapshot();
+  parameterLoadEpoch.invalidate();
   const title = byId('run-title').value.trim();
   const submittingEpoch = taskEpoch.invalidate();
   state.submitting = true;
@@ -992,6 +996,7 @@ function pointerPosition(event) {
 on(byId('image-stage'), 'pointerdown', (event) => {
   if (event.button !== 0 || !state.imageReady || !maskIsActive() || state.drag) return;
   if (state.boxes.length >= 8) { notice('最多保留 8 个框；可先删除或调整已有框。'); return; }
+  parameterLoadEpoch.invalidate();
   event.preventDefault();
   const start = pointerPosition(event);
   state.drag = { pointerId: event.pointerId, start, box: [...start, ...start] };
@@ -1042,6 +1047,12 @@ on(byId('image-select'), 'change', (event) => setSourceImage(event.target.value)
 on(byId('mask-select'), 'change', (event) => { state.maskId = event.target.value || null; updateMaskPreview(); updateDraft(); });
 on(byId('image-file'), 'change', action(() => uploadFile('image', byId('image-file'))));
 on(byId('mask-file'), 'change', action(() => uploadFile('mask', byId('mask-file'))));
+// User changes invalidate pending history loads, including invalid input and
+// file selection before its asynchronous upload completes. Rendering does not.
+for (const event of ['input', 'change']) on(byId('generation-form'), event, () => parameterLoadEpoch.invalidate());
+on(byId('generation-form'), 'click', (event) => {
+  if (event.target.closest('button')) parameterLoadEpoch.invalidate();
+});
 on(byId('generation-form'), 'submit', (event) => { event.preventDefault(); void generate(event).catch(showError); });
 on(byId('cancel-button'), 'click', action(cancelRun));
 on(byId('parameters-tab'), 'click', () => setMobileView('parameters'));
@@ -1076,7 +1087,7 @@ on(byId('display-light'), 'input', (event) => {
   comparison.setLightIntensity(value);
 });
 for (const slot of ['left', 'right']) on(byId(`${slot}-result`), 'change', () => void selectResult(slot, byId(`${slot}-result`).value));
-on(byId('history-select'), 'change', action(() => { renderHistory(); return showHistory(); }));
+on(byId('history-select'), 'change', action(() => { parameterLoadEpoch.invalidate(); renderHistory(); return showHistory(); }));
 on(byId('load-parameters'), 'click', action(loadHistoryParameters));
 on(byId('show-history-result'), 'click', action(() => {
   const id = byId('history-select').value;
@@ -1097,6 +1108,7 @@ on(document, 'visibilitychange', () => {
 on(window, 'pagehide', () => {
   state.disposed = true;
   taskEpoch.invalidate();
+  parameterLoadEpoch.invalidate();
   clearTimeout(state.pollTimer);
   lifecycle.abort();
   comparison.dispose();
