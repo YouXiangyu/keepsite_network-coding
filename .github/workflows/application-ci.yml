@@ -129,6 +129,10 @@ jobs:
         run: npm run build
       - name: Install Chromium and system dependencies
         run: npx playwright install --with-deps chromium
+      - name: Test experiment history and parameter interactions
+        run: |
+          mkdir -p test-results
+          node --test --test-reporter=spec --test-reporter=junit --test-reporter-destination=stdout --test-reporter-destination=test-results/subject-ui.xml ../experiments/subject_relief/lab_ui.test.mjs
       - name: Test Web interactions
         run: npm run test:web -- --reporter=line,junit --output=test-results/web
         env:

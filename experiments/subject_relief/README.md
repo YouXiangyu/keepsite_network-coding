@@ -252,6 +252,6 @@ CPU/线程与热身状态不同于服务器，且首次导入/加载有额外开
 
 - **Subject relief tests**：Linux / Python 3.13 运行本目录全部 Python 测试。安装后端测试依赖、`requirements-ci.txt` 中的 scipy/OpenCV/trimesh，以及官方 CPU 索引的 `torch==2.11.0`。PyTorch 用于分割适配器的真实张量运算契约测试；模型加载器被测试替换，不下载或执行模型推理。无需安装完整 `requirements.txt` 的 torchvision、transformers、safetensors 和 onnxruntime。
 - **Subject process tests**：Windows / Python 3.13 仅安装 pytest，运行 `test_lab_process.py`，覆盖真实 Job Object 句柄关闭、监督进程强制退出及失败清理。Linux 全套会明确跳过三个 Windows 专属测试，由此检查补齐。
-- **Frontend tests**：使用现有 Node 24 执行 `node --test ../experiments/subject_relief/lab_state.test.mjs`（工作目录为 `demo`），不额外安装 npm 包。
+- **Frontend tests**：使用现有 Node 24 执行 `node --test ../experiments/subject_relief/lab_state.test.mjs`（工作目录为 `demo`）。在现有 Chromium 安装步骤后执行 `node --test ../experiments/subject_relief/lab_ui.test.mjs`，复用 npm 锁定的 rolldown 与 Playwright，构建真实实验页面并验证历史载入、参数编辑等交互，不额外安装 npm 包。页面测试使用随机回环端口及独立临时目录，结束时关闭自建浏览器和服务，不访问已有的 4183 实验服务。
 
 CI 使用干净 checkout；测试临时目录、Hugging Face 与 Torch 缓存均位于 runner 临时目录，并设置离线模型环境变量。不会恢复本机 `.cache/anyimage-deps` 或实验图片/模型缓存。实验检查失败时只上传 JUnit XML，不上传输入图片、GLB、权重或实验目录。绿灯表示上述自动化契约通过，不等于真实模型视觉质量验收。
