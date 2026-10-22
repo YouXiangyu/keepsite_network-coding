@@ -41,7 +41,9 @@ class CapacityBenchmarkTests(unittest.TestCase):
         self.assertTrue(report["method"]["temporary_data_cleaned"])
         for case in report["cases"]:
             count = case["tickets"]
-            self.assertEqual(case["successful_timed_requests"], 2)
+            self.assertEqual(case["successful_timed_snapshots"], 2)
+            self.assertEqual(case["http_requests_per_snapshot"], 1)
+            self.assertEqual(case["timed_http_requests"], 2)
             self.assertGreater(case["response_body_bytes"], 0)
             self.assertEqual(case["response_content_encoding"], "identity")
             self.assertEqual(case["row_counts"]["tickets"], count)
@@ -85,7 +87,7 @@ class CapacityBenchmarkTests(unittest.TestCase):
 
     def test_invalid_arguments_do_not_create_a_scratch_directory(self):
         destination = self.root / "not-created"
-        for options in ({"counts": (0,)}, {"counts": (1, 1)}, {"samples": 0}, {"sql_samples": 0},
+        for options in ({"counts": (0,)}, {"counts": (10000,)}, {"counts": (10001,)}, {"counts": (1, 1)}, {"samples": 0}, {"sql_samples": 0},
                         {"warmup": -1}, {"profiles": ("unknown",)}):
             with self.subTest(options=options), self.assertRaises(ValueError):
                 benchmark.run_benchmark(destination, **options)

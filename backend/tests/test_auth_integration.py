@@ -9,6 +9,7 @@ from backend import accounts
 from backend.auth import AuthConfig, hashed, install_auth
 from backend.object_storage import LocalObjectStore
 from backend.shared_state import RedisSharedState
+from account_fixtures import account_snapshot
 from account_fixtures import image_bytes
 from test_auth import FakeProvider
 
@@ -51,12 +52,12 @@ def login(client, provider, name):
 
 def test_real_login_csrf_account_switch_and_logout_protect_old_urls(integrated):
     client, app, provider, config = integrated
-    assert client.get("/api/state").status_code == 401
+    assert client.get("/api/sync/snapshot").status_code == 401
     alice = login(client, provider, "alice")
     alice_sid = client.cookies.get(app.state.auth.cookie_name)
-    a = client.get("/api/state").json()
+    a = account_snapshot(client)
     assert a["userId"] == alice["user"]["id"] == hashed(config.issuer + "\0subject-alice")
-    assert a["data"] == {"tickets": []}
+    assert a["tickets"] == []
     alice_headers = {**HEADERS, "X-CSRF-Token": alice["csrfToken"]}
     upload = client.post("/api/media", headers=alice_headers,
                          data={"uploadId": "alice-photo"},
@@ -70,9 +71,9 @@ def test_real_login_csrf_account_switch_and_logout_protect_old_urls(integrated):
     assert created.status_code == 200, created.text
     assert client.get(asset["url"]).status_code == 200
     bob = login(client, provider, "bob")
-    b = client.get("/api/state").json()
+    b = account_snapshot(client)
     assert b["userId"] == bob["user"]["id"] != a["userId"]
-    assert b["data"] == {"tickets": []}
+    assert b["tickets"] == []
     assert client.get(asset["url"]).status_code == 404
     bob_headers = {**HEADERS, "X-CSRF-Token": bob["csrfToken"]}
     assert client.post("/api/tickets", headers=bob_headers, json=payload).status_code == 404
@@ -81,7 +82,7 @@ def test_real_login_csrf_account_switch_and_logout_protect_old_urls(integrated):
     response = client.post("/api/auth/logout", headers=bob_headers)
     assert response.status_code == 200
     assert client.get("/api/auth/session").json()["authenticated"] is False
-    for path in ("/api/state", asset["url"], "/api/backup"):
+    for path in ("/api/sync/snapshot", asset["url"], "/api/backup"):
         assert client.get(path).status_code == 401
 
 
@@ -91,7 +92,7 @@ def test_real_unverified_identity_never_initializes_business_account(integrated)
     response = client.post("/api/auth/login", headers=HEADERS,
                            json={"email": provider.email, "password": "StrongPassword!123"})
     assert response.status_code == 403 and response.json()["code"] == "email_unverified"
-    assert client.get("/api/state").status_code == 401
+    assert client.get("/api/sync/snapshot").status_code == 401
     with app.state.store.transaction() as db:
         assert db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
         assert db.execute("SELECT COUNT(*) FROM tickets").fetchone()[0] == 0

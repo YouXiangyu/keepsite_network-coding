@@ -95,8 +95,8 @@ test('an already-created draft can recover from timeout, changed content and a c
   expect(updates[0].body.operationId).not.toBe(creates[0].body.operationId);
   expect(creates[1].body.operationId).not.toBe(creates[0].body.operationId);
   expect(received.filter((item: any) => item.path === '/api/media' && item.method === 'POST')).toHaveLength(1);
-  const response = await page.request.get('/api/state');
-  const saved = (await response.json()).data.tickets.filter((item: any) => item.id === creates[0].body.id);
+  const response = await page.request.get('/api/sync/snapshot');
+  const saved = (await response.json()).tickets.filter((item: any) => item.id === creates[0].body.id);
   expect(saved).toHaveLength(1);
   expect(saved[0].version).toBe(2);
   expect(saved[0].fields.cinema).toBe('响应丢失后继续修改的草稿');
@@ -113,8 +113,8 @@ test('an uncertain edit can be reverted to its original value after reconciliati
   await expect(page.getByLabel('片名')).toHaveValue('A 的电影票');
   await page.getByRole('button', { name: '保存票根', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'A 的电影票', exact: true })).toBeVisible();
-  const data = await (await request.get('/api/state')).json();
-  expect(data.data.tickets[0].fields.title).toBe('A 的电影票'); expect(data.data.tickets[0].version).toBe(3);
+  const data = await (await request.get('/api/sync/snapshot')).json();
+  expect(data.tickets[0].fields.title).toBe('A 的电影票'); expect(data.tickets[0].version).toBe(3);
 });
 test('reconciliation merges untouched remote fields and never reattaches a confirmed old photo', async ({ page, request }) => {
   await page.clock.install(); await page.goto('/tickets/new');
@@ -133,7 +133,7 @@ test('reconciliation merges untouched remote fields and never reattaches a confi
   await expect(page.getByRole('heading', { name: '新的片名' })).toBeVisible();
   const writes = (await status(request)).requests.filter((entry: any) => entry.method === 'PATCH');
   expect(writes.at(-1).body.fields).toEqual({ title: '新的片名' }); expect(writes.at(-1).body.originalAssetId).toBeUndefined();
-  const data = await (await request.get('/api/state')).json(); const ticket = data.data.tickets.find((entry: any) => entry.id === created.id);
+  const data = await (await request.get('/api/sync/snapshot')).json(); const ticket = data.tickets.find((entry: any) => entry.id === created.id);
   expect(ticket.fields.cinema).toBe('另一台设备填写的影院'); expect(ticket.media.original.assetId).toBe(replacement);
 });
 test('same-account CSRF renewal exposes reconciliation for an interrupted save', async ({ page, request }) => {
@@ -147,7 +147,7 @@ test('same-account CSRF renewal exposes reconciliation for an interrupted save',
   await page.getByRole('button', { name: '核对保存结果，保留草稿' }).click();
   await page.getByRole('button', { name: '保存票根', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'A 的电影票', exact: true })).toBeVisible();
-  const data = await (await request.get('/api/state')).json(); expect(data.data.tickets[0].fields.title).toBe('A 的电影票');
+  const data = await (await request.get('/api/sync/snapshot')).json(); expect(data.tickets[0].fields.title).toBe('A 的电影票');
 });
 
 test('confirmed fields accept a later remote correction when the user made no new edit', async ({ page, request }) => {
@@ -212,7 +212,7 @@ test('a processing request with a lost response reuses its operation and can be 
   await expect(page.getByText('处理请求已确认，进度会自动更新。')).toBeVisible();
   const posts = (await status(request)).requests.filter((entry: any) => entry.path.endsWith('/process') && entry.method === 'POST');
   expect(posts).toHaveLength(2); expect(posts[1].body.operationId).toBe(posts[0].body.operationId);
-  const state = await (await request.get('/api/state')).json(); expect(state.data.tickets[0].version).toBe(2); expect(state.data.tickets[0].processing.status).toBe('queued');
+  const state = await (await request.get('/api/sync/snapshot')).json(); expect(state.tickets[0].version).toBe(2); expect(state.tickets[0].processing.status).toBe('queued');
 });
 test('same-account renewal interrupts processing safely and the durable receipt confirms it', async ({ page, request }) => {
   await page.goto('/tickets/item-1'); await hang(request, '/api/tickets/item-1/process', 'POST');

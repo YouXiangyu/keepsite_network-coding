@@ -16,8 +16,9 @@ export const sampleItem = (id = 'item-1') => ({
   media: { original: media(), poster: null }, processing: { status: 'not_started', error: null },
 });
 export const sampleData = () => ({ tickets: [sampleItem()] });
-export const serverState = (id = 'a') => ({
-  initialized: true, serverId: 'server', userId: id, revision: 7, data: sampleData(),
+export const snapshotPage = (id = 'a') => ({
+  serverId: 'server', userId: id, snapshotId: 'snapshot-' + id, cursor: 7, total: 1, offset: 0,
+  tickets: sampleData().tickets, nextPageToken: null, expiresAt: Date.now() + 600000,
   capabilities: { processing: false, processingUnavailableReason: '处理配置未就绪，请配置服务端识别。', cloudStorage: true, deviceSync: false },
 });
 

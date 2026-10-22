@@ -20,8 +20,9 @@ from backend.posters import PosterCandidate
 from backend.processing import ProcessingWorker, ProcessingFailed, run_isolated_ocr, TEMP_RETENTION_SECONDS
 from backend import processing_repository as repository
 from backend.shared_state import RedisSharedState
+from account_fixtures import account_snapshot
 from account_fixtures import ORIGIN, USERS, WRITE_HEADERS, FakeAuthFactory, image_bytes, signed_in
-from test_api import create, upload, patch, delete, make_app
+from test_api import create, upload, patch, delete, make_app, applied
 from test_backup_restore import restored_app
 from test_object_storage import FakeS3Client
 
@@ -89,15 +90,15 @@ def force_due(store, identifier):
 
 
 def ticket(client):
-    response = client.get("/api/state")
+    response = client.get("/api/sync/snapshot")
     assert response.status_code == 200, response.text
-    return response.json()["data"]["tickets"][0]
+    return response.json()["tickets"][0]
 
 
 def test_creation_commits_intent_without_waiting_and_stream_worker_publishes(tmp_path):
     with pipeline(tmp_path) as (client, app, worker, fake, provider, ocr_calls):
         state, _ = create(client)
-        assert state["data"]["tickets"][0]["processing"] == {"status": "queued", "error": None}
+        assert state["tickets"][0]["processing"] == {"status": "queued", "error": None}
         assert state["capabilities"]["processing"] is True and state["capabilities"]["processingUnavailableReason"] is None
         assert not ocr_calls and not provider.calls
         assert worker.queue.client.exists(worker.queue.stream) == 0
@@ -123,7 +124,7 @@ def test_missing_configuration_never_fakes_processing_or_registers_jobs(tmp_path
     with TestClient(app, base_url=ORIGIN) as client:
         signed_in(client)
         state, _ = create(client)
-        assert state["data"]["tickets"][0]["processing"]["status"] == "not_started"
+        assert state["tickets"][0]["processing"]["status"] == "not_started"
         response = client.post("/api/tickets/ticket-1/process", headers=WRITE_HEADERS, json={"operationId": "manual"})
         assert response.status_code == 503
         with app.state.store.transaction() as db:
@@ -137,7 +138,7 @@ def test_processing_retry_is_idempotent_and_owner_scoped(tmp_path):
         worker.run_once()
         request = {"operationId": "process-again"}
         first = client.post("/api/tickets/ticket-1/process", headers=WRITE_HEADERS, json=request)
-        assert first.status_code == 200 and first.json()["data"]["tickets"][0]["processing"]["status"] == "queued"
+        assert first.status_code == 200 and applied(client, first)["tickets"][0]["processing"]["status"] == "queued"
         assert client.post("/api/tickets/ticket-1/process", headers=WRITE_HEADERS, json=request).json() == first.json()
         with app.state.store.transaction() as db:
             assert db.execute("SELECT COUNT(*) FROM processing_jobs").fetchone()[0] == 2
@@ -221,7 +222,7 @@ def test_original_change_clears_only_old_ocr_fields_and_preserves_prior_poster(t
         replacement = upload(client, "blue")
         response = client.patch("/api/tickets/ticket-1", headers=WRITE_HEADERS,
                                 json={"operationId": "new-original", "originalAssetId": replacement["assetId"]})
-        changed = response.json()["data"]["tickets"][0]
+        changed = applied(client, response)["tickets"][0]
         assert changed["fields"]["title"] == changed["fields"]["cinema"] == ""
         assert changed["fieldSources"]["title"] == changed["fieldSources"]["cinema"] == "empty"
         assert changed["fields"]["seat"] == "User seat"
@@ -253,7 +254,7 @@ def test_delete_during_s3_upload_never_publishes_or_authorizes_orphan(tmp_path, 
             return original_put(**kwargs)
         monkeypatch.setattr(fake, "put_object", raced)
         worker.run_once()
-        assert client.get("/api/state").json()["data"]["tickets"] == []
+        assert account_snapshot(client)["tickets"] == []
         with app.state.store.transaction() as db:
             assert db.execute("SELECT COUNT(*) FROM processing_artifacts").fetchone()[0] == 1
             assert db.execute("SELECT COUNT(*) FROM asset_grants").fetchone()[0] == 1
@@ -288,7 +289,7 @@ def test_expired_durable_job_converges_even_when_redis_is_down(tmp_path, monkeyp
             worker.run_once()
         failed = ticket(client)
         assert failed["processing"]["status"] == "failed"
-        assert failed["version"] == first["data"]["tickets"][0]["version"] + 1
+        assert failed["version"] == first["tickets"][0]["version"] + 1
 
 
 def test_cleanup_is_bounded_recorded_and_preserves_active_and_recent_files(tmp_path):
@@ -459,10 +460,10 @@ def test_cache_configuration_identity_includes_unavailable_reason(tmp_path):
                      auth_provider=FakeAuthFactory(), shared_state=cache, run_recovery=False, run_processing=False)
     with TestClient(app, base_url=ORIGIN) as client:
         signed_in(client)
-        first = client.get("/api/state").json()
+        first = account_snapshot(client)
         app.state.store.processing_unavailable_reason = "处理配置发生变化，请重新配置。"
-        second = client.get("/api/state").json()
-        assert second["revision"] == first["revision"]
+        second = account_snapshot(client)
+        assert second["cursor"] == first["cursor"]
         assert second["capabilities"]["processingUnavailableReason"] == "处理配置发生变化，请重新配置。"
         assert cache.client.dbsize() == 2
 

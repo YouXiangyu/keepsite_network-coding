@@ -196,17 +196,15 @@ def run(args):
     from backend.tests.account_fixtures import FakeAuthFactory, signed_in, ORIGIN
     workspace = destination / "synthetic-account"
     app = create_app(workspace, auth_provider=FakeAuthFactory(), object_store=LocalObjectStore(workspace),
-                     shared_state=RedisSharedState(), run_recovery=False)
+                     shared_state=RedisSharedState(), run_recovery=False, run_processing=False)
     with TestClient(app, base_url=ORIGIN) as client:
         signed_in(client)
-        assert client.get("/api/state").status_code == 200
+        capacity._read_snapshot(client, 0)
         capacity._seed(app.state.store, 300, "shared-original")
 
         def request_state():
             started = time.perf_counter()
-            response = client.get("/api/state")
-            if response.status_code != 200 or len(response.json()["data"]["tickets"]) != 300:
-                raise RuntimeError("Synthetic API measurement failed")
+            capacity._read_snapshot(client, 300)
             return (time.perf_counter() - started) * 1000
 
         baseline = [request_state() for _ in range(30)]
@@ -264,6 +262,8 @@ def run(args):
                         "One persistent OCR child measures warm inference; production currently spawns per job, so cold cost applies there.",
                         "Cold means first inference in a fresh OCR process; the operating-system disk cache was not flushed.",
                         "API and OCR sampling run concurrently; samples and averages do not isolate scheduler or unrelated system effects."],
+        "apiMethod": {"endpoint": "/api/sync/snapshot", "tickets": 300, "pageLimit": 100,
+                      "unit": "complete three-page snapshot including JSON validation"},
         "cold": cold, "memory": result["memory"], "moduleImportSeconds": result["moduleImportSeconds"],
         "warmSeconds": percentiles([row["seconds"] for row in result["results"][1:]]),
         "apiBaselineMilliseconds": percentiles(baseline), "apiDuringOcrMilliseconds": percentiles(concurrent),

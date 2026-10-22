@@ -1,4 +1,4 @@
-"""Offline synthetic /api/state baseline; never opens an existing workspace.
+"""Offline synthetic paginated snapshot baseline; never opens an existing workspace.
 
 Run with the project's development Python dependencies. All SQLite and
 object files live in a newly owned TemporaryDirectory below --temp-root. This is
@@ -45,9 +45,10 @@ LIMITATIONS = [
     "Serial in-process TestClient requests: no real network, TLS, Cognito, S3 or concurrent traffic.",
     "No browser was started. Image references and byte totals describe the response media manifest, not browser requests.",
     "Images are tiny synthetic 9x7 PNGs; their byte totals do not represent user photographs or measured browser transfer/decode cost.",
-    "Profiles contain saved local originals, either shared or distinct. M1 has no OCR/poster processing or cloud-save measurement.",
+    "Profiles contain saved local originals, either shared or distinct. Background processing is disabled; no cloud-save measurement occurs.",
     "Warm request timings exclude fixture creation, account initialization, seeding and SQL trace instrumentation.",
     "CRUD replay, ownership and media checks run outside the timed snapshot reads. No backups, inference, cloud authentication or cloud storage calls occur.",
+    "Counts stop at 9999 so the extra behavior-check ticket fits the 10000-ticket snapshot ceiling.",
     "Local measurements are not a t3.small capacity guarantee; no EC2 CPU credits, memory limits or real workload are represented.",
 ]
 
@@ -102,18 +103,40 @@ def _seed(store, count: int, profile: str) -> dict[str, int]:
         return {row["id"]: row["size"] for row in db.execute("SELECT id,size FROM assets")}
 
 
-def _checked_response(response, count: int, expected_body: bytes | None = None) -> dict:
-    if response.status_code != 200:
-        raise RuntimeError(f"Synthetic state request failed with HTTP {response.status_code}")
-    body = response.json()
-    if not body.get("initialized") or body.get("userId") != USER_ID:
-        raise RuntimeError("Synthetic account identity or initialization changed")
-    items = body["data"]["tickets"]
+def _read_snapshot(client, count: int, expected: dict | None = None, *, user_id=USER_ID) -> dict:
+    """Validate every frozen page before exposing the completed synthetic view."""
+    items, requests, body_bytes, token = [], 0, 0, None
+    identity, seen_tokens, encodings = None, set(), set()
+    while True:
+        params = {"limit": 100}
+        if token:
+            params["pageToken"] = token
+        response = client.get("/api/sync/snapshot", params=params)
+        if response.status_code != 200:
+            raise RuntimeError(f"Synthetic snapshot request failed with HTTP {response.status_code}")
+        page = response.json()
+        current = (page["serverId"], page["userId"], page["snapshotId"], page["cursor"], page["total"])
+        identity = identity or current
+        if current != identity or page["userId"] != user_id or page["total"] != count or page["offset"] != len(items):
+            raise RuntimeError("Synthetic snapshot identity, cursor, count or offset changed")
+        items.extend(page["tickets"])
+        requests += 1
+        body_bytes += len(response.content)
+        encodings.add(response.headers.get("content-encoding", "identity"))
+        token = page["nextPageToken"]
+        if not token:
+            break
+        if not page["tickets"] or token in seen_tokens or len(items) >= count:
+            raise RuntimeError("Synthetic snapshot pagination did not progress")
+        seen_tokens.add(token)
     if len(items) != count or len({item["id"] for item in items}) != count:
         raise RuntimeError("Synthetic ticket count or identities do not match the requested case")
-    if expected_body is not None and response.content != expected_body:
-        raise RuntimeError("A read changed the state response during the measurement")
-    return body
+    stable = {"serverId": page["serverId"], "userId": page["userId"], "cursor": page["cursor"],
+              "tickets": items, "capabilities": page["capabilities"]}
+    if expected is not None and stable != expected["state"]:
+        raise RuntimeError("A read changed the completed snapshot during the measurement")
+    return {"state": stable, "requests": requests, "body_bytes": body_bytes,
+            "content_encoding": ",".join(sorted(encodings))}
 
 
 def _row_counts(store) -> dict[str, int]:
@@ -122,7 +145,7 @@ def _row_counts(store) -> dict[str, int]:
         return {table: db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in tables}
 
 
-def _trace_request(client, store, count: int, expected_body: bytes) -> dict[str, int]:
+def _trace_request(client, store, count: int, expected: dict) -> dict[str, int]:
     counts: Counter[str] = Counter()
     lock = threading.Lock()
     original_connect = store.connect
@@ -139,7 +162,7 @@ def _trace_request(client, store, count: int, expected_body: bytes) -> dict[str,
         return connection
 
     with patch.object(store, "connect", side_effect=connect):
-        _checked_response(client.get("/api/state"), count, expected_body)
+        _read_snapshot(client, count, expected)
     return dict(sorted(counts.items()))
 
 
@@ -164,28 +187,32 @@ def _behavior_checks(client, count: int) -> dict:
                                 files={"file": ("probe.png", raw, "image/png")}, headers=WRITE_HEADERS))
     payload = {"id": "behavior-probe", "originalAssetId": media["assetId"],
                "operationId": "probe-create", "fields": {"title": "操作校验"}}
-    created = client.post("/api/tickets", json=payload, headers=WRITE_HEADERS)
-    _checked_response(created, count + 1)
-    replay = client.post("/api/tickets", json=payload, headers=WRITE_HEADERS)
-    _checked_response(replay, count + 1, created.content)
+    created = success(client.post("/api/tickets", json=payload, headers=WRITE_HEADERS))
+    if created["operationId"] != payload["operationId"] or not isinstance(created["committedCursor"], int):
+        raise RuntimeError("Creation did not return a confirmed operation cursor")
+    replay = success(client.post("/api/tickets", json=payload, headers=WRITE_HEADERS))
+    if replay != created:
+        raise RuntimeError("An immediate operation replay changed the receipt")
+    confirmed = _read_snapshot(client, count + 1)
+    if confirmed["state"]["serverId"] != created["serverId"] or confirmed["state"]["cursor"] < created["committedCursor"]:
+        raise RuntimeError("Creation receipt was not confirmed in the same synchronization space")
     read = client.get(media["url"])
     if read.status_code != 200 or read.content != raw:
         raise RuntimeError("Owned media did not round-trip exactly")
     signed_in(client, "bob")
-    other = success(client.get("/api/state"))
-    if other["userId"] != USERS["bob"]["id"] or other["data"]["tickets"]:
-        raise RuntimeError("Ticket state leaked across accounts")
+    _read_snapshot(client, 0, user_id=USERS["bob"]["id"])
     if client.get(media["url"]).status_code != 404:
         raise RuntimeError("Media ownership was not enforced")
     if client.patch("/api/tickets/behavior-probe", json={"operationId": "bob-update", "fields": {"seat": "bad"}}, headers=WRITE_HEADERS).status_code != 404:
         raise RuntimeError("Ticket update ownership was not enforced")
     signed_in(client)
-    edited = success(client.patch("/api/tickets/behavior-probe", json={"operationId": "probe-update", "fields": {"seat": "5排6座"}}, headers=WRITE_HEADERS))
-    ticket = next(item for item in edited["data"]["tickets"] if item["id"] == payload["id"])
+    success(client.patch("/api/tickets/behavior-probe", json={"operationId": "probe-update", "fields": {"seat": "5排6座"}}, headers=WRITE_HEADERS))
+    edited = _read_snapshot(client, count + 1)
+    ticket = next(item for item in edited["state"]["tickets"] if item["id"] == payload["id"])
     if ticket["fields"]["title"] != "操作校验" or ticket["fields"]["seat"] != "5排6座" or ticket["fieldSources"]["seat"] != "user":
         raise RuntimeError("Field update did not preserve unrelated user fields")
-    deleted = client.request("DELETE", "/api/tickets/behavior-probe", json={"operationId": "probe-delete"}, headers=WRITE_HEADERS)
-    _checked_response(deleted, count)
+    success(client.request("DELETE", "/api/tickets/behavior-probe", json={"operationId": "probe-delete"}, headers=WRITE_HEADERS))
+    _read_snapshot(client, count)
     if client.get(media["url"]).status_code != 404:
         raise RuntimeError("Deleted ticket still authorized media access")
     if client.patch("/api/tickets/behavior-probe", json={"operationId": "probe-late", "fields": {"title": "late"}}, headers=WRITE_HEADERS).status_code != 404:
@@ -202,24 +229,22 @@ def _sample_case(root: Path, profile: str, count: int, warmup: int, samples: int
         for target in ("backend.app.configured_store", "backend.api.create_account_backup"):
             guards.enter_context(patch(target, side_effect=AssertionError("Capacity baseline must not use cloud defaults or create a backup")))
         app = create_app(root / "workspace", auth_provider=FakeAuthFactory(), object_store=storage,
-                         shared_state=RedisSharedState(), run_recovery=False)
+                         shared_state=RedisSharedState(), run_recovery=False, run_processing=False)
         store = app.state.store
         with TestClient(app, base_url=ORIGIN) as client:
             signed_in(client)
-            _checked_response(client.get("/api/state"), 0)
+            _read_snapshot(client, 0)
             asset_sizes = _seed(store, count, profile)
-            baseline = client.get("/api/state")
-            state = _checked_response(baseline, count)
+            baseline = _read_snapshot(client, count)
             before = _row_counts(store)
             for _ in range(warmup):
-                _checked_response(client.get("/api/state"), count, baseline.content)
+                _read_snapshot(client, count, baseline)
             timings = []
             for _ in range(samples):
                 started = perf_counter()
-                response = client.get("/api/state")
+                _read_snapshot(client, count, baseline)
                 timings.append((perf_counter() - started) * 1000)
-                _checked_response(response, count, baseline.content)
-            traces = [_trace_request(client, store, count, baseline.content) for _ in range(sql_samples)]
+            traces = [_trace_request(client, store, count, baseline) for _ in range(sql_samples)]
             if any(set(trace) - {"SELECT", "BEGIN", "COMMIT"} for trace in traces):
                 raise RuntimeError("Unexpected non-read SQL in the state baseline")
             after = _row_counts(store)
@@ -229,8 +254,9 @@ def _sample_case(root: Path, profile: str, count: int, warmup: int, samples: int
     ordered = sorted(timings)
     return {
         "profile": profile, "tickets": count,
-        "warmup_requests": warmup, "timed_requests": samples, "successful_timed_requests": samples,
-        "response_body_bytes": len(baseline.content), "response_content_encoding": baseline.headers.get("content-encoding", "identity"),
+        "warmup_snapshots": warmup, "timed_snapshots": samples, "successful_timed_snapshots": samples,
+        "http_requests_per_snapshot": baseline["requests"], "timed_http_requests": samples * baseline["requests"],
+        "response_body_bytes": baseline["body_bytes"], "response_content_encoding": baseline["content_encoding"],
         "latency_ms": {"p50": round(statistics.median(timings), 4), "p95": round(ordered[math.ceil(samples * .95) - 1], 4), "max": round(max(timings), 4)},
         "sql": {"samples": sql_samples, "select_min": min(trace.get("SELECT", 0) for trace in traces),
                 "select_max": max(trace.get("SELECT", 0) for trace in traces),
@@ -240,7 +266,7 @@ def _sample_case(root: Path, profile: str, count: int, warmup: int, samples: int
         "read_checks": {"snapshot_and_revision_unchanged": True, "row_counts_unchanged": True,
                         "traced_write_statements": 0},
         "row_counts": after,
-        "media_manifest": _image_resources(state["data"]["tickets"], asset_sizes),
+        "media_manifest": _image_resources(baseline["state"]["tickets"], asset_sizes),
         "behavior_checks": behavior,
     }
 
@@ -256,8 +282,8 @@ def _git_metadata() -> dict:
 
 
 def run_benchmark(temp_root: Path, *, counts=(100, 1000), profiles=PROFILES, warmup=5, samples=30, sql_samples=3) -> dict:
-    if not counts or len(set(counts)) != len(counts) or any(type(count) is not int or not 1 <= count <= 65536 for count in counts):
-        raise ValueError("counts must be distinct integers between 1 and 65536")
+    if not counts or len(set(counts)) != len(counts) or any(type(count) is not int or not 1 <= count <= 9999 for count in counts):
+        raise ValueError("counts must be distinct integers between 1 and 9999 (one extra behavior-check ticket is required)")
     if not profiles or len(set(profiles)) != len(profiles) or any(profile not in PROFILES for profile in profiles):
         raise ValueError("profiles must be distinct supported profile names")
     if type(warmup) is not int or warmup < 0 or type(samples) is not int or samples < 1 or type(sql_samples) is not int or sql_samples < 1:
@@ -273,12 +299,12 @@ def run_benchmark(temp_root: Path, *, counts=(100, 1000), profiles=PROFILES, war
             for count in counts:
                 results.append(_sample_case(owned / f"{profile}-{count}", profile, count, warmup, samples, sql_samples))
     return {
-        "schema_version": 2, "application_schema_version": 3, "measured_at_utc": datetime.now(timezone.utc).isoformat(),
+        "schema_version": 3, "application_schema_version": 3, "measured_at_utc": datetime.now(timezone.utc).isoformat(),
         "environment": {**_git_metadata(), "python": platform.python_version(), "sqlite": sqlite3.sqlite_version,
                         "platform": platform.platform(), "logical_cpu_count": os.cpu_count(),
                         "fastapi": version("fastapi"), "httpx": version("httpx")},
-        "method": {"endpoint": "GET /api/state", "transport": "in-process TestClient", "concurrency": 1,
-                   "p95_method": "nearest rank", "timing": "client.get through complete response body; validation occurs after the timer",
+        "method": {"endpoint": "GET /api/sync/snapshot", "page_limit": 100, "transport": "in-process TestClient", "concurrency": 1,
+                   "p95_method": "nearest rank", "timing": "all pages of one complete snapshot, including JSON validation; ephemeral tokens excluded from equality checks",
                    "sql_work_in_timing": True, "sql_trace_in_timing": False,
                    "synthetic_image_dimensions": [9, 7], "temporary_data_cleaned": True},
         "limitations": LIMITATIONS,

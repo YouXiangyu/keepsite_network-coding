@@ -11,8 +11,9 @@ from backend.app import create_app
 from backend.backups import create_account_backup, restore_account_backup
 from backend.object_storage import LocalObjectStore, S3ObjectStore
 from backend.shared_state import RedisSharedState
-from account_fixtures import ORIGIN, USERS, FakeAuthFactory, signed_in
-from test_api import make_app, create, patch, delete, upload
+from account_fixtures import account_snapshot
+from account_fixtures import ORIGIN, USERS, WRITE_HEADERS, FakeAuthFactory, signed_in
+from test_api import make_app, create, patch, delete, upload, applied
 from test_backup_restore import restored_app
 from test_object_storage import FakeS3Client
 
@@ -22,16 +23,15 @@ def test_every_ticket_mutation_logs_the_same_committed_revision(tmp_path):
     with TestClient(app, base_url=ORIGIN) as client:
         signed_in(client)
         first, payload = create(client)
-        second = patch(client, {"seat": "A1"}).json()
-        third = delete(client).json()
-        from account_fixtures import WRITE_HEADERS
-        assert client.post("/api/tickets", headers=WRITE_HEADERS, json=payload).json() == third
+        second = applied(client, patch(client, {"seat": "A1"}))
+        third = applied(client, delete(client))
+        assert applied(client, client.post("/api/tickets", headers=WRITE_HEADERS, json=payload)) == third
     with app.state.store.transaction() as db:
         rows = db.execute("SELECT * FROM ticket_changes ORDER BY cursor").fetchall()
-        assert [row["cursor"] for row in rows] == [first["revision"], second["revision"], third["revision"]] == [1, 2, 3]
+        assert [row["cursor"] for row in rows] == [first["cursor"], second["cursor"], third["cursor"]] == [1, 2, 3]
         values = [json.loads(row["payload"]) for row in rows]
-        assert values[0] == first["data"]["tickets"][0]
-        assert values[1] == second["data"]["tickets"][0]
+        assert values[0] == first["tickets"][0]
+        assert values[1] == second["tickets"][0]
         assert values[2]["deletedAt"] is not None and values[2]["version"] == 3
         assert values[2]["media"]["original"] == values[0]["media"]["original"]
         assert db.execute("SELECT cursor FROM sync_baselines WHERE user_id=?", (USERS["alice"]["id"],)).fetchone()[0] == 0
@@ -47,7 +47,7 @@ def test_change_log_failure_rolls_back_ticket_operation_and_revision(tmp_path, m
         monkeypatch.setattr(app.state.store, "record_ticket_change", fail)
         with pytest.raises(sqlite3.OperationalError):
             patch(client, {"seat": "A1"})
-        assert client.get("/api/state").json() == first
+        assert account_snapshot(client) == first
         with app.state.store.transaction() as db:
             assert db.execute("SELECT COUNT(*) FROM operations").fetchone()[0] == 1
             assert db.execute("SELECT COUNT(*) FROM ticket_changes").fetchone()[0] == 1
@@ -58,7 +58,7 @@ def test_backup_restoration_starts_new_sync_baseline_without_pending_uploads(tmp
     with TestClient(app, base_url=ORIGIN) as client:
         signed_in(client)
         create(client)
-        final = patch(client, {"hall": "2"}).json()
+        final = applied(client, patch(client, {"hall": "2"}))
         upload(client, "blue")
     archive = create_account_backup(app.state.store, USERS["alice"]["id"])
     destination = tmp_path / "restored"
@@ -66,17 +66,17 @@ def test_backup_restoration_starts_new_sync_baseline_without_pending_uploads(tmp
     restored = restored_app(destination)
     with TestClient(restored, base_url=ORIGIN) as client:
         signed_in(client)
-        state = client.get("/api/state").json()
+        state = account_snapshot(client)
         assert state["serverId"] != final["serverId"]
-        assert state["revision"] == final["revision"]
+        assert state["cursor"] == final["cursor"]
         with restored.state.store.transaction() as db:
-            assert db.execute("SELECT cursor FROM sync_baselines").fetchone()[0] == state["revision"]
+            assert db.execute("SELECT cursor FROM sync_baselines").fetchone()[0] == state["cursor"]
             assert db.execute("SELECT COUNT(*) FROM ticket_changes").fetchone()[0] == 0
             assert db.execute("SELECT COUNT(*) FROM upload_intents").fetchone()[0] == 0
             assert db.execute("SELECT COUNT(*) FROM upload_receipts").fetchone()[0] == 0
-        new_state = patch(client, {"seat": "B1"}, operation="restored-change").json()
+        new_state = applied(client, patch(client, {"seat": "B1"}, operation="restored-change"))
         with restored.state.store.transaction() as db:
-            assert db.execute("SELECT cursor FROM ticket_changes").fetchone()[0] == new_state["revision"] == state["revision"] + 1
+            assert db.execute("SELECT cursor FROM ticket_changes").fetchone()[0] == new_state["cursor"] == state["cursor"] + 1
 
 
 def test_m1_metadata_without_change_tables_receives_explicit_baseline(tmp_path):
@@ -89,7 +89,7 @@ def test_m1_metadata_without_change_tables_receives_explicit_baseline(tmp_path):
         db.execute("DROP TABLE sync_baselines")
     reopened = make_app(tmp_path)
     with reopened.state.store.transaction() as db:
-        assert db.execute("SELECT cursor FROM sync_baselines").fetchone()[0] == state["revision"]
+        assert db.execute("SELECT cursor FROM sync_baselines").fetchone()[0] == state["cursor"]
         assert db.execute("SELECT COUNT(*) FROM ticket_changes").fetchone()[0] == 0
 
 
@@ -123,27 +123,31 @@ def test_redis_is_outside_sql_transactions_and_lost_cache_never_loses_records(tm
         monkeypatch.setattr(cache, name, checked)
     with TestClient(app, base_url=ORIGIN) as client:
         signed_in(client)
-        state, _ = create(client)
+        asset = upload(client)
+        from account_fixtures import WRITE_HEADERS
+        response = client.post("/api/tickets", headers=WRITE_HEADERS,
+                               json={"id": "ticket-1", "operationId": "create-ticket-1", "originalAssetId": asset["assetId"]})
         assert calls == [], "Write handlers do not call Redis inside their mutation transaction"
-        assert client.get("/api/state").json() == state
+        state = applied(client, response)
+        assert account_snapshot(client) == state
         assert fake.dbsize() == 1
-        assert client.get("/api/state").json() == state
+        assert account_snapshot(client) == state
         assert calls.count("put_snapshot") == 1
         fake.flushall()
-        assert client.get("/api/state").json() == state
-        edited = patch(client, {"title": "changed"}).json()
-        assert client.get("/api/state").json() == edited
+        assert account_snapshot(client) == state
+        edited = applied(client, patch(client, {"title": "changed"}))
+        assert account_snapshot(client) == edited
         assert fake.dbsize() == 2
         signed_in(client, "bob")
-        assert client.get("/api/state").json()["data"] == {"tickets": []}
+        assert account_snapshot(client)["tickets"] == []
         signed_in(client)
         def offline(*args, **kwargs):
             raise RedisConnectionError("offline")
         monkeypatch.setattr(fake, "get", offline)
         monkeypatch.setattr(fake, "set", offline)
-        assert client.get("/api/state").json() == edited
-        deleted = delete(client).json()
-        assert client.get("/api/state").json() == deleted
+        assert account_snapshot(client) == edited
+        deleted = applied(client, delete(client))
+        assert account_snapshot(client) == deleted
 
 
 def test_account_snapshot_batches_media_queries(tmp_path, monkeypatch):
@@ -160,8 +164,8 @@ def test_account_snapshot_batches_media_queries(tmp_path, monkeypatch):
             db.set_trace_callback(lambda sql: selects.append(sql) if sql.lstrip().startswith("SELECT") else None)
             return db
         monkeypatch.setattr(app.state.store, "connect", traced)
-        assert len(client.get("/api/state").json()["data"]["tickets"]) == 10
-        assert len(selects) <= 10, "Query count should not grow per ticket"
+        assert len(account_snapshot(client)["tickets"]) == 10
+        assert len(selects) <= 12, "Query count should not grow per ticket"
 
 
 def test_storage_binding_is_rechecked_inside_initialization_transaction(tmp_path, monkeypatch):

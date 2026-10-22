@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowClockwise } from '@phosphor-icons/react';
-import { ApiError, assertSessionEpoch, errorMessage, getOperationStatus, getState, mutate, sessionEpoch, type ServerState } from '../../api';
+import { ApiError, assertSessionEpoch, errorMessage, getOperationStatus, mutate, sessionEpoch, type Capabilities } from '../../api';
 import type { Ticket } from '../../data';
-import type { RunMutation } from '../../app/useAccountWorkspace';
+import type { RunMutation, RunReconciliation } from '../../app/useAccountWorkspace';
 import { processingActive, processingDescription, processingLabels } from './processing';
 
-export default function ProcessingStatus({ ticket, capabilities, busy, runMutation }: {
-  ticket: Ticket; capabilities?: ServerState['capabilities']; busy: boolean; runMutation: RunMutation;
+export default function ProcessingStatus({ ticket, capabilities, busy, runMutation, runReconciliation }: {
+  ticket: Ticket; capabilities?: Capabilities; busy: boolean; runMutation: RunMutation; runReconciliation: RunReconciliation;
 }) {
   const operation = useRef<string | null>(null);
   const alive = useRef(true);
@@ -42,14 +42,12 @@ export default function ProcessingStatus({ ticket, capabilities, busy, runMutati
     if (!operation.current || busy) return;
     const operationId = operation.current;
     let applied = false;
-    void runMutation(async () => {
+    void runReconciliation(async () => {
       const scope = sessionEpoch();
       const receipt = await getOperationStatus(operationId);
       assertSessionEpoch(scope);
       applied = receipt.applied;
-      const state = await getState();
-      assertSessionEpoch(scope);
-      return state;
+      return receipt;
     }, {
       onStart: () => setNotice(''), onError, onCancel,
       onSuccess: () => {

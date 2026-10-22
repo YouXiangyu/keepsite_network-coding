@@ -18,6 +18,7 @@ from .object_storage import ObjectMissing, StorageError, configured_store
 from .store import Store, StoreError, require_schema3_root
 from .shared_state import RedisSharedState
 from .processing import ProcessingWorker
+from .sync_http import SyncHTTP, SyncError
 
 ROOT = Path(__file__).resolve().parents[1]
 log = logging.getLogger(__name__)
@@ -32,31 +33,43 @@ def create_app(data_dir: Path | None = None, *, auth_provider=None, object_store
     shared_state = shared_state if shared_state is not None else RedisSharedState.from_env()
     recovery = UploadRecovery(store)
     processing = (processing_factory or ProcessingWorker)(store, shared_state)
+    sync_http = SyncHTTP(store, shared_state)
 
     @asynccontextmanager
     async def lifespan(app):
-        if run_recovery:
-            recovery.start()
-        if run_processing:
-            processing.start()
         try:
+            await sync_hub.start()
+            if run_recovery:
+                recovery.start()
+            if run_processing:
+                processing.start()
             yield
         finally:
             processing.stopping.set()
             recovery.stopping.set()
             try:
                 stops = [run_in_threadpool(processing.stop)]
-                if run_recovery:
-                    stops.append(run_in_threadpool(recovery.stop))
+                stops.append(run_in_threadpool(recovery.stop))
                 await asyncio.gather(*stops)
             finally:
-                await run_in_threadpool(shared_state.close)
-                await run_in_threadpool(storage.close)
+                try:
+                    await sync_hub.stop()
+                finally:
+                    sync_http.close()
+                    try:
+                        await run_in_threadpool(shared_state.close)
+                    finally:
+                        await run_in_threadpool(storage.close)
 
-    app = FastAPI(title="MemoVerse Movie Ticket API", version="0.6.0", lifespan=lifespan)
+    app = FastAPI(title="MemoVerse Movie Ticket API", version="0.7.0", lifespan=lifespan)
     app.state.store = store
     app.state.shared_state, app.state.upload_recovery = shared_state, recovery
     app.state.processing_worker = processing
+    app.state.sync_http = sync_http
+
+    @app.exception_handler(SyncError)
+    async def synchronization_error(request, error):
+        return JSONResponse({"detail": {"code": error.code, "message": error.message}}, status_code=error.status_code)
 
     @app.exception_handler(StoreError)
     async def business_error(request, error):
@@ -90,10 +103,15 @@ def create_app(data_dir: Path | None = None, *, auth_provider=None, object_store
             response.headers["Cache-Control"] = "no-store, private"
         return response
 
-    install_routes(app, store, shared_state)
+    install_routes(app, store, sync_http)
     if auth_provider is None:
         from .auth import install_auth
         auth_provider = install_auth
     app.state.auth = auth_provider(app, root, on_authenticated=lambda user: accounts.ensure_account(
         store, user["id"], user["email"], user.get("name", "")))
+    from .sync_notifications import SyncNotificationHub
+    from .sync_socket import install_sync_socket
+    sync_hub = SyncNotificationHub(store, shared_state, app.state.auth)
+    app.state.sync_hub = sync_hub
+    install_sync_socket(app, sync_hub, app.state.auth)
     return app

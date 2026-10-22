@@ -4,6 +4,8 @@
 
 M2 使用 [redis-py 8.1.0](https://pypi.org/project/redis/8.1.0/) 作为 Redis 客户端，[fakeredis 2.40.0](https://pypi.org/project/fakeredis/2.40.0/) 仅用于本地隔离测试。CI 的真实服务使用官方 Redis 8.2.10 镜像；模拟服务通过不等于真实服务验证通过。浏览器媒体缓存直接使用平台 IndexedDB 与 Web Crypto API，没有新增客户端存储依赖。
 
+M4 新增固定 [websockets 17.3](https://pypi.org/project/websockets/17.3/)，由既有固定 [Uvicorn 0.44.0](https://pypi.org/project/uvicorn/0.44.0/) 的 `websockets-sansio` 引擎处理 WebSocket。2026-10-22 核验上述固定版本的官方包元数据及安装包许可证，两者均为 BSD-3-Clause；随应用分发时保留各自版权、许可条件与免责声明，不将作者或贡献者名称用于未经许可的背书。依赖直接固定在 `backend/requirements.txt`，生产服务单元明确选择引擎、消息上限与 ping/pong 参数；本机回环测试核验实际引擎行为，不将浏览器或第三方 WebSocket 服务作为新增依赖。
+
 M1 已移除 AnyImage/MoGe2 浮雕和 Three.js 运行链；旧模型缓存、依赖副本及其许可证不因源码改版删除。旧来源、固定提交和准备脚本可从 Git 检查点 `d7945d8` 的本文件及对应脚本追溯；不将这些旧组件视为新版 OCR 方案。
 
 M3 的 CPU OCR 固定 [RapidOCR 3.10.0（Apache-2.0）](https://github.com/RapidAI/RapidOCR/blob/v3.10.0/LICENSE)和 [ONNX Runtime 1.31.0（MIT）](https://github.com/microsoft/onnxruntime/blob/v1.31.0/LICENSE)。完整直接运行依赖见 `backend/requirements-ocr.txt`。不启用 GPU、方向分类、大模型或付费识别接口。

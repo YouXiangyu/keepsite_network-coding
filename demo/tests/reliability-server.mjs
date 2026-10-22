@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,16 +15,20 @@ let requests = [];
 let stalls = [];
 let hang;
 let rejectNext;
+let views = new Map();
+const peers = new Set();
+const capabilities = { processing: true, processingUnavailableReason: null, deviceSync: false, cloudStorage: true };
+function send(peer, value) { const bytes = Buffer.from(JSON.stringify(value)); const header = bytes.length < 126 ? Buffer.from([129, bytes.length]) : Buffer.from([129, 126, bytes.length >> 8, bytes.length & 255]); peer.socket.write(Buffer.concat([header, bytes])); }
+function notify(user) { for (const peer of peers) if (peer.user === user) send(peer, { v: 1, type: 'sync.hint', serverId: 'reliability', userId: user, cursor: account(user).revision }); }
 
 function account(user) {
   if (!accounts.has(user)) {
     const data = sampleData();
     data.tickets[0].fields.title = `${user.toUpperCase()} 的电影票`;
-    accounts.set(user, { revision: 1, data });
+    accounts.set(user, { revision: 1, data, changes: [] });
   }
   return accounts.get(user);
 }
-const snapshot = user => ({ initialized: true, serverId: 'reliability', userId: user, ...account(user), capabilities: { processing: true, processingUnavailableReason: null, deviceSync: false, cloudStorage: true } });
 const session = user => ({ authenticated: !!user, configured: true, providers: { email: true, google: false },
   ...(user ? { user: { id: user, email: `${user}@example.test`, name: user }, csrfToken: csrfTokens.get(user) ?? `csrf-${user}` } : {}) });
 
@@ -57,7 +62,7 @@ const server = createServer(async (request, response) => {
     const body = ['POST', 'PATCH', 'PUT', 'DELETE'].includes(method) ? await bodyOf(request) : undefined;
     if (pathname === '/__test/reset' && method === 'POST') {
       for (const stalled of stalls) stalled.response.destroy();
-      accounts = new Map(); csrfTokens = new Map(); uploads = new Map(); createFingerprints = new Map(); requests = []; stalls = []; hang = undefined; rejectNext = undefined;
+      accounts = new Map(); csrfTokens = new Map(); uploads = new Map(); createFingerprints = new Map(); requests = []; stalls = []; hang = undefined; rejectNext = undefined; views = new Map();
       return respond(response, pathname, method, { ok: true });
     }
     if (pathname === '/__test/reject' && method === 'POST') {
@@ -95,10 +100,22 @@ const server = createServer(async (request, response) => {
       }
       if (!user) return respond(response, pathname, method, { detail: '请登录。' }, 401);
       if (method !== 'GET' && request.headers['x-csrf-token'] !== (csrfTokens.get(user) ?? `csrf-${user}`)) return respond(response, pathname, method, { detail: 'CSRF' }, 403);
-      if (pathname === '/api/state') return respond(response, pathname, method, snapshot(user));
+      if (pathname === '/api/sync/snapshot') {
+        const token = new URL(request.url, 'http://127.0.0.1').searchParams.get('pageToken');
+        const data = account(user); let view = token ? views.get(token) : { serverId: 'reliability', userId: user, snapshotId: randomUUID(), cursor: data.revision, tickets: structuredClone(data.data.tickets.filter(item => item.deletedAt === null)), offset: 0, expiresAt: Date.now() + 600000, capabilities };
+        if (!view || view.userId !== user) return respond(response, pathname, method, { detail: { code: 'snapshot_expired', message: '快照过期' } }, 410);
+        const total = view.tickets.length, end = Math.min(total, view.offset + 100), nextPageToken = end < total ? view.snapshotId + '-' + end : null;
+        if (nextPageToken) views.set(nextPageToken, { ...view, offset: end });
+        return respond(response, pathname, method, { ...view, total, tickets: view.tickets.slice(view.offset, end), nextPageToken });
+      }
+      if (pathname === '/api/sync/changes') {
+        const after = Number(new URL(request.url, 'http://127.0.0.1').searchParams.get('after')), data = account(user);
+        const changes = data.changes.filter(change => change.cursor > after).slice(0, 100), nextCursor = changes.at(-1)?.cursor ?? after;
+        return respond(response, pathname, method, { serverId: 'reliability', userId: user, fromCursor: after, nextCursor, headCursor: data.revision, hasMore: nextCursor < data.revision, changes, capabilities });
+      }
       if (pathname.startsWith('/api/operations/')) {
         const operationId = pathname.split('/')[3];
-        return respond(response, pathname, method, { operationId, applied: createFingerprints.has(`${user}/${operationId}`) });
+        return respond(response, pathname, method, { serverId: 'reliability', operationId, applied: createFingerprints.has(`${user}/${operationId}`), committedCursor: createFingerprints.has(`${user}/${operationId}`) ? account(user).revision : null });
       }
       if (pathname.startsWith('/api/uploads/')) {
         const upload = uploads.get(`${user}/${pathname.split('/')[3]}`);
@@ -124,7 +141,7 @@ const server = createServer(async (request, response) => {
       const fingerprint = JSON.stringify({ pathname, method, body });
       if (createFingerprints.has(key)) {
         if (createFingerprints.get(key) !== fingerprint) return respond(response, pathname, method, { detail: '操作标识已使用且内容不同。' }, 409);
-        return respond(response, pathname, method, snapshot(user));
+        return respond(response, pathname, method, { serverId: 'reliability', operationId: body.operationId, committedCursor: account(user).revision });
       }
       if (pathname.endsWith('/process') && method === 'POST') {
         const item = workspace.data.tickets.find(item => item.id === pathname.split('/')[3]);
@@ -144,12 +161,15 @@ const server = createServer(async (request, response) => {
         item.version += 1;
       } else if (pathname.startsWith('/api/tickets/') && method === 'DELETE') {
         const item = workspace.data.tickets.find(item => item.id === pathname.split('/')[3]);
-        if (item) item.deletedAt = Date.now();
+        if (item) { item.deletedAt = Date.now(); item.version++; }
       } else return respond(response, pathname, method, { detail: 'Not found' }, 404);
       if (body.originalAssetId) for (const [uploadKey, upload] of uploads) if (uploadKey.startsWith(user + '/') && upload.asset.assetId === body.originalAssetId) upload.status = 'attached';
       createFingerprints.set(key, fingerprint);
       workspace.revision += 1;
-      return respond(response, pathname, method, snapshot(user));
+      const changed = workspace.data.tickets.find(item => item.id === (body.id ?? pathname.split('/')[3]));
+      workspace.changes.push(changed.deletedAt !== null ? { cursor: workspace.revision, type: 'delete', id: changed.id, version: changed.version, deletedAt: changed.deletedAt } : { cursor: workspace.revision, type: 'upsert', ticket: structuredClone(changed) });
+      notify(user);
+      return respond(response, pathname, method, { serverId: 'reliability', operationId: body.operationId, committedCursor: account(user).revision });
     }
     let filename = path.resolve(root, '.' + pathname);
     if (filename !== root && !filename.startsWith(root + path.sep)) return response.writeHead(404).end();
@@ -164,5 +184,16 @@ const server = createServer(async (request, response) => {
     if (!response.headersSent) response.writeHead(500);
     response.end();
   }
+});
+server.on('upgrade', (request, socket) => {
+  const cookie = request.headers.cookie?.match(/(?:^|;\s*)test-user=([^;]*)/)?.[1];
+  const user = cookie === 'signed-out' ? '' : cookie || 'a';
+  if (!user || request.url !== '/api/sync/events') { socket.end('HTTP/1.1 401 Unauthorized\r\n\r\n'); return; }
+  const accept = createHash('sha1').update(request.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+  socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
+  const peer = { user, socket }; peers.add(peer);
+  socket.on('error', () => peers.delete(peer)); socket.on('close', () => peers.delete(peer));
+  socket.on('data', bytes => { if ((bytes[0] & 15) === 8) socket.end(Buffer.from([136, 0])); });
+  send(peer, { v: 1, type: 'sync.ready', serverId: 'reliability', userId: user, cursor: account(user).revision });
 });
 server.listen(4176, '127.0.0.1');

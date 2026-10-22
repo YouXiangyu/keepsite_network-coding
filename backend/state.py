@@ -1,7 +1,8 @@
-"""Account-scoped snapshot; incremental synchronization follows in M4."""
+"""Consistent account snapshot capture and reusable ticket representations."""
 import json
 import hashlib
 from .object_storage import S3ObjectStore
+from .store import StoreError, encode
 
 
 def capabilities(store):
@@ -40,36 +41,58 @@ def present_ticket(store, db, user_id, row, assets=None, processing=None, source
             "processing": {"status": status, "error": job["error"] if job and status != "not_started" else None}}
 
 
-def account_state(store, db, user_id):
+def account_state(store, db, user_id, *, maximum_tickets=None, maximum_bytes=None):
     user = store.require_user(db, user_id)
     server = db.execute("SELECT value FROM meta WHERE key='server_id'").fetchone()[0]
-    assets = {row["id"]: row for row in db.execute("""SELECT a.* FROM assets a
-        JOIN asset_grants g ON g.asset_id=a.id WHERE g.user_id=? AND a.id IN (
-            SELECT original_asset_id FROM tickets WHERE user_id=? AND deleted_at IS NULL
-            UNION SELECT poster_asset_id FROM tickets WHERE user_id=? AND deleted_at IS NULL
-        )""", (user_id, user_id, user_id))}
-    processing = {row["ticket_id"]: row for row in db.execute("""SELECT j.* FROM ticket_processing p
-        JOIN processing_jobs j ON j.id=p.job_id JOIN tickets t ON t.user_id=p.user_id AND t.id=p.ticket_id
-        WHERE p.user_id=? AND j.input_version=t.input_version AND j.original_asset_id=t.original_asset_id""", (user_id,))}
-    sources = {row["ticket_id"]: row for row in db.execute("SELECT * FROM poster_sources WHERE user_id=?", (user_id,))}
-    tickets = [present_ticket(store, db, user_id, row, assets, processing, sources) for row in db.execute(
-        "SELECT * FROM tickets WHERE user_id=? AND deleted_at IS NULL ORDER BY created_at,id", (user_id,))]
+    current_capabilities = capabilities(store)
+    size = len(encode(current_capabilities).encode()) + 1024
+    tickets = []
+    rows = db.execute("SELECT * FROM tickets WHERE user_id=? AND deleted_at IS NULL ORDER BY created_at,id", (user_id,))
+    while batch := rows.fetchmany(200):
+        identifiers = [row["id"] for row in batch]
+        media_ids = sorted({row[name] for row in batch for name in ("original_asset_id", "poster_asset_id") if row[name]})
+        ticket_marks, media_marks = ",".join("?" for _ in identifiers), ",".join("?" for _ in media_ids)
+        assets = {row["id"]: row for row in db.execute(
+            f"SELECT a.* FROM assets a JOIN asset_grants g ON g.asset_id=a.id WHERE g.user_id=? AND a.id IN ({media_marks})",
+            (user_id, *media_ids))}
+        processing = {row["ticket_id"]: row for row in db.execute(f"""SELECT j.* FROM ticket_processing p
+            JOIN processing_jobs j ON j.id=p.job_id JOIN tickets t ON t.user_id=p.user_id AND t.id=p.ticket_id
+            WHERE p.user_id=? AND p.ticket_id IN ({ticket_marks}) AND j.input_version=t.input_version
+            AND j.original_asset_id=t.original_asset_id""", (user_id, *identifiers))}
+        sources = {row["ticket_id"]: row for row in db.execute(
+            f"SELECT * FROM poster_sources WHERE user_id=? AND ticket_id IN ({ticket_marks})", (user_id, *identifiers))}
+        for row in batch:
+            ticket = present_ticket(store, db, user_id, row, assets, processing, sources)
+            size += len(encode(ticket).encode()) + 1
+            if maximum_bytes is not None and size > maximum_bytes:
+                raise StoreError(413, "票夹超过同步快照字节容量，未截断任何记录。")
+            if maximum_tickets is not None and len(tickets) >= maximum_tickets:
+                raise StoreError(413, "票夹超过同步快照容量，未截断任何记录。")
+            tickets.append(ticket)
     return {"initialized": True, "serverId": server, "userId": user_id, "revision": user["revision"],
-            "data": {"tickets": tickets}, "capabilities": capabilities(store)}
+            "data": {"tickets": tickets}, "capabilities": current_capabilities}
 
 
-def cached_account_state(store, shared_state, user_id):
+def cached_account_state(store, shared_state, user_id, *, maximum_tickets=None, maximum_bytes=None):
     # Redis must run after each SQL transaction has released its connection.
     with store.transaction() as db:
         user = store.require_user(db, user_id)
         revision = user["revision"]
         server_id = db.execute("SELECT value FROM meta WHERE key='server_id'").fetchone()[0]
+        if maximum_tickets is not None and db.execute("SELECT COUNT(*) FROM tickets WHERE user_id=? AND deleted_at IS NULL", (user_id,)).fetchone()[0] > maximum_tickets:
+            raise StoreError(413, "票夹超过同步快照容量，未截断任何记录。")
     configuration = json.dumps(capabilities(store), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     identity = store.storage.cache_identity + ":capabilities:" + hashlib.sha256(configuration.encode()).hexdigest()
     cached = shared_state.get_snapshot(user_id, server_id, revision, identity)
     if cached is not None:
+        if maximum_tickets is not None and len(cached["data"]["tickets"]) > maximum_tickets:
+            raise StoreError(413, "票夹超过同步快照容量，未截断任何记录。")
+        if maximum_bytes is not None and len(encode(cached).encode()) > maximum_bytes:
+            raise StoreError(413, "票夹超过同步快照字节容量，未截断任何记录。")
         return cached
     with store.transaction() as db:
-        result = account_state(store, db, user_id)
+        if maximum_tickets is not None and db.execute("SELECT COUNT(*) FROM tickets WHERE user_id=? AND deleted_at IS NULL", (user_id,)).fetchone()[0] > maximum_tickets:
+            raise StoreError(413, "票夹超过同步快照容量，未截断任何记录。")
+        result = account_state(store, db, user_id, maximum_tickets=maximum_tickets, maximum_bytes=maximum_bytes)
     shared_state.put_snapshot(user_id, result["serverId"], result["revision"], identity, result)
     return result

@@ -1,26 +1,26 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Camera, Check } from '@phosphor-icons/react';
-import { ApiError, assertSessionEpoch, errorMessage, getOperationStatus, getUploadStatus, getState, mutate, sessionEpoch, uploadMedia } from '../../api';
+import { ApiError, assertSessionEpoch, errorMessage, getOperationStatus, getUploadStatus, mutate, sessionEpoch, uploadMedia, type SyncPosition } from '../../api';
 import { emptyFields, fieldNames, type FieldName, type Ticket, type TicketFields } from '../../data';
-import type { RunMutation } from '../../app/useAccountWorkspace';
+import type { RunMutation, RunReconciliation } from '../../app/useAccountWorkspace';
 import Link from '../../app/Link';
 import { useMedia } from '../../MediaProvider';
 import { verifyMediaBlob } from '../../mediaCache';
 import { sourceLabels } from './processing';
 
 export const fieldLabels: Record<FieldName, string> = { title: '片名', cinema: '影院', hall: '影厅', seat: '座位', showtime: '放映时间' };
-export default function TicketEditor({ item, busy, runMutation, onSaved, processingEnabled, processingUnavailableReason }: {
-  item?: Ticket; busy: boolean; runMutation: RunMutation; onSaved: (id: string) => void; processingEnabled: boolean; processingUnavailableReason: string | null;
+export default function TicketEditor({ item, busy, runMutation, runReconciliation, editId, onSaved, processingEnabled, processingUnavailableReason }: {
+  item?: Ticket; editId?: string; busy: boolean; runMutation: RunMutation; runReconciliation: RunReconciliation; onSaved: (id: string) => void; processingEnabled: boolean; processingUnavailableReason: string | null;
 }) {
-  const [id] = useState(() => item?.id ?? crypto.randomUUID());
+  const [id] = useState(() => editId ?? item?.id ?? crypto.randomUUID());
   const [fields, setFields] = useState<TicketFields>(() => item?.fields ?? emptyFields());
   const baseline = useRef(item?.fields ?? emptyFields());
   const baselineSources = useRef<Ticket['fieldSources']>(item?.fieldSources ?? { title: 'empty', cinema: 'empty', hall: 'empty', seat: 'empty', showtime: 'empty' });
   const touched = useRef(new Map<FieldName, number>());
   const editSequence = useRef(0);
   const submissions = useRef(new Map<string, { operationId: string; file: File | null; fieldEdits: Partial<Record<FieldName, number>>; applied: boolean }>());
-  const [deleted, setDeleted] = useState(false);
-  const [editing, setEditing] = useState(!!item);
+  const [deleted, setDeleted] = useState(!!editId && !item);
+  const [editing, setEditing] = useState(!!editId || !!item);
   const [preview, setPreview] = useState('');
   const [persistedMedia, setPersistedMedia] = useState(item?.media.original);
   const originalImage = useMedia(persistedMedia, !preview);
@@ -39,13 +39,14 @@ export default function TicketEditor({ item, busy, runMutation, onSaved, process
   const currentSources = item?.fieldSources ?? baselineSources.current;
   const userChange = (key: FieldName) => touched.current.has(key) && (fields[key] !== currentFields[key] || currentSources[key] !== 'user');
   useEffect(() => {
-    if (!item) return;
+    if (!item) { if (editId) { setDeleted(true); setError('这张票根已被删除，当前草稿仍保留。不能保存到原记录，可以返回票夹另建。'); } return; }
     setFields(previous => {
       const next = { ...previous };
       for (const key of fieldNames) if (!touched.current.has(key)) next[key] = item.fields[key];
       return fieldNames.some(key => next[key] !== previous[key]) ? next : previous;
     });
-  }, [item?.fields]);
+    if (!file.current) setPersistedMedia(item.media.original);
+  }, [item?.fields, item?.media.original.assetId, editId]);
   const releasePreview = () => { if (objectUrl.current) URL.revokeObjectURL(objectUrl.current); objectUrl.current = ''; };
   useEffect(() => { alive.current = true; return () => { alive.current = false; releasePreview(); }; }, []);
   const select = (next?: File) => {
@@ -111,19 +112,21 @@ export default function TicketEditor({ item, busy, runMutation, onSaved, process
       },
     });
   };
-  const reconcile = () => void runMutation(async () => {
+  const reconcile = () => void runReconciliation(async () => {
+    let position: SyncPosition | undefined;
     const scope = sessionEpoch();
     // A durable receipt, rather than the current image or record version,
     // proves that a submission applied even if another device changed it later.
     for (const submission of submissions.current.values()) {
-      if (submission.applied) continue;
+
       const receipt = await getOperationStatus(submission.operationId);
       assertSessionEpoch(scope);
       submission.applied = receipt.applied;
+      if (position && receipt.serverId !== position.serverId) throw new ApiError('核对期间同步服务已变更，请重新核对；草稿仍保留。');
+      position = { serverId: receipt.serverId, committedCursor: receipt.committedCursor === null ? position?.committedCursor ?? null : Math.max(position?.committedCursor ?? 0, receipt.committedCursor) };
     }
-    const state = await getState();
-    assertSessionEpoch(scope);
-    return state;
+    if (!position) throw new ApiError('没有需要核对的保存请求。');
+    return position;
   }, {
     onStart: () => setError(''),
     onError: failure => { if (alive.current) setError(errorMessage(failure)); },
@@ -179,6 +182,7 @@ export default function TicketEditor({ item, busy, runMutation, onSaved, process
         {(item || touched.current.has(key)) && <span className="field-source">{userChange(key) ? '手动修改，尚未保存' : sourceLabels[currentSources[key]]}</span>}
       </label>)}
         {error && <p className="form-error" role="alert">{error}</p>}
+        {deleted && <Link to="/tickets/new" className="secondary-button">返回上传页另建票根</Link>}
         {uncertain && <button type="button" className="secondary-button" onClick={reconcile}>核对保存结果，保留草稿</button>}
         <div className="action-row"><button type="submit" className="primary-button" disabled={deleted}><Check size={20} />{busy ? '正在保存…' : '保存票根'}</button><Link to={editing ? `/tickets/${encodeURIComponent(id)}` : '/tickets'} className="secondary-button" disabled={busy}>取消</Link></div>
       </div>

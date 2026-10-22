@@ -2,7 +2,7 @@
 import os
 from typing import Annotated
 
-from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi import FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
@@ -12,7 +12,6 @@ from .contracts import CreateTicket, Identifier, Operation, UpdateTicket
 from .media import MAX_IMAGE_BYTES, persist_image, upload_status
 from .object_storage import S3ObjectStore
 from .services import tickets
-from .state import cached_account_state
 from .store import StoreError, now_ms
 
 
@@ -23,23 +22,29 @@ def current_user(request):
     return user["id"]
 
 
-def install_routes(app: FastAPI, store, shared_state):
+def install_routes(app: FastAPI, store, sync_http):
     @app.get("/api/health")
     def health():
         return {"status": "ok"}
 
-    @app.get("/api/state")
-    def state(request: Request):
-        return cached_account_state(store, shared_state, current_user(request))
+    @app.get("/api/sync/snapshot")
+    def snapshot(request: Request, limit: int = Query(100, ge=1, le=200), pageToken: str | None = None):
+        return sync_http.snapshot(current_user(request), limit=limit, page_token=pageToken)
+
+    @app.get("/api/sync/changes")
+    def changes(request: Request, serverId: str, after: int = Query(ge=0), limit: int = Query(100, ge=1, le=200)):
+        return sync_http.changes(current_user(request), serverId, after, limit=limit)
 
     @app.get("/api/operations/{operationId}")
     def operation_status(request: Request, operationId: Identifier):
         user_id = current_user(request)
         with store.transaction() as db:
-            store.require_user(db, user_id)
+            user = store.require_user(db, user_id)
             applied = db.execute("SELECT 1 FROM operations WHERE user_id=? AND id=?",
                                  (user_id, operationId)).fetchone() is not None
-        return {"operationId": operationId, "applied": applied}
+            cursor = user["revision"] if applied else None
+            server = db.execute("SELECT value FROM meta WHERE key='server_id'").fetchone()[0]
+        return {"serverId": server, "operationId": operationId, "applied": applied, "committedCursor": cursor}
 
     @app.post("/api/media")
     async def upload(request: Request, uploadId: Annotated[Identifier, Form()], file: UploadFile = File()):

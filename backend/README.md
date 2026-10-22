@@ -1,14 +1,14 @@
 # MemoVerse 电影票后端
 
-M3 沿用独立 SQLite schema 3，追加持久处理任务、Redis Streams 消费者、海报出处与处理中间文件清理记录。默认数据目录是 `backend/data-v3`；正式环境使用 `/var/lib/memoverse-v3`。应用遇到旧 schema 1/2 会在写入前拒绝启动，不能把旧目录直接切给新版本。
+M4 沿用独立 SQLite schema 3，通过固定分页快照、持久增量和 WebSocket 水位提示同步本人票夹。默认数据目录是 `backend/data-v3`；正式环境使用 `/var/lib/memoverse-v3`。应用遇到旧 schema 1/2 会在写入前拒绝启动，不能把旧目录直接切给新版本。
 
 ## 当前能力与边界
 
 - 保留 Cognito 邮箱/Google 登录、HttpOnly 服务端会话、加密令牌、精确 Origin 和 CSRF 校验；业务归属只取服务器认证身份。
 - 新账号创建空票夹，无初始化模板、社交、分类、标签、徽章或浮雕任务。原 AnyImage worker 不再加载；不安装或下载旧模型。
 - 票根包含片名、影院、影厅、座位和放映时间，允许为空。放映时间只接受可靠的本地 ISO 分钟格式 `YYYY-MM-DDTHH:mm`。字段来源、时间、版本、输入版本与删除墓碑单独保存。
-- 按字段在线修改；同字段按服务端事务应用顺序生效，不同字段分别保留。每次写入携带稳定 `operationId`；相同操作重放返回当前状态，不同载荷复用操作标识返回 409。删除墓碑阻止旧请求复活记录。
-- 原票和海报分别引用；纠错不提前撤下既有有效海报。配置私有 S3、Redis 与固定 OCR 模型后，自动登记 OCR/海报任务；缺少条件时 `capabilities.processing=false`，并通过 `processingUnavailableReason` 说明原因，不伪造识别结果。增量 HTTP/WebSocket 和设备 P2P 留待 M4—M5。
+- 按字段在线修改；同字段按服务端事务应用顺序生效，不同字段分别保留。每次写入携带稳定 `operationId`；相同操作重放返回已确认的同步屏障，不同载荷复用操作标识返回 409。删除墓碑阻止旧请求复活记录。
+- 原票和海报分别引用；纠错不提前撤下既有有效海报。配置私有 S3、Redis 与固定 OCR 模型后，自动登记 OCR/海报任务；缺少条件时 `capabilities.processing=false`，并通过 `processingUnavailableReason` 说明原因，不伪造识别结果。设备 P2P 留待 M5。
 - 票根变更、操作幂等和 `ticket_changes` 在同一事务提交；每账号 `revision` 是持久变更游标，创建、修改、删除都保存完整票根快照，删除快照包含墓碑。上传核对不占用票根游标。`sync_baselines` 标记历史边界：M1 旧库、隔离迁移和备份恢复从其当前 revision 建立基线，不伪造之前的增量。
 
 ## 媒体与授权
@@ -57,8 +57,9 @@ Redis I/O 只发生在完成的 SQL 事务之间；写操作直接提交数据�
 
 | 接口 | 请求/行为 |
 | --- | --- |
-| `GET /api/state` | 当前账号完整票夹快照；不包含墓碑 |
-| `GET /api/operations/{operationId}` | `{operationId, applied}`；仅核对当前账号持久操作，未知和其他账号的操作均返回 `applied:false` |
+| `GET /api/sync/snapshot` | 固定水位的分页快照，参数 `limit`、`pageToken`；不包含墓碑 |
+| `GET /api/sync/changes` | 参数 `serverId`、`after`、`limit`；连续的 upsert/delete 增量 |
+| `GET /api/operations/{operationId}` | `{serverId,operationId,applied,committedCursor}`；未知/其他账号为 `false/null` |
 | `POST /api/media` | multipart `uploadId` 和 `file`；返回 assetId、sha256、URL、类型、尺寸及 uploadId |
 | `GET /api/uploads/{uploadId}` | `{uploadId,status:pending或stored或attached,asset}`；pending 时 asset 为 null，未知/其他账号返回 404 |
 | `GET /api/media/{sha}` | 仅本人有效票根引用可读 |
@@ -66,12 +67,26 @@ Redis I/O 只发生在完成的 SQL 事务之间；写操作直接提交数据�
 | `POST /api/tickets` | `{id, operationId, originalAssetId, fields:{...}}` |
 | `PATCH /api/tickets/{id}` | `{operationId, fields?:{...}, originalAssetId?}`，只修改显式字段 |
 | `DELETE /api/tickets/{id}` | `{operationId}`；持久墓碑 |
-| `POST /api/tickets/{id}/process` | `{operationId}`；显式重试，稳定操作标识幂等，返回完整 state |
+| `POST /api/tickets/{id}/process` | `{operationId}`；显式重试，稳定操作标识幂等，返回同步回执 |
 | `GET /api/backup` | 当前账号 schema 3 ZIP，不包含认证数据库或其他账号 |
 
-快照及票根写响应统一为 `{initialized, serverId, userId, revision, data:{tickets}, capabilities}`。`revision` 仍是全量快照防旧值标记，不代表已实现增量同步。
+票根 CRUD/process 写响应统一为 `{serverId,operationId,committedCursor}`，不再返回整份票夹。`committedCursor` 是该操作被确认已应用时的账号水位，重放可返回更大的水位，不伪造历史操作的原始提交游标。serverId 与水位在同一 SQL 事务读取；恢复空间改变时，不能用旧空间较大的数字满足新空间回执。客户端先核对空间，再从自己已应用的旧游标连续补到屏障，不能直接跳到 committedCursor。
 
 写响应丢失时先查询稳定操作标识是否已应用，再决定是否重试。当前图片可能已被另一端替换，不能用当前图片哈希推断先前写入是否成功；操作查询不返回请求内容或其他账号信息。
+
+## 分页、增量与实时提示
+
+快照响应为 `{serverId,userId,snapshotId,cursor,total,offset,tickets,nextPageToken,expiresAt,capabilities}`。一次捕获固定水位 C 和完整内容，内部使用同一短读事务、每批 200 行逐票累计字节，随后释放事务；分页读取不可变视图，不重新读 live 表。所有页的 snapshotId/C/total 一致，客户端校验连续 offset，收齐后从 C 补拉后续变化。没有跨 HTTP 请求的长 SQLite 事务。
+
+默认每页 100、最多 200 条和 1 MiB；单视图最多 10,000 票/16 MiB，TTL 最多 10 分钟。每账号最多 4 个未完成视图，当前单进程实例最多 32 个、保留序列化内容预算 128 MiB；构造中的视图也预留预算。数字是内容字节配额，不是进程 RSS 上限。超限明确失败，不截断记录。最后一页返回时立即释放视图与 token，单页/空票夹反复刷新不会积累配额；最后一页响应丢失后须重新建快照，中间页在有效期内可重放。
+
+增量响应为 `{serverId,userId,fromCursor,nextCursor,headCursor,hasMore,changes,capabilities}`。upsert 为 `{cursor,type:'upsert',ticket}`，删除为 `{cursor,type:'delete',id,version,deletedAt}`。数据库仍只保留同一份完整 `ticket_changes` 日志，删除在 wire 上精简；不会维护第二套增量事实。只允许 `B <= after <= H`，逐游标验证连续性，分批推进 nextCursor，不以 headCursor 代替尚未收到的变更。
+
+日志保留窗口为 7 天或每账号最新 10,000 条。清理只删除游标连续前缀，并在同一事务推进 `sync_baselines` 下界 B；票根墓碑、操作幂等记录及云对象不随日志清理删除。不会为分页视图无限保留旧日志；若读取期间 B 已超过 C，客户端重新建快照。失效/非法/跨账号 pageToken 统一返回 410 `snapshot_expired`；游标过期、空间改变、游标超前或日志缺口分别为 410 `cursor_expired`、`server_changed`、`cursor_ahead`、`cursor_gap`，格式 `{detail:{code,message}}`。其他错误保留 detail 字符串。
+
+`WS /api/sync/events` 仅发 ready/hint 水位元数据，不推图片或完整票夹。Store 在 SQL commit 成功并关闭连接后调用快速排队钩子；Redis Pub/Sub 是可丢失提示，断连/重连与周期 SQL 水位校准负责修复漏通知，持久事实始终由增量 HTTP 获取。旧 `/api/state` 已移除，历史全量轮询对照仅在明确的旧 commit 上运行。
+
+WebSocket 不经过 HTTP middleware，因此单独复用 `AuthService.websocket_session`：精确 Origin、HttpOnly 会话 Cookie、原有 JWT/刷新/绝对到期规则；URL 不接受令牌或账号参数。每次提示前重新核验会话，退出/换号在本地删除会话提交后、上游 revoke 前立即通知连接关闭；跨进程还依赖定期复查。401/403 关闭 1008，临时认证不可用关闭 1013，不将服务暂时失败当成退出。启动失败也按生命周期释放已注册通知、线程、缓存视图与客户端。
 
 ## 迁移与备份
 

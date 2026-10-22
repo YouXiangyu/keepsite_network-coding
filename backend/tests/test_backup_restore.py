@@ -12,8 +12,9 @@ from backend.backups import BackupError, create_account_backup, restore_account_
 from backend.app import create_app
 from backend.object_storage import LocalObjectStore, ObjectReader
 from backend.shared_state import RedisSharedState
+from account_fixtures import account_snapshot
 from account_fixtures import FakeAuthFactory, ORIGIN, USERS, WRITE_HEADERS, signed_in
-from test_api import make_app, create, delete, patch, upload
+from test_api import make_app, create, delete, patch, upload, applied
 
 
 @pytest.fixture
@@ -48,17 +49,17 @@ def test_backup_is_scoped_and_deleted_only_media_bytes_are_not_exported(exported
     assert result["verified"] and result["tickets"] == 2 and result["files"] == 1
     with TestClient(restored_app(destination), base_url=ORIGIN) as client:
         signed_in(client)
-        state = client.get("/api/state").json()
-        assert [row["id"] for row in state["data"]["tickets"]] == ["ticket-1"]
-        assert state["data"]["tickets"][0]["fields"]["title"] == "Private movie"
-        assert client.post("/api/tickets", headers=WRITE_HEADERS, json=payload).json() == state
-        assert client.post("/api/tickets", headers=WRITE_HEADERS, json=deleted_payload).json() == state
+        state = account_snapshot(client)
+        assert [row["id"] for row in state["tickets"]] == ["ticket-1"]
+        assert state["tickets"][0]["fields"]["title"] == "Private movie"
+        assert applied(client, client.post("/api/tickets", headers=WRITE_HEADERS, json=payload)) == state
+        assert applied(client, client.post("/api/tickets", headers=WRITE_HEADERS, json=deleted_payload)) == state
         assert client.post("/api/tickets", headers=WRITE_HEADERS, json={**deleted_payload, "operationId": "revive"}).status_code == 409
         assert client.get("/api/media/" + deleted_payload["originalAssetId"]).status_code == 404
         assert client.get("/api/media/" + payload["originalAssetId"]).status_code == 200
         assert state["capabilities"]["cloudStorage"] is False
         signed_in(client, "bob")
-        assert client.get("/api/state").json()["data"]["tickets"] == []
+        assert account_snapshot(client)["tickets"] == []
         assert client.get("/api/media/" + payload["originalAssetId"]).status_code == 404
     second_archive = create_account_backup(restored_app(destination).state.store, USERS["alice"]["id"])
     assert second_archive.exists(), "Restored tombstone references need no missing media bytes"

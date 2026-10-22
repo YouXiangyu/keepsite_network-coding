@@ -7,7 +7,7 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
     user: options.user ?? '', configured: options.configured ?? true, google: options.google ?? false,
     requests: [] as { path: string; method: string; body: any; headers: Record<string, string> }[],
     data: new Map<string, { tickets: ReturnType<typeof sampleItem>[] }>(), revision: 1,
-    rejectVerification: false, unverifiedLogin: false, holdState: undefined as Promise<void> | undefined,
+    rejectVerification: false, unverifiedLogin: false, holdChanges: undefined as Promise<void> | undefined,
     csrfToken: undefined as string | undefined, logoutUrl: undefined as string | undefined,
     appliedOperations: new Set<string>(),
     uploads: new Map<string, { uploadId: string; status: string; asset: ReturnType<typeof media> }>(),
@@ -19,8 +19,28 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
   };
   const session = () => ({ authenticated: !!server.user, configured: server.configured, providers: { google: server.google, email: true },
     ...(server.user ? { user: { id: server.user, email: `${server.user}@example.test`, name: server.user }, csrfToken: server.csrfToken ?? `csrf-${server.user}` } : {}) });
-  const state = () => ({ initialized: true, serverId: 'web-server', userId: server.user, revision: server.revision, data: structuredClone(currentData()), capabilities: { processing: server.processing, processingUnavailableReason: server.processing ? null : '处理配置未就绪，请配置服务端识别。', deviceSync: false, cloudStorage: options.cloud !== false } });
+  const capabilities = () => ({ processing: server.processing, processingUnavailableReason: server.processing ? null : '处理配置未就绪，请配置服务端识别。', deviceSync: false, cloudStorage: options.cloud !== false });
+  const histories = new Map<string, { cursor: number; previous: Map<string, string>; changes: any[] }>();
+  const sockets = new Set<{ user: string; send: (value: string) => void }>();
+  const views = new Map<string, any>(); let snapshotCount = 0;
+  const history = (user = server.user) => { if (!histories.has(user)) histories.set(user, { cursor: 1, previous: new Map(currentData(user).tickets.map(ticket => [ticket.id, JSON.stringify(ticket)])), changes: [] }); return histories.get(user)!; };
+  const hint = () => { for (const socket of sockets) if (socket.user === server.user) socket.send(JSON.stringify({ v: 1, type: 'sync.hint', serverId: 'web-server', userId: socket.user, cursor: history(socket.user).cursor })); };
+  const commit = () => {
+    const log = history();
+    for (const ticket of currentData().tickets) {
+      const raw = JSON.stringify(ticket); if (log.previous.get(ticket.id) === raw) continue;
+      log.previous.set(ticket.id, raw); log.cursor++;
+      log.changes.push(ticket.deletedAt !== null ? { cursor: log.cursor, type: 'delete', id: ticket.id, version: ticket.version, deletedAt: ticket.deletedAt } : { cursor: log.cursor, type: 'upsert', ticket: structuredClone(ticket) });
+    }
+    hint();
+  };
+  Object.defineProperty(server, 'revision', { get: () => history().cursor, set: () => commit() });
   const respond = (route: Route, value: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) });
+  await page.routeWebSocket('**/api/sync/events', socket => {
+    const entry = { user: server.user, send: (value: string) => socket.send(value) }; sockets.add(entry);
+    socket.send(JSON.stringify({ v: 1, type: 'sync.ready', serverId: 'web-server', userId: entry.user, cursor: history(entry.user).cursor }));
+    socket.onClose(() => sockets.delete(entry));
+  });
   await page.addInitScript(() => { (window as any).__legacyReads = 0; const open = indexedDB.open.bind(indexedDB); indexedDB.open = ((name: string, version?: number) => { if (name === 'memoverse-media-cache-v1') return open(name, version); (window as any).__legacyReads += 1; throw new Error('Legacy data must not be read'); }) as typeof indexedDB.open; });
   await page.route('**/api/**', async route => {
     const request = route.request(), path = new URL(request.url()).pathname, method = request.method();
@@ -33,15 +53,34 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
     if (['/api/auth/resend-code', '/api/auth/forgot-password', '/api/auth/reset-password'].includes(path)) return respond(route, { ok: true });
     if (path === '/api/auth/logout') { server.user = ''; return respond(route, { ok: true, logoutUrl: server.logoutUrl }); }
     if (!server.user) return respond(route, { detail: '请登录。' }, 401);
-    if (path === '/api/state') { const snapshot = state(), held = server.holdState; server.holdState = undefined; if (held) await held; return respond(route, snapshot).catch(() => {}); }
+    if (path === '/api/sync/snapshot') {
+      const token = new URL(request.url()).searchParams.get('pageToken'); let view;
+      if (token) view = views.get(token);
+      else {
+        const tickets = structuredClone(currentData().tickets.filter(ticket => ticket.deletedAt === null));
+        view = { serverId: 'web-server', userId: server.user, snapshotId: 'view-' + ++snapshotCount, cursor: history().cursor, total: tickets.length, offset: 0, tickets, expiresAt: Date.now() + 600000, capabilities: capabilities() };
+      }
+      if (!view || view.userId !== server.user) return respond(route, { detail: { code: 'snapshot_expired', message: '快照已失效' } }, 410);
+      const end = Math.min(view.offset + 100, view.total), nextPageToken = end < view.total ? view.snapshotId + '-' + end : null;
+      if (nextPageToken) views.set(nextPageToken, { ...view, offset: end });
+      return respond(route, { ...view, tickets: view.tickets.slice(view.offset, end), nextPageToken });
+    }
+    if (path === '/api/sync/changes') {
+      const query = new URL(request.url()).searchParams, after = Number(query.get('after')), log = history();
+      const changes = structuredClone(log.changes.filter(change => change.cursor > after).slice(0, 100));
+      const nextCursor = changes.at(-1)?.cursor ?? after;
+      const response = { serverId: 'web-server', userId: server.user, fromCursor: after, nextCursor, headCursor: log.cursor, hasMore: nextCursor < log.cursor, changes, capabilities: capabilities() };
+      const held = server.holdChanges; server.holdChanges = undefined; if (held) await held;
+      return respond(route, response).catch(() => {});
+    }
     if (method !== 'GET' && request.headers()['x-csrf-token'] !== (server.csrfToken ?? `csrf-${server.user}`)) return respond(route, { detail: 'CSRF' }, 403);
-    if (path.startsWith('/api/operations/')) { const operationId = path.split('/')[3]; return respond(route, { operationId, applied: server.appliedOperations.has(`${server.user}/${operationId}`) }); }
+    if (path.startsWith('/api/operations/')) { const operationId = path.split('/')[3]; const applied = server.appliedOperations.has(`${server.user}/${operationId}`); return respond(route, { serverId: 'web-server', operationId, applied, committedCursor: applied ? history().cursor : null }); }
     if (path.startsWith('/api/uploads/')) { const upload = server.uploads.get(`${server.user}/${path.split('/')[3]}`); return respond(route, upload ?? { detail: '未找到上传' }, upload ? 200 : 404); }
     if (path.endsWith('/download')) { const hash = path.split('/')[3]; const assets = currentData().tickets.flatMap(ticket => [ticket.media.original, ticket.media.poster]).filter(Boolean); const asset = assets.find(asset => asset!.assetId === hash) ?? media(); return respond(route, { ...asset, transport: 'server', expiresAt: Date.now() + 60000 }); }
     if (path.startsWith('/api/media/')) return route.fulfill({ contentType: 'image/png', body: path.endsWith(otherHash) ? otherPng : png });
     if (path === '/api/media') { const uploadId = /name="uploadId"\r\n\r\n([^\r]+)/.exec(body)?.[1] ?? ''; const asset = media(); server.uploads.set(`${server.user}/${uploadId}`, { uploadId, status: 'stored', asset }); return respond(route, { ...asset, uploadId }); }
     const data = currentData();
-    if (server.appliedOperations.has(`${server.user}/${body?.operationId}`)) return respond(route, state());
+    if (server.appliedOperations.has(`${server.user}/${body?.operationId}`)) return respond(route, { serverId: 'web-server', operationId: body.operationId, committedCursor: history().cursor });
     if (path.endsWith('/process') && method === 'POST') {
       if (!server.processing) return respond(route, { detail: '处理配置未就绪' }, 503);
       const ticket = data.tickets.find(item => item.id === decodeURIComponent(path.split('/')[3]));
@@ -52,11 +91,52 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
     else return respond(route, { detail: 'Not found' }, 404);
     if (body.originalAssetId) for (const [key, upload] of server.uploads) if (key.startsWith(server.user + '/') && upload.asset.assetId === body.originalAssetId) upload.status = 'attached';
     server.appliedOperations.add(`${server.user}/${body.operationId}`);
-    server.revision++; return respond(route, state());
+    server.revision++; return respond(route, { serverId: 'web-server', operationId: body.operationId, committedCursor: history().cursor });
   });
-  return server;
+  return Object.assign(server, { hint });
 }
 async function login(page: Page, email = 'a@example.test') { await page.getByLabel('邮箱地址', { exact: true }).fill(email); await page.getByLabel('密码', { exact: true }).fill(password); await page.getByRole('button', { name: '登录', exact: true }).click(); }
+
+test('all snapshot pages publish together and later hints transfer only changed records', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' });
+  api.data.set('a', { tickets: Array.from({ length: 201 }, (_, index) => sampleItem('ticket-' + index)) });
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; }); let held = false;
+  await page.route('**/api/sync/snapshot?**', async route => {
+    if (new URL(route.request().url()).searchParams.has('pageToken') && !held) { held = true; await gate; }
+    await route.fallback();
+  });
+  const bodies: { path: string; size: number }[] = [];
+  page.on('response', async response => { if (response.url().includes('/api/sync/')) { try { bodies.push({ path: new URL(response.url()).pathname, size: (await response.body()).byteLength }); } catch {} } });
+  await page.goto('/tickets'); await expect.poll(() => held).toBe(true);
+  await expect(page.locator('.ticket-card')).toHaveCount(0);
+  expect(api.requests.filter(request => request.path.startsWith('/api/media/'))).toHaveLength(0);
+  release(); await expect(page.locator('.ticket-card')).toHaveCount(201);
+  await expect.poll(() => bodies.filter(body => body.path.endsWith('/snapshot')).length).toBe(3);
+  const initialBytes = bodies.filter(body => body.path.endsWith('/snapshot')).reduce((sum, body) => sum + body.size, 0);
+  const before = bodies.length, snapshots = api.requests.filter(request => request.path.endsWith('/snapshot')).length;
+  const ticket = api.data.get('a')!.tickets[0]; ticket.fields.title = '增量修改的一张电影票'; ticket.version++; api.revision++;
+  await expect(page.getByText('增量修改的一张电影票', { exact: true })).toBeVisible();
+  await expect.poll(() => bodies.length).toBeGreaterThan(before);
+  const deltaBytes = bodies.slice(before).reduce((sum, body) => sum + body.size, 0);
+  expect(deltaBytes).toBeLessThan(initialBytes / 10);
+  expect(api.requests.filter(request => request.path.endsWith('/snapshot'))).toHaveLength(snapshots);
+  expect(api.requests.some(request => request.path === '/api/state')).toBe(false);
+  await page.clock.install(); const reads = api.requests.filter(request => request.path.endsWith('/changes')).length;
+  api.hint(); await page.clock.runFor(200); expect(api.requests.filter(request => request.path.endsWith('/changes'))).toHaveLength(reads);
+});
+
+test('a remote tombstone preserves edited fields and the selected photo while disabling old-record save', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' }); await page.goto('/tickets/item-1/edit');
+  await page.getByLabel('片名').fill('尚未提交的本地草稿');
+  await page.getByLabel('选择原票照片').setInputFiles({ name: 'draft.png', mimeType: 'image/png', buffer: png });
+  const preview = await page.getByAltText('原票预览').getAttribute('src'); expect(preview).toMatch(/^blob:/);
+  const ticket = api.data.get('a')!.tickets[0]; ticket.deletedAt = Date.now(); ticket.version++; api.revision++;
+  await expect(page.getByRole('alert')).toContainText('已被删除');
+  await expect(page.getByLabel('片名')).toHaveValue('尚未提交的本地草稿');
+  await expect(page.getByAltText('原票预览')).toHaveAttribute('src', preview!);
+  await expect(page.getByRole('button', { name: '保存票根' })).toBeDisabled();
+  expect(api.requests.filter(request => request.method === 'PATCH')).toHaveLength(0);
+});
 
 test('session barrier blocks private pages and all business requests', async ({ page }) => {
   let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
@@ -242,7 +322,7 @@ test('same-account session renewal retains the draft and attaches the new CSRF t
 test('logout discards a late old-account state before another login', async ({ page }) => {
   const api = await mockApi(page, { user: 'a' }); await page.goto('/tickets');
   await expect(page.getByRole('heading', { name: 'A 的电影票' })).toBeVisible();
-  let release!: () => void; api.holdState = new Promise<void>(resolve => { release = resolve; });
+  let release!: () => void; api.holdChanges = new Promise<void>(resolve => { release = resolve; });
   const before = api.requests.length; await page.getByRole('button', { name: '刷新票夹' }).click();
   await expect.poll(() => api.requests.length).toBeGreaterThan(before);
   await page.getByRole('button', { name: '退出登录' }).click(); await login(page, 'b@example.test'); release();
@@ -265,18 +345,18 @@ test('temporary photo URLs are released on replacement, navigation and logout', 
 test('an authenticated state 401 removes all private UI', async ({ page }) => {
   await mockApi(page, { user: 'a' }); await page.goto('/tickets');
   await expect(page.getByRole('heading', { name: 'A 的电影票' })).toBeVisible();
-  await page.route('**/api/state', route => route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ detail: '会话结束' }) }));
+  await page.route('**/api/sync/changes?**', route => route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ detail: '会话结束' }) }));
   await page.getByRole('button', { name: '刷新票夹' }).click();
   await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible(); await expect(page.locator('.memoverse-shell')).toHaveCount(0);
 });
-test('an old detail poll cannot restore a deleted ticket', async ({ page }) => {
+test('an old in-flight delta cannot restore a deleted ticket', async ({ page }) => {
   const api = await mockApi(page, { user: 'a' }); await page.clock.install(); await page.goto('/tickets/item-1');
   await expect(page.getByRole('heading', { name: 'A 的电影票' })).toBeVisible();
-  let release!: () => void; api.holdState = new Promise<void>(resolve => { release = resolve; });
-  const before = api.requests.filter(request => request.path === '/api/state').length;
-  await page.clock.fastForward(10001); await expect.poll(() => api.requests.filter(request => request.path === '/api/state').length).toBeGreaterThan(before);
+  let release!: () => void; api.holdChanges = new Promise<void>(resolve => { release = resolve; });
+  const before = api.requests.filter(request => request.path === '/api/sync/changes').length;
+  await page.evaluate(() => window.dispatchEvent(new Event('focus'))); await expect.poll(() => api.requests.filter(request => request.path === '/api/sync/changes').length).toBeGreaterThan(before);
   await page.getByRole('button', { name: '删除票根', exact: true }).click(); await page.getByRole('button', { name: '确认删除' }).click();
-  await expect(page.getByRole('heading', { name: '你的第一张电影票' })).toBeVisible(); release();
+  release(); await expect(page.getByRole('heading', { name: '你的第一张电影票' })).toBeVisible();
   await expect(page.getByText('A 的电影票', { exact: true })).toHaveCount(0);
 });
 
@@ -473,11 +553,11 @@ test('active processing advances in the library and catches up after a failed st
   await expect(page.getByText('处理完成', { exact: true })).toHaveCount(0);
   ticket.processing.status = 'ocr'; ticket.version++; api.revision++;
   await page.clock.fastForward(4001); await expect(page.getByText('正在识别票面', { exact: true })).toBeVisible();
-  const unavailable = (route: Route) => route.abort('failed'); await page.route('**/api/state', unavailable);
+  const unavailable = (route: Route) => route.abort('failed'); await page.route('**/api/sync/changes?**', unavailable);
   ticket.processing.status = 'poster'; ticket.version++; api.revision++;
   await page.clock.fastForward(4001); await expect(page.getByRole('alert')).toContainText('暂时无法连接服务');
   ticket.processing.status = 'no_match'; ticket.version++; api.revision++;
-  await page.unroute('**/api/state', unavailable); await page.clock.fastForward(4001);
+  await page.unroute('**/api/sync/changes?**', unavailable); await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(page.getByText('未找到可靠海报', { exact: true })).toBeVisible();
   await expect(page.getByRole('alert')).toHaveCount(0);
 });

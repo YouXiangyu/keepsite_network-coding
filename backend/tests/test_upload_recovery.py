@@ -13,6 +13,7 @@ from backend.media import recover_pending_uploads
 from backend.object_storage import LocalObjectStore, S3ObjectStore, StorageError
 from backend.services import tickets
 from backend.shared_state import RedisSharedState
+from account_fixtures import account_snapshot
 from account_fixtures import ORIGIN, USERS, WRITE_HEADERS, FakeAuthFactory, image_bytes, signed_in
 from test_api import make_app, upload, create, delete
 from test_object_storage import FakeS3Client
@@ -72,7 +73,7 @@ def test_object_written_then_database_failure_is_reconciled(workspace, monkeypat
     recovered = client.get("/api/uploads/upload-1")
     assert recovered.status_code == 200 and recovered.json()["status"] == "stored"
     state, _ = create(client, asset=recovered.json()["asset"])
-    assert state["data"]["tickets"][0]["media"]["original"]["assetId"] == recovered.json()["asset"]["assetId"]
+    assert state["tickets"][0]["media"]["original"]["assetId"] == recovered.json()["asset"]["assetId"]
 
 
 def test_missing_object_remains_pending_without_authorization(workspace, monkeypatch):

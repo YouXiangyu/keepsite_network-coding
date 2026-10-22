@@ -1,9 +1,14 @@
 """Atomic field updates, operation replay, and deletion tombstones."""
 import hashlib
 import json
-from ..state import account_state, present_ticket
+from ..state import present_ticket
 from ..store import StoreError, encode, now_ms
 from ..processing_repository import enqueue, cancel_current
+
+
+def receipt(store, db, user_id, operation_id):
+    server = db.execute("SELECT value FROM meta WHERE key='server_id'").fetchone()[0]
+    return {"serverId": server, "operationId": operation_id, "committedCursor": store.require_user(db, user_id)["revision"]}
 
 
 def apply(store, user_id, identifier, action, body):
@@ -15,7 +20,7 @@ def apply(store, user_id, identifier, action, body):
         if operation:
             if operation[0] != fingerprint:
                 raise StoreError(409, "操作标识已用于不同请求，请使用新的操作标识。")
-            return account_state(store, db, user_id)
+            return receipt(store, db, user_id, body.operationId)
         stamp = now_ms()
         should_process = False
         if action == "create":
@@ -66,6 +71,6 @@ def apply(store, user_id, identifier, action, body):
         store.bump(db, user_id)
         changed = db.execute("SELECT * FROM tickets WHERE user_id=? AND id=?", (user_id, identifier)).fetchone()
         store.record_ticket_change(db, user_id, present_ticket(store, db, user_id, changed))
-        result = account_state(store, db, user_id)
+        result = receipt(store, db, user_id, body.operationId)
     store.processing_wake()
     return result

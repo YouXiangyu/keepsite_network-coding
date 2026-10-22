@@ -44,7 +44,7 @@ jobs:
           python -B scripts/prepare-ocr.py --destination "$RUNNER_TEMP/ocr-models" --execute
           echo "MEMOVERSE_TEST_OCR_MODEL_DIR=$RUNNER_TEMP/ocr-models" >> "$GITHUB_ENV"
       - name: Test backend contracts, isolation, and recovery
-        run: python -B -m pytest backend/tests scripts/tests/test_capacity_benchmark.py scripts/tests/test_ticket_migration.py scripts/tests/test_ocr_preparation.py -q -ra --basetemp "$RUNNER_TEMP/pytest-backend" --junitxml=test-results/backend.xml
+        run: python -B -m pytest backend/tests scripts/tests/test_capacity_benchmark.py scripts/tests/test_sync_benchmark.py scripts/tests/test_ticket_migration.py scripts/tests/test_ocr_preparation.py -q -ra --basetemp "$RUNNER_TEMP/pytest-backend" --junitxml=test-results/backend.xml
       - name: Upload backend failure report
         if: ${{ failure() }}
         uses: actions/upload-artifact@v4

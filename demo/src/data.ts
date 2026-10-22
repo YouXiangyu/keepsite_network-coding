@@ -62,7 +62,7 @@ export function validPosterSource(value: unknown): value is PosterSource {
     return value.licenseUrl === licenseUrl;
   } catch { return false; }
 }
-function validTicket(value: unknown): value is Ticket {
+export function validTicket(value: unknown): value is Ticket {
   if (!object(value) || !identifier(value.id) || !object(value.fields) || !object(value.fieldSources)) return false;
   const fields = value.fields, sources = value.fieldSources;
   return fieldNames.every(key => typeof fields[key] === 'string' && fields[key].length <= (key === 'title' ? 120 : 200) && ['user', 'ocr', 'migration', 'empty'].includes(String(sources[key])))

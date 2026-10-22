@@ -3,10 +3,22 @@ import json
 import sqlite3
 import time
 import uuid
+import logging
+import threading
 from contextlib import closing, contextmanager
 from pathlib import Path
 
 from .object_storage import ObjectStore
+
+CHANGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+CHANGE_WINDOW = 10_000
+log = logging.getLogger(__name__)
+
+
+class TrackedConnection(sqlite3.Connection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.changed_owners = {}
 
 
 class StoreError(Exception):
@@ -53,6 +65,8 @@ class Store:
         self.processing_enabled = False
         self.processing_unavailable_reason = "电影票处理服务尚未配置。"
         self.processing_wake = lambda: None
+        self._change_subscribers = set()
+        self._change_lock = threading.Lock()
         for folder in (self.root, self.root / "tmp", self.root / "exports"):
             folder.mkdir(parents=True, exist_ok=True)
         self.database = self.root / "memoverse.sqlite3"
@@ -102,6 +116,7 @@ class Store:
                     ticket_id TEXT NOT NULL, payload TEXT NOT NULL, created_at INTEGER NOT NULL,
                     PRIMARY KEY(user_id,cursor)
                 );
+                CREATE INDEX IF NOT EXISTS ticket_changes_age ON ticket_changes(user_id,created_at,cursor);
                 CREATE TABLE IF NOT EXISTS upload_intents (
                     user_id TEXT NOT NULL REFERENCES users(id), id TEXT NOT NULL,
                     asset_id TEXT NOT NULL, object_key TEXT NOT NULL, mime TEXT NOT NULL,
@@ -152,7 +167,7 @@ class Store:
             db.commit()
 
     def connect(self, *, timeout=15):
-        db = sqlite3.connect(self.database, timeout=timeout)
+        db = sqlite3.connect(self.database, timeout=timeout, factory=TrackedConnection)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys=ON")
         return db
@@ -160,15 +175,42 @@ class Store:
     @contextmanager
     def transaction(self, write=False, *, timeout=15):
         db = self.connect(timeout=timeout)
+        changes = ()
         try:
             db.execute("BEGIN IMMEDIATE" if write else "BEGIN")
             yield db
             db.commit()
+            changes = tuple(db.changed_owners.items())
         except BaseException:
             db.rollback()
             raise
         finally:
             db.close()
+        if changes:
+            with self._change_lock:
+                subscribers = tuple(self._change_subscribers)
+            for user_id, cursor in changes:
+                for callback in subscribers:
+                    try:
+                        callback(user_id, cursor)
+                    except Exception:
+                        log.warning("Committed change notification deferred; durable log retained")
+
+    def subscribe_changes(self, callback):
+        """Callbacks must only enqueue work: no blocking network inside this hook."""
+        with self._change_lock:
+            self._change_subscribers.add(callback)
+
+        def unsubscribe():
+            with self._change_lock:
+                self._change_subscribers.discard(callback)
+        return unsubscribe
+
+    def watermark(self, user_id):
+        with self.transaction(timeout=1) as db:
+            user = self.require_user(db, user_id)
+            server = db.execute("SELECT value FROM meta WHERE key='server_id'").fetchone()[0]
+            return {"serverId": server, "cursor": user["revision"]}
 
     @staticmethod
     def require_user(db, user_id):
@@ -193,6 +235,31 @@ class Store:
         revision = Store.require_user(db, user_id)["revision"]
         db.execute("INSERT INTO ticket_changes VALUES (?,?,?,?,?)",
                    (user_id, revision, ticket["id"], encode(ticket), now_ms()))
+        Store._prune_changes(db, user_id, revision)
+        db.changed_owners[user_id] = revision
+
+    @staticmethod
+    def _prune_changes(db, user_id, head):
+        baseline = db.execute("SELECT cursor FROM sync_baselines WHERE user_id=?", (user_id,)).fetchone()[0]
+        aged = db.execute("SELECT MAX(cursor) FROM ticket_changes WHERE user_id=? AND created_at<?",
+                          (user_id, now_ms() - CHANGE_RETENTION_MS)).fetchone()[0]
+        cutoff = min(head, max(baseline, head - CHANGE_WINDOW, aged or 0))
+        if cutoff > baseline:
+            db.execute("DELETE FROM ticket_changes WHERE user_id=? AND cursor<=?", (user_id, cutoff))
+            db.execute("UPDATE sync_baselines SET cursor=? WHERE user_id=?", (cutoff, user_id))
+
+    def prune_changes(self, user_id):
+        with self.transaction(timeout=1) as db:
+            user = self.require_user(db, user_id)
+            baseline = db.execute("SELECT cursor FROM sync_baselines WHERE user_id=?", (user_id,)).fetchone()
+            aged = db.execute("SELECT 1 FROM ticket_changes WHERE user_id=? AND created_at<? LIMIT 1",
+                              (user_id, now_ms() - CHANGE_RETENTION_MS)).fetchone()
+            if baseline and not aged and user["revision"] - baseline[0] <= CHANGE_WINDOW:
+                return
+        with self.transaction(True, timeout=1) as db:
+            user = self.require_user(db, user_id)
+            self.ensure_sync_baseline(db, user_id)
+            self._prune_changes(db, user_id, user["revision"])
 
     @staticmethod
     def asset(db, user_id, identifier):

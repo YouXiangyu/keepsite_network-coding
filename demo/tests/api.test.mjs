@@ -1,7 +1,7 @@
 import { test, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
-import { signedSession, serverState, media, png } from './web-fixtures.mjs';
+import { signedSession, snapshotPage, media, png } from './web-fixtures.mjs';
 
 const apiUrl = new URL('../src/api.ts', import.meta.url).href;
 const hook = registerHooks({ resolve(specifier, context, nextResolve) {
@@ -20,7 +20,7 @@ after(() => { globalThis.fetch = originalFetch; });
 test('anonymous code cannot request workspace, upload or mutations', async () => {
   let requests = 0;
   globalThis.fetch = async () => { requests += 1; throw new Error('unexpected fetch'); };
-  await assert.rejects(api.getState(), error => error.status === 401);
+  await assert.rejects(api.getSnapshotPage(), error => error.status === 401);
   await assert.rejects(api.mutate('/api/tickets', 'POST', {}), error => error.status === 401);
   await assert.rejects(api.uploadMedia(new File(['x'], 'image.png', { type: 'image/png' }), 'upload-1'), error => error.status === 401);
   assert.equal(requests, 0);
@@ -40,7 +40,7 @@ test('session lookup is same-origin and never initializes account data', async (
 test('invalid session identity cannot retain a previously active account', async () => {
   api.installSession(signedSession('a'));
   assert.throws(() => api.installSession({ ...signedSession('b'), user: { id: 42, email: 'b@example.test', name: 'B' } }), error => error.status === 401);
-  await assert.rejects(api.getState(), error => error.status === 401);
+  await assert.rejects(api.getSnapshotPage(), error => error.status === 401);
 });
 
 test('login preserves password bytes and uses the Web client header', async () => {
@@ -79,18 +79,18 @@ test('authenticated writes attach the active CSRF token and preserve operation i
     assert.equal(options.headers.get('X-CSRF-Token'), 'test-csrf-a');
     assert.equal(options.credentials, 'same-origin');
     assert.deepEqual(JSON.parse(options.body), { operationId: 'op-2', fields: { title: '保留草稿' } });
-    return Response.json(serverState());
+    return Response.json({ serverId: 'server', operationId: 'op-2', committedCursor: 7 });
   };
-  assert.equal((await api.mutate('/api/tickets/item-1', 'PATCH', { operationId: 'op-2', fields: { title: '保留草稿' } })).revision, 7);
+  assert.equal((await api.mutate('/api/tickets/item-1', 'PATCH', { operationId: 'op-2', fields: { title: '保留草稿' } })).committedCursor, 7);
 });
 
 test('a state from another user invalidates the current session', async () => {
   api.installSession(signedSession());
   let expired = 0;
   const unsubscribe = api.onSessionExpired(() => { expired += 1; });
-  globalThis.fetch = async () => Response.json(serverState('b'));
-  await assert.rejects(api.getState(), error => error.status === 401);
-  await assert.rejects(api.getState(), error => error.status === 401);
+  globalThis.fetch = async () => Response.json(snapshotPage('b'));
+  await assert.rejects(api.getSnapshotPage(), error => error.status === 401);
+  await assert.rejects(api.getSnapshotPage(), error => error.status === 401);
   assert.equal(expired, 1);
   unsubscribe();
 });
@@ -100,13 +100,13 @@ test('an old account response cannot become the new account state even if fetch 
   let resolve;
   let signal;
   globalThis.fetch = (_path, options) => { signal = options.signal; return new Promise(done => { resolve = done; }); };
-  const pending = api.getState();
+  const pending = api.getSnapshotPage();
   api.installSession(signedSession('b'));
   assert.equal(signal.aborted, true);
-  resolve(Response.json(serverState('a')));
+  resolve(Response.json(snapshotPage('a')));
   await assert.rejects(pending, error => error.name === 'AbortError');
-  globalThis.fetch = async () => Response.json(serverState('b'));
-  assert.equal((await api.getState()).userId, 'b');
+  globalThis.fetch = async () => Response.json(snapshotPage('b'));
+  assert.equal((await api.getSnapshotPage()).userId, 'b');
 });
 
 test('a late unauthorized response must not log out the new account', async () => {
@@ -115,7 +115,7 @@ test('a late unauthorized response must not log out the new account', async () =
   let expired = 0;
   const unsubscribe = api.onSessionExpired(() => { expired += 1; });
   globalThis.fetch = () => new Promise(done => { resolve = done; });
-  const pending = api.getState();
+  const pending = api.getSnapshotPage();
   api.installSession(signedSession('b'));
   resolve(Response.json({ detail: 'expired' }, { status: 401 }));
   await assert.rejects(pending, error => error.name === 'AbortError');
@@ -135,11 +135,11 @@ test('switching account while decoding a body also discards the old response', a
   let resolveBody;
   let started;
   const bodyStarted = new Promise(resolve => { started = resolve; });
-  globalThis.fetch = async () => ({ ok: true, json: () => { started(); return new Promise(resolve => { resolveBody = resolve; }); } });
-  const pending = api.getState();
+  globalThis.fetch = async () => new Response(new ReadableStream({ start(controller) { started(); resolveBody = value => { try { controller.enqueue(new TextEncoder().encode(JSON.stringify(value))); controller.close(); } catch {} }; } }));
+  const pending = api.getSnapshotPage();
   await bodyStarted;
   api.installSession(signedSession('b'));
-  resolveBody(serverState('a'));
+  resolveBody(snapshotPage('a'));
   await assert.rejects(pending, error => error.name === 'AbortError');
 });
 
@@ -151,7 +151,7 @@ test('explicit logout forwards only the validated Cognito destination after clea
     globalThis.fetch = async () => Response.json({ ok: true, logoutUrl });
     await api.signOut(origin);
     assert.deepEqual(ended, { reason: 'logout', logoutUrl });
-    await assert.rejects(api.getState(), error => error.status === 401);
+    await assert.rejects(api.getSnapshotPage(), error => error.status === 401);
   } finally { unsubscribe(); }
 });
 
@@ -180,7 +180,7 @@ test('logout rejects unsafe provider and return URLs while still clearing the lo
       await api.signOut(origin);
       assert.equal(ended?.reason, 'logout');
       assert.equal(ended?.logoutUrl, undefined, String(value));
-      await assert.rejects(api.getState(), error => error.status === 401);
+      await assert.rejects(api.getSnapshotPage(), error => error.status === 401);
     }
   } finally { unsubscribe(); }
 });
@@ -200,8 +200,8 @@ test('a delayed logout response cannot clear or redirect a replacement account',
     resolveBody({ ok: true, logoutUrl });
     await assert.rejects(pending, error => error.name === 'AbortError');
     assert.equal(ended, 0);
-    globalThis.fetch = async () => Response.json(serverState('b'));
-    assert.equal((await api.getState()).userId, 'b');
+    globalThis.fetch = async () => Response.json(snapshotPage('b'));
+    assert.equal((await api.getSnapshotPage()).userId, 'b');
   } finally { unsubscribe(); }
 });
 
@@ -223,13 +223,13 @@ test('multipart uploads keep original bytes and authenticated CSRF', async () =>
 test('conflict and network errors do not turn into fake successful state', async () => {
   api.installSession(signedSession());
   globalThis.fetch = async () => Response.json({ detail: '版本已更新' }, { status: 409 });
-  await assert.rejects(api.mutate('/api/tickets/item-1', 'PATCH', {}), error => error.status === 409 && error.message === '版本已更新');
+  await assert.rejects(api.mutate('/api/tickets/item-1', 'PATCH', { operationId: 'conflict' }), error => error.status === 409 && error.message === '版本已更新');
   globalThis.fetch = async () => { throw new TypeError('network failed'); };
-  await assert.rejects(api.getState(), /暂时无法连接服务/);
+  await assert.rejects(api.getSnapshotPage(), /暂时无法连接服务/);
 });
 
 for (const [label, consume, start, limit] of [
-  ['JSON save', 'json', () => api.mutate('/api/tickets/item-1', 'PATCH', { version: 1 }), 30000],
+  ['JSON save', 'json', () => api.mutate('/api/tickets/item-1', 'PATCH', { operationId: 'save-1' }), 30000],
 ]) {
   test(`${label} expires even when successful response body ignores cancellation`, async context => {
     context.mock.timers.enable({ apis: ['setTimeout'] });
@@ -247,8 +247,8 @@ for (const [label, consume, start, limit] of [
     context.mock.timers.tick(limit);
     await rejected;
     assert.equal(signal.aborted, true);
-    globalThis.fetch = async () => Response.json(serverState());
-    assert.equal((await api.getState()).revision, 7);
+    globalThis.fetch = async () => Response.json(snapshotPage());
+    assert.equal((await api.getSnapshotPage()).cursor, 7);
   });
 }
 
@@ -262,7 +262,7 @@ test('expired error-body consumption cannot later invalidate a new session', asy
     bodyStarted();
     return new Promise(resolve => { resolveBody = resolve; });
   } });
-  const request = api.getState();
+  const request = api.getSnapshotPage();
   const rejected = assert.rejects(request, /请求超时/);
   await consuming;
   context.mock.timers.tick(30000);
@@ -270,16 +270,16 @@ test('expired error-body consumption cannot later invalidate a new session', asy
   api.installSession(signedSession('b'));
   resolveBody({ detail: 'expired' });
   await Promise.resolve();
-  globalThis.fetch = async () => Response.json(serverState('b'));
-  assert.equal((await api.getState()).userId, 'b');
+  globalThis.fetch = async () => Response.json(snapshotPage('b'));
+  assert.equal((await api.getSnapshotPage()).userId, 'b');
 });
 
 test('account cancellation promptly rejects a body that never finishes', async () => {
   api.installSession(signedSession('a'));
   let bodyStarted;
   const consuming = new Promise(resolve => { bodyStarted = resolve; });
-  globalThis.fetch = async () => ({ ok: true, json: () => { bodyStarted(); return new Promise(() => {}); } });
-  const request = api.getState();
+  globalThis.fetch = async () => new Response(new ReadableStream({ start() { bodyStarted(); } }));
+  const request = api.getSnapshotPage();
   const rejected = assert.rejects(request, error => error.name === 'AbortError');
   await consuming;
   api.installSession(signedSession('b'));
@@ -288,8 +288,8 @@ test('account cancellation promptly rejects a body that never finishes', async (
 
 test('malformed capabilities cannot claim unfinished device sync', async () => {
   api.installSession(signedSession());
-  globalThis.fetch = async () => Response.json({ ...serverState(), capabilities: { processing: false, deviceSync: true, cloudStorage: true } });
-  await assert.rejects(api.getState(), /功能状态不完整/);
+  globalThis.fetch = async () => Response.json({ ...snapshotPage(), capabilities: { processing: false, deviceSync: true, cloudStorage: true } });
+  await assert.rejects(api.getSnapshotPage(), /功能状态不完整/);
 });
 
 test('upload confirmation rejects mismatched identities, unsupported types and incomplete dimensions', async () => {
@@ -306,9 +306,9 @@ test('operation lookup uses the active session and validates the exact receipt',
   api.installSession(signedSession());
   globalThis.fetch = async (path, options) => {
     assert.equal(path, '/api/operations/write-1'); assert.equal(options.credentials, 'same-origin');
-    return Response.json({ operationId: 'write-1', applied: false });
+    return Response.json({ serverId: 'server', operationId: 'write-1', applied: false, committedCursor: null });
   };
-  assert.deepEqual(await api.getOperationStatus('write-1'), { operationId: 'write-1', applied: false });
+  assert.deepEqual(await api.getOperationStatus('write-1'), { serverId: 'server', operationId: 'write-1', applied: false, committedCursor: null });
   for (const receipt of [{ operationId: 'other', applied: true }, { operationId: 'write-1', applied: 'true' }]) {
     globalThis.fetch = async () => Response.json(receipt);
     await assert.rejects(api.getOperationStatus('write-1'), /操作核对结果不完整/);
@@ -319,7 +319,7 @@ test('a receipt from a replaced session cannot confirm another account draft', a
   api.installSession(signedSession('a')); let release;
   globalThis.fetch = () => new Promise(resolve => { release = resolve; });
   const pending = api.getOperationStatus('write-1'); const rejection = assert.rejects(pending, error => error.name === 'AbortError');
-  api.installSession(signedSession('b')); release(Response.json({ operationId: 'write-1', applied: true })); await rejection;
+  api.installSession(signedSession('b')); release(Response.json({ serverId: 'server', operationId: 'write-1', applied: true, committedCursor: 7 })); await rejection;
 });
 
 const signedImage = 'https://private-bucket.s3.ap-northeast-3.amazonaws.com/ticket.png?X-Amz-Signature=test';
@@ -382,4 +382,34 @@ test('upload status cannot confuse another intent or mark a pending object usabl
   }
   globalThis.fetch = async () => Response.json({ uploadId: 'upload-1', status: 'stored', asset: media() });
   assert.equal((await api.getUploadStatus('upload-1')).asset.assetId, media().assetId);
+});
+
+test('sync pages reject oversized bodies, malformed pagination and mismatched cursors', async () => {
+  api.installSession(signedSession());
+  globalThis.fetch = async () => new Response(' '.repeat(1024 * 1024 + 1));
+  await assert.rejects(api.getSnapshotPage(), /超过大小限制/);
+  for (const patch of [{ total: 10001 }, { offset: 2 }, { nextPageToken: '' }, { cursor: -1 }]) {
+    globalThis.fetch = async () => Response.json({ ...snapshotPage(), ...patch });
+    await assert.rejects(api.getSnapshotPage(), /快照分页格式异常/);
+  }
+  const page = { serverId: 'server', userId: 'a', fromCursor: 7, nextCursor: 7, headCursor: 7, hasMore: false, changes: [], capabilities: snapshotPage().capabilities };
+  for (const patch of [{ fromCursor: 6 }, { nextCursor: 8 }, { hasMore: true }, { changes: [{ cursor: 9, type: 'delete', id: 'ticket', version: 2, deletedAt: 0 }] }]) {
+    globalThis.fetch = async () => Response.json({ ...page, ...patch });
+    await assert.rejects(api.getChanges('server', 7), error => error.code === 'cursor_gap');
+  }
+});
+
+test('structured cursor expiration is preserved without expiring authentication', async () => {
+  api.installSession(signedSession());
+  globalThis.fetch = async () => Response.json({ detail: { code: 'cursor_expired', message: '游标已过期' } }, { status: 410 });
+  await assert.rejects(api.getChanges('server', 7), error => error.status === 410 && error.code === 'cursor_expired' && error.message === '游标已过期');
+  globalThis.fetch = async () => Response.json(snapshotPage()); assert.equal((await api.getSnapshotPage()).userId, 'a');
+});
+
+test('write and lookup receipts require the server domain and never accept the old shape', async () => {
+  api.installSession(signedSession());
+  globalThis.fetch = async () => Response.json({ operationId: 'op-1', committedCursor: 10 });
+  await assert.rejects(api.mutate('/api/tickets/item-1', 'PATCH', { operationId: 'op-1' }), /写入回执不完整/);
+  globalThis.fetch = async () => Response.json({ operationId: 'op-1', applied: false, committedCursor: null });
+  await assert.rejects(api.getOperationStatus('op-1'), /操作核对结果不完整/);
 });

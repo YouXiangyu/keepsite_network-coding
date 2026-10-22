@@ -10,6 +10,7 @@ from backend.app import create_app
 from backend import accounts
 from backend.object_storage import LocalObjectStore, S3ObjectStore, StorageError
 from backend.shared_state import RedisSharedState
+from account_fixtures import account_snapshot
 from account_fixtures import FakeAuthFactory, ORIGIN, USERS, WRITE_HEADERS, image_bytes, signed_in
 from test_object_storage import FakeS3Client
 
@@ -46,8 +47,18 @@ def create(client, identifier="ticket-1", asset=None, fields=None):
     payload = {"id": identifier, "operationId": "create-" + identifier,
                "originalAssetId": asset["assetId"], "fields": fields or {}}
     response = client.post("/api/tickets", headers=WRITE_HEADERS, json=payload)
+    return applied(client, response), payload
+
+
+def applied(client, response):
     assert response.status_code == 200, response.text
-    return response.json(), payload
+    receipt = response.json()
+    assert set(receipt) == {"serverId", "operationId", "committedCursor"}
+    assert isinstance(receipt["operationId"], str) and type(receipt["committedCursor"]) is int
+    snapshot = account_snapshot(client)
+    assert snapshot["serverId"] == receipt["serverId"]
+    assert snapshot["cursor"] >= receipt["committedCursor"]
+    return snapshot
 
 
 def patch(client, fields, operation="update-1", identifier="ticket-1"):
@@ -65,18 +76,18 @@ def test_empty_accounts_are_atomic_and_never_clone_templates(workspace):
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda _: accounts.ensure_account(app.state.store, **{
             "user_id": USERS["alice"]["id"], "email": "alice@example.test", "name": "Alice"}), range(8)))
-    state = client.get("/api/state").json()
-    assert state["data"] == {"tickets": []}
+    state = account_snapshot(client)
+    assert state["tickets"] == []
     assert state["capabilities"] == {"processing": False, "processingUnavailableReason": "需要先配置私有云存储，才能运行电影票处理。", "cloudStorage": False, "deviceSync": False}
     assert not hasattr(app.state, "worker")
     with app.state.store.transaction() as db:
         assert db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1
         assert db.execute("SELECT COUNT(*) FROM assets").fetchone()[0] == 0
     signed_in(client, "bob")
-    assert client.get("/api/state").json()["data"] == {"tickets": []}
+    assert account_snapshot(client)["tickets"] == []
 
 
-@pytest.mark.parametrize("method,path", [("GET", "/api/state"), ("POST", "/api/tickets"),
+@pytest.mark.parametrize("method,path", [("GET", "/api/sync/snapshot"), ("POST", "/api/tickets"),
     ("PATCH", "/api/tickets/x"), ("DELETE", "/api/tickets/x"), ("POST", "/api/media"),
     ("GET", "/api/media/" + "a" * 64), ("GET", "/api/backup"), ("GET", "/api/operations/create-ticket-1")])
 def test_business_requires_session(workspace, method, path):
@@ -88,14 +99,14 @@ def test_business_requires_session(workspace, method, path):
 
 @pytest.mark.parametrize("method,path", [("POST", "/api/collections"), ("PATCH", "/api/profile"),
     ("GET", "/api/models/x/model.glb"), ("GET", "/api/jobs/x"), ("POST", "/api/shares/x/collect"),
-    ("PUT", "/api/community/x/like"), ("POST", "/api/bootstrap")])
+    ("PUT", "/api/community/x/like"), ("POST", "/api/bootstrap"), ("GET", "/api/state")])
 def test_retired_routes_are_removed(client, method, path):
     assert client.request(method, path, headers=WRITE_HEADERS, json={}).status_code == 404
 
 
 def test_movie_contract_sources_and_actual_local_storage_status(client):
     state, _ = create(client, fields={"title": "电影", "showtime": "2026-10-22T18:30", "seat": ""})
-    ticket = state["data"]["tickets"][0]
+    ticket = state["tickets"][0]
     assert ticket["fields"] == {"title": "电影", "cinema": "", "hall": "", "seat": "", "showtime": "2026-10-22T18:30"}
     assert ticket["fieldSources"] == {"title": "user", "cinema": "empty", "hall": "empty", "seat": "user", "showtime": "user"}
     assert ticket["processing"] == {"status": "not_started", "error": None}
@@ -134,23 +145,24 @@ def test_unreferenced_upload_cannot_be_read_and_shared_active_reference_survives
 
 def test_two_accounts_cannot_read_attach_edit_delete_or_replay_each_others_data(client):
     a, payload = create(client, fields={"title": "Private"})
-    original = a["data"]["tickets"][0]["media"]["original"]
+    original = a["tickets"][0]["media"]["original"]
     signed_in(client, "bob")
-    assert client.get("/api/state").json()["data"]["tickets"] == []
+    assert account_snapshot(client)["tickets"] == []
     assert client.get(original["url"]).status_code == 404
     assert client.post("/api/tickets", headers=WRITE_HEADERS, json=payload).status_code == 404
     assert patch(client, {"title": "stolen"}).status_code == 404
     assert delete(client).status_code == 404
     b, _ = create(client, fields={"title": "Bob"})
-    assert b["data"]["tickets"][0]["fields"]["title"] == "Bob"
+    assert b["tickets"][0]["fields"]["title"] == "Bob"
     signed_in(client, "alice")
-    assert client.get("/api/state").json()["data"]["tickets"][0]["fields"]["title"] == "Private"
+    assert account_snapshot(client)["tickets"][0]["fields"]["title"] == "Private"
 
 
 def test_create_replay_and_changed_payload_conflict(client):
     state, payload = create(client)
     replay = client.post("/api/tickets", headers=WRITE_HEADERS, json=payload)
-    assert replay.json() == state
+    assert replay.json() == {"serverId": state["serverId"], "operationId": payload["operationId"], "committedCursor": state["cursor"]}
+    assert applied(client, replay) == state
     different = {**payload, "fields": {"title": "other"}}
     assert client.post("/api/tickets", headers=WRITE_HEADERS, json=different).status_code == 409
     assert patch(client, {"title": "other"}, payload["operationId"]).status_code == 409
@@ -158,28 +170,28 @@ def test_create_replay_and_changed_payload_conflict(client):
 
 def test_partial_updates_merge_and_replays_do_not_overwrite_later_values(client):
     create(client, fields={"title": "Old", "hall": "1"})
-    first = patch(client, {"title": "New"}).json()
-    second = patch(client, {"seat": "A1"}, "update-2").json()
-    third = patch(client, {"title": "Newest"}, "update-3").json()
-    assert third["data"]["tickets"][0]["fields"] == {"title": "Newest", "cinema": "", "hall": "1", "seat": "A1", "showtime": ""}
-    assert patch(client, {"title": "New"}).json() == third
+    first = applied(client, patch(client, {"title": "New"}))
+    second = applied(client, patch(client, {"seat": "A1"}, "update-2"))
+    third = applied(client, patch(client, {"title": "Newest"}, "update-3"))
+    assert third["tickets"][0]["fields"] == {"title": "Newest", "cinema": "", "hall": "1", "seat": "A1", "showtime": ""}
+    assert applied(client, patch(client, {"title": "New"})) == third
     assert patch(client, {"title": "Different"}).status_code == 409
-    assert first["data"]["tickets"][0]["inputVersion"] == second["data"]["tickets"][0]["inputVersion"] == 2
-    assert third["data"]["tickets"][0]["inputVersion"] == 3
-    assert third["data"]["tickets"][0]["version"] == 4
+    assert first["tickets"][0]["inputVersion"] == second["tickets"][0]["inputVersion"] == 2
+    assert third["tickets"][0]["inputVersion"] == 3
+    assert third["tickets"][0]["version"] == 4
 
 
 def test_deleted_id_remains_tombstoned_and_old_requests_cannot_revive_it(workspace):
     client, app = workspace
     state, payload = create(client)
-    url = state["data"]["tickets"][0]["media"]["original"]["url"]
+    url = state["tickets"][0]["media"]["original"]["url"]
     patch(client, {"title": "Updated"})
-    deleted = delete(client).json()
-    assert deleted["data"]["tickets"] == []
+    deleted = applied(client, delete(client))
+    assert deleted["tickets"] == []
     assert client.get(url).status_code == 404
-    assert delete(client).json() == deleted
-    assert client.post("/api/tickets", headers=WRITE_HEADERS, json=payload).json() == deleted
-    assert patch(client, {"title": "Updated"}).json() == deleted
+    assert applied(client, delete(client)) == deleted
+    assert applied(client, client.post("/api/tickets", headers=WRITE_HEADERS, json=payload)) == deleted
+    assert applied(client, patch(client, {"title": "Updated"})) == deleted
     assert patch(client, {"title": "revive"}, "late-update").status_code == 404
     assert client.post("/api/tickets", headers=WRITE_HEADERS, json={**payload, "operationId": "recreate"}).status_code == 409
     with app.state.store.transaction() as db:
@@ -191,12 +203,12 @@ def test_deleted_id_remains_tombstoned_and_old_requests_cannot_revive_it(workspa
 
 def test_original_change_revokes_old_reference_and_advances_input(client):
     state, _ = create(client)
-    original = state["data"]["tickets"][0]["media"]["original"]
+    original = state["tickets"][0]["media"]["original"]
     next_asset = upload(client, "blue")
     response = client.patch("/api/tickets/ticket-1", headers=WRITE_HEADERS,
                             json={"operationId": "change-photo", "originalAssetId": next_asset["assetId"]})
     assert response.status_code == 200
-    assert response.json()["data"]["tickets"][0]["inputVersion"] == 2
+    assert applied(client, response)["tickets"][0]["inputVersion"] == 2
     assert client.get(original["url"]).status_code == 404
     assert client.get(next_asset["url"]).status_code == 200
 
@@ -222,8 +234,8 @@ def test_persistence_and_replay_after_reopening(tmp_path):
     second = make_app(tmp_path)
     with TestClient(second, base_url=ORIGIN) as client:
         signed_in(client)
-        assert client.post("/api/tickets", headers=WRITE_HEADERS, json=payload).json() == state
-        assert client.get(state["data"]["tickets"][0]["media"]["original"]["url"]).content == image_bytes()
+        assert applied(client, client.post("/api/tickets", headers=WRITE_HEADERS, json=payload)) == state
+        assert client.get(state["tickets"][0]["media"]["original"]["url"]).content == image_bytes()
 
 
 @pytest.mark.parametrize("raw,status", [(b"", 422), (b"not-image", 422), (b"x" * (12 * 1024 * 1024 + 1), 413)], ids=["empty", "invalid", "oversized"])
@@ -266,7 +278,7 @@ def test_s3_only_claims_saved_after_reference_commit(tmp_path):
         assert client.get(asset["url"]).status_code == 404
         state, _ = create(client, asset=asset)
         assert state["capabilities"]["cloudStorage"] is True
-        assert state["data"]["tickets"][0]["media"]["original"]["cloudStatus"] == "saved"
+        assert state["tickets"][0]["media"]["original"]["cloudStatus"] == "saved"
         assert client.get(asset["url"]).content == image_bytes()
 
 
@@ -276,7 +288,7 @@ def test_csrf_and_account_body_injection_do_not_mutate(client):
     assert client.post("/api/tickets", json=payload).status_code == 403
     assert client.post("/api/tickets", headers={**WRITE_HEADERS, "Origin": "https://evil.test"}, json=payload).status_code == 403
     assert client.post("/api/tickets", headers=WRITE_HEADERS, json={**payload, "userId": "user-bob"}).status_code == 422
-    assert client.get("/api/state").json()["data"]["tickets"] == []
+    assert account_snapshot(client)["tickets"] == []
 
 
 @pytest.mark.parametrize("version", ["1", "2", "unknown"])
@@ -311,7 +323,7 @@ def test_deleted_media_requires_a_fresh_upload_before_new_reference(client):
     upload(client)
     result = client.post("/api/tickets", headers=WRITE_HEADERS, json=new_payload)
     assert result.status_code == 200
-    assert result.json()["data"]["tickets"][0]["id"] == "different-id"
+    assert applied(client, result)["tickets"][0]["id"] == "different-id"
 
 
 def test_pending_upload_receipt_is_not_consumed_on_failed_creation(workspace, monkeypatch):
@@ -322,7 +334,7 @@ def test_pending_upload_receipt_is_not_consumed_on_failed_creation(workspace, mo
     with pytest.raises(RuntimeError, match="commit failure"):
         create(client, asset=asset)
     monkeypatch.setattr(app.state.store, "bump", original)
-    assert create(client, asset=asset)[0]["data"]["tickets"]
+    assert create(client, asset=asset)[0]["tickets"]
 
 
 def test_existing_poster_stays_valid_until_new_publication(workspace):
@@ -331,29 +343,30 @@ def test_existing_poster_stays_valid_until_new_publication(workspace):
     poster = upload(client, "blue")
     with app.state.store.transaction(True) as db:
         db.execute("UPDATE tickets SET poster_asset_id=? WHERE user_id=? AND id=?", (poster["assetId"], USERS["alice"]["id"], "ticket-1"))
-    edited = patch(client, {"title": "Corrected title"}).json()["data"]["tickets"][0]
+    edited = applied(client, patch(client, {"title": "Corrected title"}))["tickets"][0]
     assert edited["media"]["poster"]["assetId"] == poster["assetId"]
     assert client.get(poster["url"]).status_code == 200
 
 
 def test_operation_status_is_account_scoped_and_survives_later_photo_changes(client):
+    server_id = account_snapshot(client)["serverId"]
     assert client.get("/api/operations/create-ticket-1").json() == {
-        "operationId": "create-ticket-1", "applied": False}
+        "serverId": server_id, "operationId": "create-ticket-1", "applied": False, "committedCursor": None}
     _, payload = create(client)
-    applied = {"operationId": payload["operationId"], "applied": True}
+    applied = {"serverId": server_id, "operationId": payload["operationId"], "applied": True, "committedCursor": 1}
     assert client.get("/api/operations/" + payload["operationId"]).json() == applied
     replacement = upload(client, "blue")
     response = client.patch("/api/tickets/ticket-1", headers=WRITE_HEADERS,
                             json={"operationId": "later-photo", "originalAssetId": replacement["assetId"]})
     assert response.status_code == 200
-    assert client.get("/api/operations/" + payload["operationId"]).json() == applied
+    assert client.get("/api/operations/" + payload["operationId"]).json() == {**applied, "committedCursor": 2}
     delete(client)
-    assert client.get("/api/operations/" + payload["operationId"]).json() == applied
+    assert client.get("/api/operations/" + payload["operationId"]).json() == {**applied, "committedCursor": 3}
     signed_in(client, "bob")
     assert client.get("/api/operations/" + payload["operationId"]).json() == {
-        "operationId": payload["operationId"], "applied": False}
+        "serverId": server_id, "operationId": payload["operationId"], "applied": False, "committedCursor": None}
     assert client.get("/api/operations/missing-operation").json() == {
-        "operationId": "missing-operation", "applied": False}
+        "serverId": server_id, "operationId": "missing-operation", "applied": False, "committedCursor": None}
 
 
 @pytest.mark.parametrize("identifier", ["invalid.id", "x" * 121, "bad%20id"])
@@ -370,8 +383,8 @@ def test_operation_status_reads_persistent_fact_without_mutating_state(tmp_path)
     with TestClient(reopened, base_url=ORIGIN) as client:
         signed_in(client)
         assert client.get("/api/operations/" + payload["operationId"]).json() == {
-            "operationId": payload["operationId"], "applied": True}
+            "serverId": state["serverId"], "operationId": payload["operationId"], "applied": True, "committedCursor": state["cursor"]}
         assert client.get("/api/operations/missing").json()["applied"] is False
-        assert client.get("/api/state").json() == state
+        assert account_snapshot(client) == state
         with reopened.state.store.transaction() as db:
             assert db.execute("SELECT COUNT(*) FROM operations").fetchone()[0] == 1

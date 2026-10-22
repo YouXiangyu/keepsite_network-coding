@@ -1,0 +1,224 @@
+{
+  "schemaVersion": 1,
+  "title": "M4 synthetic HTTP protocol comparison",
+  "sourceVersionNote": "Baseline is exact isolated Git commit 167d9ec. Candidate is the M4 working source on that commit, identified by sourceSha256; the base commit alone does not identify candidate code.",
+  "comparisonRules": [
+    "Both processes used the same harness and synthetic workload, in sequence after other tests exited.",
+    "Final id/fields/version state hashes match after 13 comparisons to an independent expected model.",
+    "Counts are scripted HTTP protocol observations; they exclude browser scheduling, WebSocket heartbeat/frames, headers, TLS and media.",
+    "This is not an EC2 capacity or real-network speedup claim."
+  ],
+  "baseline": {
+    "schemaVersion": 1,
+    "createdAt": "2026-10-22T15:19:07.346372+08:00",
+    "environment": {
+      "platform": "Windows-11-10.0.26200-SP0",
+      "python": "3.13.11",
+      "fastapi": "0.135.3",
+      "httpx": "0.28.1",
+      "declaredSourceCommit": "167d9ec37439b05ebb807309c92a1d64308493bb",
+      "harnessSha256": "1ef78f42250ad9aec7fdc98f8dc68fd8fe599e89614cc6c9acd2149a38e105a5"
+    },
+    "method": {
+      "concurrency": 1,
+      "logicalPollOpportunities": 12,
+      "batchesOfChanges": 3,
+      "distinctWrites": 5,
+      "operationReplays": 1,
+      "snapshotPageLimit": 100,
+      "transport": "serial in-process TestClient",
+      "imageFixture": "synthetic 9x7 PNG"
+    },
+    "limitations": [
+      "Event arrival and reconnect are scripted; no browser or WebSocket is used in this HTTP protocol measurement.",
+      "The twelve opportunities model a two-minute 10-second poll interval but execute without wall-clock waiting.",
+      "No socket heartbeat/upgrade/frame, request-header, TLS, HTTP compression or media-download bytes are included.",
+      "No real Cognito, S3, Redis, network, concurrent load or OCR/poster processing; no capacity guarantee.",
+      "Initial pages can require more HTTP requests than one full snapshot. Report bootstrap separately from steady-state.",
+      "Latencies describe this one serial local run; different sample counts and warm caches do not prove a speedup."
+    ],
+    "result": {
+      "protocol": "full-poll",
+      "tickets": 300,
+      "sourceSha256": {
+        "backend/__init__.py": "0c74f1baf74598afa0a12c029e5de47d74eeda4113fb4e373fce408d774ab68f",
+        "backend/accounts.py": "fa76f9a2d50b3936a6c8c3735b1e3f04819a0fe01750e793259c2ea2d16082bf",
+        "backend/api.py": "1346fd6c79144097d7f8a33a51acf22c0c28725cbd8c68534a6f9fce3f49a838",
+        "backend/app.py": "79cb1115e7440795b70fba063b69080af1a3c8a82f65bc4d49214142abbac264",
+        "backend/auth.py": "9d7bd5f684d20c7c915e753f4ee95cd3bfc4b0658fad3daab5dcda47c09b065d",
+        "backend/backups.py": "12fba6fc3ec3c6a8ec4d770781db6cd4767e3c698ae13eee3c4facc19c4404fd",
+        "backend/contracts.py": "a1487aa2da0d7c96fc53c4f4a6c1ec233f2231d11f8219d72da5c7395547e5f6",
+        "backend/media.py": "8040ad0d1e3f0e09d277e8071edda5151cb9295cf3139219240869e8ff1e67e7",
+        "backend/object_storage.py": "d15171d9e6882bbed693622c15c1aba16464f75a2be88c396cbb0b9aa1de8e92",
+        "backend/ocr.py": "e8f95488dddf1c221b2ed5e169815154531f210ed90b0da8800508079b62114f",
+        "backend/posters.py": "f1c71c58a20bffe1f52bbb52d6e942f53f231ec5fb621d6f79b06b67eb4899e1",
+        "backend/processing.py": "4b249f8173b139572cfda486d07a1645a39fc3dc96af62c7c803da721bda9418",
+        "backend/processing_repository.py": "3363148bdbe3f2077b74c67d7483627e5b6664623cd9681cc12b044b366d3b0b",
+        "backend/requirements-dev.txt": "29bb17ea40c53a957727d160dd2a21dc4c9dde397f07ca651426cbe3d3eabba9",
+        "backend/requirements-ocr.txt": "3b2e4e257d17fc89f18bb49ab02b7dc6d855f6c65abd02f1c23b8c9a58e72ce9",
+        "backend/requirements.txt": "1277550564b2dfcfcdbf28e245f68d9e24353e6db106ea01836aac231695bfcd",
+        "backend/services/__init__.py": "a9f3fd625167dc778982b0c60ce1c97b010c90b76127c2711e61d4d4fa1271af",
+        "backend/services/tickets.py": "d27150b8fe3557fb2ab6903b86ff477aeca7b037f1cd4a21d1c7c6ad9830ffab",
+        "backend/shared_state.py": "f5a000bba97e2f65935fb21965a780b924ce9f2e092ad03519d45b8e214e818d",
+        "backend/state.py": "4a11fba2667731c66b26602bca028fd12d23f780bf0f40ea2df005f2481ee0dd",
+        "backend/store.py": "bdc86c763972acaae39441e39892368253678b29ae2dd62237f92b9bdd2668a1",
+        "backend/tests/account_fixtures.py": "2c01e5a0ee1a2f80c7e2bc4c72530ac90c156842ca52255c4bd3f9f71a14783b"
+      },
+      "measurements": {
+        "initialSync": {
+          "requests": 1,
+          "responseBodyBytes": 233698,
+          "failedRequests": 0,
+          "contentEncodings": [
+            "identity"
+          ],
+          "latencyMilliseconds": {
+            "p50": 29.36250006314367,
+            "p95": 29.36250006314367
+          }
+        },
+        "steadySync": {
+          "requests": 12,
+          "responseBodyBytes": 2801171,
+          "failedRequests": 0,
+          "contentEncodings": [
+            "identity"
+          ],
+          "latencyMilliseconds": {
+            "p50": 23.97144999122247,
+            "p95": 26.77420002873987
+          }
+        },
+        "writerReceipts": {
+          "requests": 6,
+          "responseBodyBytes": 1401384,
+          "failedRequests": 0,
+          "contentEncodings": [
+            "identity"
+          ],
+          "latencyMilliseconds": {
+            "p50": 30.14029999030754,
+            "p95": 35.85230000317097
+          }
+        }
+      },
+      "checks": {
+        "modelComparisons": 13,
+        "finalTickets": 300,
+        "finalComparableSha256": "66e4d0051045a85e9620af73083d71b35420af25eef07fb7b3dc99b24890d854",
+        "observedCommitBarriers": [],
+        "temporaryAccountRemoved": true
+      }
+    }
+  },
+  "candidate": {
+    "schemaVersion": 1,
+    "createdAt": "2026-10-22T15:19:20.09541+08:00",
+    "environment": {
+      "platform": "Windows-11-10.0.26200-SP0",
+      "python": "3.13.11",
+      "fastapi": "0.135.3",
+      "httpx": "0.28.1",
+      "declaredSourceCommit": "167d9ec37439b05ebb807309c92a1d64308493bb-plus-M4-source-hashes",
+      "harnessSha256": "1ef78f42250ad9aec7fdc98f8dc68fd8fe599e89614cc6c9acd2149a38e105a5"
+    },
+    "method": {
+      "concurrency": 1,
+      "logicalPollOpportunities": 12,
+      "batchesOfChanges": 3,
+      "distinctWrites": 5,
+      "operationReplays": 1,
+      "snapshotPageLimit": 100,
+      "transport": "serial in-process TestClient",
+      "imageFixture": "synthetic 9x7 PNG"
+    },
+    "limitations": [
+      "Event arrival and reconnect are scripted; no browser or WebSocket is used in this HTTP protocol measurement.",
+      "The twelve opportunities model a two-minute 10-second poll interval but execute without wall-clock waiting.",
+      "No socket heartbeat/upgrade/frame, request-header, TLS, HTTP compression or media-download bytes are included.",
+      "No real Cognito, S3, Redis, network, concurrent load or OCR/poster processing; no capacity guarantee.",
+      "Initial pages can require more HTTP requests than one full snapshot. Report bootstrap separately from steady-state.",
+      "Latencies describe this one serial local run; different sample counts and warm caches do not prove a speedup."
+    ],
+    "result": {
+      "protocol": "incremental",
+      "tickets": 300,
+      "sourceSha256": {
+        "backend/__init__.py": "0c74f1baf74598afa0a12c029e5de47d74eeda4113fb4e373fce408d774ab68f",
+        "backend/accounts.py": "fa76f9a2d50b3936a6c8c3735b1e3f04819a0fe01750e793259c2ea2d16082bf",
+        "backend/api.py": "dd2e3279f305231f6166745548d2fce57ac9e51090ed248a4a3e3758fd3c7a26",
+        "backend/app.py": "3e264b1de85b48c15a841be5637cb2e9d8c35a3c484a89dd90eadd602ceb32bb",
+        "backend/auth.py": "7eebc2f3827136a1ff39de062a71a78c9ea309f2c25c4263525e334b3591a363",
+        "backend/backups.py": "12fba6fc3ec3c6a8ec4d770781db6cd4767e3c698ae13eee3c4facc19c4404fd",
+        "backend/contracts.py": "a1487aa2da0d7c96fc53c4f4a6c1ec233f2231d11f8219d72da5c7395547e5f6",
+        "backend/media.py": "366375e32be92986f31ef6d270755259b2b305f57bfe61ce2df3079b551bb26a",
+        "backend/object_storage.py": "d15171d9e6882bbed693622c15c1aba16464f75a2be88c396cbb0b9aa1de8e92",
+        "backend/ocr.py": "e8f95488dddf1c221b2ed5e169815154531f210ed90b0da8800508079b62114f",
+        "backend/posters.py": "f1c71c58a20bffe1f52bbb52d6e942f53f231ec5fb621d6f79b06b67eb4899e1",
+        "backend/processing.py": "4b249f8173b139572cfda486d07a1645a39fc3dc96af62c7c803da721bda9418",
+        "backend/processing_repository.py": "3363148bdbe3f2077b74c67d7483627e5b6664623cd9681cc12b044b366d3b0b",
+        "backend/requirements-dev.txt": "29bb17ea40c53a957727d160dd2a21dc4c9dde397f07ca651426cbe3d3eabba9",
+        "backend/requirements-ocr.txt": "3b2e4e257d17fc89f18bb49ab02b7dc6d855f6c65abd02f1c23b8c9a58e72ce9",
+        "backend/requirements.txt": "6e6540ba625a2c01745517a09223b0f8251ffdf40a4dd95bce85c7b5d27ab385",
+        "backend/services/__init__.py": "a9f3fd625167dc778982b0c60ce1c97b010c90b76127c2711e61d4d4fa1271af",
+        "backend/services/tickets.py": "e058e0fd90a78a9d159bb859d481d3745f749043ec148e14f8469b86511f5e5f",
+        "backend/shared_state.py": "f5a000bba97e2f65935fb21965a780b924ce9f2e092ad03519d45b8e214e818d",
+        "backend/state.py": "7993227da01221f02b717d23ec94d77465f3af2b22ae7c912799193d357586b0",
+        "backend/store.py": "b795c5021a0289fd2be21f70899d92ffba9462380ffe046cd750f38359529d0c",
+        "backend/sync_http.py": "ef2b0a277f6ea018f137328cf929e9ba477a09c99b65992e115448e41260a1eb",
+        "backend/sync_notifications.py": "58becdac238556441199942fa977f27b70e231c34c39a8cc989272b87c77514c",
+        "backend/sync_socket.py": "40a15f65b52485467439a79b26424fef291ee92697d600e2e5da8386d607fdf1",
+        "backend/tests/account_fixtures.py": "b267d7480b2cf1f0d5144b45edc0b1fa585f94608867db56deaecd550e36f118"
+      },
+      "measurements": {
+        "initialSync": {
+          "requests": 4,
+          "responseBodyBytes": 234996,
+          "failedRequests": 0,
+          "contentEncodings": [
+            "identity"
+          ],
+          "latencyMilliseconds": {
+            "p50": 10.16454998170957,
+            "p95": 26.83640003670007
+          }
+        },
+        "steadySync": {
+          "requests": 3,
+          "responseBodyBytes": 4269,
+          "failedRequests": 0,
+          "contentEncodings": [
+            "identity"
+          ],
+          "latencyMilliseconds": {
+            "p50": 6.614500074647367,
+            "p95": 8.275900036096573
+          }
+        },
+        "writerReceipts": {
+          "requests": 6,
+          "responseBodyBytes": 595,
+          "failedRequests": 0,
+          "contentEncodings": [
+            "identity"
+          ],
+          "latencyMilliseconds": {
+            "p50": 11.62565004779026,
+            "p95": 12.736100004985929
+          }
+        }
+      },
+      "checks": {
+        "modelComparisons": 13,
+        "finalTickets": 300,
+        "finalComparableSha256": "66e4d0051045a85e9620af73083d71b35420af25eef07fb7b3dc99b24890d854",
+        "observedCommitBarriers": [
+          2,
+          5,
+          6
+        ],
+        "temporaryAccountRemoved": true
+      }
+    }
+  }
+}

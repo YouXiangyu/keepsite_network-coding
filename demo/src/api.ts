@@ -1,4 +1,4 @@
-import { validateData, validMedia, type AppData, type MediaRef } from './data';
+import { validateData, validMedia, validTicket, type Ticket, type MediaRef } from './data';
 
 export const API_BASE = '';
 export interface User { id: string; email: string; name: string }
@@ -14,14 +14,13 @@ export interface SignedInSession extends AuthSession {
   user: User;
   csrfToken: string;
 }
-export interface ServerState {
-  initialized: boolean;
-  serverId: string;
-  userId: string;
-  revision: number;
-  data: AppData | null;
-  capabilities: { processing: boolean; processingUnavailableReason: string | null; cloudStorage: boolean; deviceSync: false };
-}
+export interface Capabilities { processing: boolean; processingUnavailableReason: string | null; cloudStorage: boolean; deviceSync: false }
+export interface SnapshotPage { serverId: string; userId: string; snapshotId: string; cursor: number; total: number; offset: number; tickets: Ticket[]; nextPageToken: string | null; expiresAt: number; capabilities: Capabilities }
+export type Change = { cursor: number; type: 'upsert'; ticket: Ticket } | { cursor: number; type: 'delete'; id: string; version: number; deletedAt: number };
+export interface ChangePage { serverId: string; userId: string; fromCursor: number; nextCursor: number; headCursor: number; hasMore: boolean; changes: Change[]; capabilities: Capabilities }
+export interface SyncPosition { serverId: string; committedCursor: number | null }
+export interface MutationReceipt { serverId: string; operationId: string; committedCursor: number }
+export interface SyncHint { v: 1; type: 'sync.ready' | 'sync.hint'; serverId: string; userId: string; cursor: number }
 export interface MediaAsset {
   assetId: string;
   url: string;
@@ -133,6 +132,7 @@ async function request<T>(path: string, options: RequestOptions, consume: (respo
       try {
         const body = await response.json();
         if (typeof body.detail === 'string') detail = body.detail;
+        else if (body.detail && typeof body.detail.message === 'string') { detail = body.detail.message; if (typeof body.detail.code === 'string') code = body.detail.code; }
         if (typeof body.code === 'string') code = body.code;
       } catch { /* Preserve the HTTP status when an error body is unavailable. */ }
       checkActive();
@@ -219,41 +219,94 @@ export function resetPassword(email: string, code: string, password: string) {
   return jsonRequest('/api/auth/reset-password', { method: 'POST', ...jsonBody({ email, code, password }) });
 }
 
-function checkedState(value: unknown, expectedUser: string): ServerState {
-  if (!value || typeof value !== 'object') throw new ApiError('票根服务返回的数据格式不正确。');
-  const state = value as ServerState;
-  if (state.userId !== expectedUser || activeSession?.user.id !== expectedUser) {
-    expireSession();
-    throw new ApiError('账户状态已改变，请重新登录。', 401);
-  }
-  if (typeof state.initialized !== 'boolean' || typeof state.serverId !== 'string' || !state.serverId
-      || !Number.isSafeInteger(state.revision) || state.revision < 0) {
-    throw new ApiError('票根状态不完整，未更新界面。');
-  }
-  if (!state.capabilities || typeof state.capabilities.processing !== 'boolean' || state.capabilities.deviceSync !== false
-      || typeof state.capabilities.cloudStorage !== 'boolean'
-      || !(state.capabilities.processingUnavailableReason === null || typeof state.capabilities.processingUnavailableReason === 'string')) throw new ApiError('功能状态不完整，未更新界面。');
-  if (state.initialized) validateData(state.data);
-  else if (state.data !== null) throw new ApiError('票根空间尚未准备完成。');
-  return state;
+const integer = (value: unknown, minimum = 0): value is number => Number.isSafeInteger(value) && Number(value) >= minimum;
+function checkedIdentity(value: { userId: string; serverId: string }, expectedUser: string) {
+  if (value.userId !== expectedUser || activeSession?.user.id !== expectedUser) { expireSession(); throw new ApiError('账户状态已改变，请重新登录。', 401); }
+  if (typeof value.serverId !== 'string' || !value.serverId) throw new ApiError('同步服务身份不完整。');
 }
-export async function getState(signal?: AbortSignal): Promise<ServerState> {
-  const scope = epoch;
-  const user = activeSession?.user.id;
-  if (!user) throw new ApiError('请先登录。', 401);
-  const result = await jsonRequest('/api/state', { signal, authenticated: true });
-  assertSessionEpoch(scope);
-  return checkedState(result, user);
+function checkedCapabilities(value: Capabilities) {
+  if (!value || typeof value.processing !== 'boolean' || value.deviceSync !== false || typeof value.cloudStorage !== 'boolean'
+      || !(value.processingUnavailableReason === null || typeof value.processingUnavailableReason === 'string')) throw new ApiError('功能状态不完整，未更新界面。');
 }
-export async function mutate(path: string, method = 'POST', body?: unknown): Promise<ServerState> {
-  const scope = epoch;
-  const user = activeSession?.user.id;
-  if (!user) throw new ApiError('请先登录。', 401);
-  const result = await jsonRequest(path, {
-    method, authenticated: true, ...(body === undefined ? {} : jsonBody(body)),
+async function syncJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  return request(path, { authenticated: true, signal }, async (response, requestSignal) => {
+    if (!response.body) throw new ApiError('同步响应正文缺失。');
+    const reader = response.body.getReader(); const blocks: Uint8Array[] = []; let size = 0;
+    try {
+      while (true) {
+        if (requestSignal.aborted) staleRequest();
+        const { done, value } = await reader.read(); if (done) break;
+        size += value.byteLength; if (size > 1024 * 1024) throw new ApiError('同步页面超过大小限制。');
+        blocks.push(value);
+      }
+      const bytes = new Uint8Array(size); let offset = 0; for (const block of blocks) { bytes.set(block, offset); offset += block.byteLength; }
+      return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as T;
+    } finally { void reader.cancel().catch(() => {}); }
   });
+}
+export async function getSnapshotPage(pageToken: string | null = null, signal?: AbortSignal): Promise<SnapshotPage> {
+  const scope = epoch, user = activeSession?.user.id;
+  if (!user) throw new ApiError('请先登录。', 401);
+  const query = new URLSearchParams({ limit: '100', ...(pageToken ? { pageToken } : {}) });
+  const page = await syncJson<SnapshotPage>('/api/sync/snapshot?' + query, signal);
   assertSessionEpoch(scope);
-  return checkedState(result, user);
+  if (!page || typeof page !== 'object') throw new ApiError('快照格式不完整。');
+  checkedIdentity(page, user); checkedCapabilities(page.capabilities);
+  if (typeof page.snapshotId !== 'string' || !page.snapshotId || !integer(page.cursor) || !integer(page.total) || page.total > 10000
+    || !integer(page.offset) || !integer(page.expiresAt) || !(page.nextPageToken === null || typeof page.nextPageToken === 'string' && !!page.nextPageToken)
+    || !Array.isArray(page.tickets) || page.tickets.length > 200 || page.offset + page.tickets.length > page.total
+    || page.tickets.some(ticket => !validTicket(ticket) || ticket.deletedAt !== null)) throw new ApiError('快照分页格式异常。');
+  validateData({ tickets: page.tickets });
+  return page;
+}
+export async function getChanges(serverId: string, after: number, signal?: AbortSignal): Promise<ChangePage> {
+  const scope = epoch, user = activeSession?.user.id;
+  if (!user) throw new ApiError('请先登录。', 401);
+  const page = await syncJson<ChangePage>('/api/sync/changes?' + new URLSearchParams({ serverId, after: String(after), limit: '100' }), signal);
+  assertSessionEpoch(scope);
+  if (!page || typeof page !== 'object') throw new ApiError('增量格式不完整。');
+  checkedIdentity(page, user); checkedCapabilities(page.capabilities);
+  if (page.serverId !== serverId) throw new ApiError('同步服务已变更，需要重新读取快照。', 410, 'server_changed');
+  if (page.fromCursor !== after || !integer(page.nextCursor) || !integer(page.headCursor) || page.headCursor < page.nextCursor
+    || typeof page.hasMore !== 'boolean' || page.hasMore !== (page.nextCursor < page.headCursor) || !Array.isArray(page.changes)
+    || page.changes.length > 200 || page.nextCursor !== after + page.changes.length) throw new ApiError('增量游标不连续，需要重新校准。', 410, 'cursor_gap');
+  for (const [index, change] of page.changes.entries()) {
+    if (!change || change.cursor !== after + index + 1 || (change.type === 'upsert' ? !validTicket(change.ticket) || change.ticket.deletedAt !== null
+      : change.type !== 'delete' || typeof change.id !== 'string' || !/^[A-Za-z0-9_-]{1,120}$/.test(change.id) || !integer(change.version, 1) || !integer(change.deletedAt))) throw new ApiError('增量记录不完整，需要重新校准。', 410, 'cursor_gap');
+  }
+  return page;
+}
+export async function mutate(path: string, method = 'POST', body?: unknown): Promise<MutationReceipt> {
+  const scope = epoch;
+  if (!activeSession) throw new ApiError('请先登录。', 401);
+  const expected = (body as { operationId?: unknown } | undefined)?.operationId;
+  if (typeof expected !== 'string' || !expected) throw new ApiError('操作标识无效。');
+  const result = await jsonRequest<MutationReceipt>(path, { method, authenticated: true, ...jsonBody(body) });
+  assertSessionEpoch(scope);
+  if (!result || typeof result.serverId !== 'string' || !result.serverId || result.operationId !== expected || !integer(result.committedCursor)) throw new ApiError('写入回执不完整，结果尚未确认。');
+  return result;
+}
+export function openSyncEvents(onHint: (hint: SyncHint) => void, onClose: () => void) {
+  const scope = epoch, user = activeSession?.user.id;
+  if (!user) throw new ApiError('请先登录。', 401);
+  const url = new URL('/api/sync/events', window.location.origin); url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  const socket = new WebSocket(url);
+  let closed = false;
+  const current = () => !closed && scope === epoch && activeSession?.user.id === user;
+  const message = (event: MessageEvent) => {
+    if (!current()) return;
+    try {
+      if (typeof event.data !== 'string' || event.data.length > 4096) throw new Error();
+      const hint = JSON.parse(event.data) as SyncHint;
+      if (hint.v !== 1 || !['sync.ready', 'sync.hint'].includes(hint.type) || hint.userId !== user || typeof hint.serverId !== 'string' || !hint.serverId || !integer(hint.cursor)) throw new Error();
+      onHint(hint);
+    } catch { socket.close(); }
+  };
+  const end = () => { if (current()) onClose(); };
+  socket.addEventListener('message', message); socket.addEventListener('close', end);
+  const stop = () => { if (closed) return; closed = true; socket.removeEventListener('message', message); socket.removeEventListener('close', end); socket.close(); unsubscribe(); };
+  const unsubscribe = onSessionChanged(stop);
+  return stop;
 }
 export async function uploadMedia(file: File, uploadId: string): Promise<MediaAsset & { uploadId: string }> {
   const scope = epoch;
@@ -269,12 +322,12 @@ export async function uploadMedia(file: File, uploadId: string): Promise<MediaAs
   return asset;
 }
 
-export async function getOperationStatus(operationId: string): Promise<{ operationId: string; applied: boolean }> {
+export async function getOperationStatus(operationId: string): Promise<SyncPosition & { operationId: string; applied: boolean }> {
   if (!/^[A-Za-z0-9_-]{1,120}$/.test(operationId)) throw new ApiError('操作标识无效。');
   const scope = epoch;
-  const result = await jsonRequest<{ operationId: string; applied: boolean }>(`/api/operations/${encodeURIComponent(operationId)}`, { authenticated: true });
+  const result = await jsonRequest<SyncPosition & { operationId: string; applied: boolean }>(`/api/operations/${encodeURIComponent(operationId)}`, { authenticated: true });
   assertSessionEpoch(scope);
-  if (!result || result.operationId !== operationId || typeof result.applied !== 'boolean') throw new ApiError('操作核对结果不完整，草稿仍保留。');
+  if (!result || typeof result.serverId !== 'string' || !result.serverId || result.operationId !== operationId || typeof result.applied !== 'boolean' || (result.applied ? !integer(result.committedCursor) : result.committedCursor !== null)) throw new ApiError('操作核对结果不完整，草稿仍保留。');
   return result;
 }
 

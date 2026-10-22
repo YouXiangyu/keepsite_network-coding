@@ -159,6 +159,7 @@ class UploadRecovery:
 
     def stop(self):
         self.stopping.set()
-        self.thread.join(timeout=20)
+        if self.thread.ident is not None:
+            self.thread.join(timeout=20)
         if self.thread.is_alive():
             logging.getLogger(__name__).warning("Upload reconciliation is finishing an in-flight storage request")
