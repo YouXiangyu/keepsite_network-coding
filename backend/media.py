@@ -52,6 +52,7 @@ def persist_image(store, user_id: str, raw: bytes):
         store.require_user(db, user_id)
         store.register_asset(db, descriptor)
         changed = db.execute("INSERT OR IGNORE INTO asset_grants VALUES (?,?)", (user_id, descriptor["id"])).rowcount
+        db.execute("INSERT OR IGNORE INTO upload_receipts VALUES (?,?)", (user_id, descriptor["id"]))
         if changed:
             store.bump(db, user_id)
     return {key: value for key, value in info.items() if key != "filename"}

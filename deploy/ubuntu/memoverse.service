@@ -1,5 +1,5 @@
 [Unit]
-Description=MemoVerse API and serial local image generator
+Description=MemoVerse personal movie ticket API
 After=network.target
 StartLimitIntervalSec=60
 StartLimitBurst=3
@@ -21,7 +21,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/memoverse-v2 /opt/memoverse/shared/cache
+ReadWritePaths=/var/lib/memoverse-v3
 RestrictSUIDSGID=true
 MemoryAccounting=true
 MemoryHigh=1200M

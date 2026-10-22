@@ -6,6 +6,7 @@ demo/playwright-report/
 backend/.venv/
 backend/data/
 backend/data-v2/
+backend/data-v3/
 **/__pycache__/
 .pytest_cache/
 

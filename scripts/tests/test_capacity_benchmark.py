@@ -29,41 +29,45 @@ class CapacityBenchmarkTests(unittest.TestCase):
         sentinel.write_text("do not remove", encoding="utf-8")
         # Poison ambient defaults: explicit injection must ignore these locations.
         with patch.dict(os.environ, {"MEMOVERSE_DATA_DIR": str(self.root / "must-not-open-data"),
-                                     "MEMOVERSE_TEMPLATE_DIR": str(self.root / "must-not-open-template")}):
+                                     "MEMOVERSE_STORAGE": "s3",
+                                     "MEMOVERSE_S3_BUCKET": "must-not-access-cloud"}):
             report = benchmark.run_benchmark(self.root, counts=(4, 8), warmup=1, samples=2, sql_samples=2)
         self.assertEqual(len(report["cases"]), 4)
+        self.assertEqual(report["application_schema_version"], 3)
         self.assertTrue(report["method"]["sql_work_in_timing"])
         self.assertFalse(report["method"]["sql_trace_in_timing"])
         self.assertNotIn("sql_in_timing", report["method"])
         self.assertTrue(report["method"]["temporary_data_cleaned"])
         for case in report["cases"]:
-            count = case["collections"]
+            count = case["tickets"]
             self.assertEqual(case["successful_timed_requests"], 2)
             self.assertGreater(case["response_body_bytes"], 0)
             self.assertEqual(case["response_content_encoding"], "identity")
-            self.assertEqual(case["row_counts"]["collections"], count)
+            self.assertEqual(case["row_counts"]["tickets"], count)
             self.assertEqual(case["row_counts"]["users"], 1)
-            self.assertEqual(case["sql"]["select_min"], 2 * count + 12)
-            self.assertEqual(case["sql"]["select_max"], 2 * count + 12)
+            self.assertEqual(set(case["row_counts"]), {"users", "tickets", "assets", "asset_grants", "operations"})
+            self.assertEqual(case["row_counts"]["operations"], 0)
+            self.assertGreater(case["sql"]["select_min"], 0)
+            self.assertEqual(case["sql"]["select_min"], case["sql"]["select_max"])
             self.assertEqual(case["sql"]["samples"], 2)
             for trace in case["sql"]["statements_by_kind"]:
                 self.assertLessEqual(set(trace), {"SELECT", "BEGIN", "COMMIT"})
             self.assertEqual(case["read_checks"], {"snapshot_and_revision_unchanged": True,
-                                                  "row_counts_unchanged": True, "traced_write_statements": 0,
-                                                  "worker_started": False})
+                                                  "row_counts_unchanged": True, "traced_write_statements": 0})
+            self.assertEqual(case["behavior_checks"], {"create_replay": True, "field_update": True,
+                                                      "delete_tombstone": True, "account_isolation": True,
+                                                      "media_roundtrip": True, "deleted_media_denied": True})
             self.assertLessEqual(case["latency_ms"]["p50"], case["latency_ms"]["p95"])
             self.assertLessEqual(case["latency_ms"]["p95"], case["latency_ms"]["max"])
-            images = case["lists"]["search_all"]
+            images = case["media_manifest"]
             self.assertEqual(images["image_references"], count)
             self.assertGreater(images["unique_synthetic_image_bytes"], 0)
-            if case["profile"] == "ready-shared-model":
-                self.assertEqual(case["row_counts"]["jobs"], 0)
+            if case["profile"] == "shared-original":
+                self.assertEqual(case["row_counts"]["assets"], 1)
                 self.assertEqual(images["unique_media_urls"], 1)
             else:
-                self.assertEqual(case["row_counts"]["jobs"], count)
+                self.assertEqual(case["row_counts"]["assets"], count)
                 self.assertEqual(images["unique_media_urls"], count)
-                self.assertEqual(case["lists"]["all_state_content"]["unique_media_urls"], count + 1)
-            self.assertEqual(case["lists"]["home"]["image_references"], count + 3)
         self.assertEqual(sentinel.read_text(encoding="utf-8"), "do not remove")
         self.assertEqual({path.name for path in self.root.iterdir()}, {"keep.txt"})
 

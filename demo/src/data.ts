@@ -1,119 +1,50 @@
-export type Category = 'movie' | 'travel' | 'daily' | 'exhibition';
-export type Generation = 'reference' | 'queued' | 'processing' | 'blocked' | 'ready' | 'failed';
-export interface MediaFields {
-  customImage?: string;
-  assetId?: string;
-  modelId?: string;
-  modelUrl?: string;
-  modelCamera?: unknown;
+export const fieldNames = ['title', 'cinema', 'hall', 'seat', 'showtime'] as const;
+export type FieldName = typeof fieldNames[number];
+export type TicketFields = Record<FieldName, string>;
+export interface MediaRef {
+  assetId: string; sha256: string; mimeType: string; size: number; width: number; height: number;
+  url: string; cloudStatus: 'saved' | 'not_configured';
 }
-export interface CollectionItem extends MediaFields {
-  id: string;
-  title: string;
-  category: Category;
-  tags: string[];
-  note: string;
-  date: string;
-  addedAt: number;
-  source: 'mine' | 'friend';
-  art: string;
-  sender?: string;
-  version: number;
-  generation: Generation;
-  generationJobId?: string;
-  generationError?: string;
+export interface Ticket {
+  id: string; fields: TicketFields;
+  fieldSources: Record<FieldName, 'user' | 'ocr' | 'migration' | 'empty'>;
+  createdAt: number; updatedAt: number; version: number; inputVersion: number;
+  deletedAt: number | null; operationId: string;
+  media: { original: MediaRef; poster: MediaRef | null };
+  processing: { status: 'not_started'; error: null };
 }
-export interface CommunityItem extends MediaFields {
-  id: string;
-  title: string;
-  category: Category;
-  art: string;
-  author: string;
-  description: string;
-  exposures: number;
-  saves: number;
-  likes: number;
-  generation: Generation;
-  generationJobId?: string;
+export interface AppData { tickets: Ticket[] }
+export const emptyFields = (): TicketFields => ({ title: '', cinema: '', hall: '', seat: '', showtime: '' });
+const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+const identifier = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,120}$/.test(value);
+const showtime = (value: unknown) => {
+  if (value === '') return true;
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value) || Number(value.slice(0, 4)) < 1) return false;
+  const parsed = new Date(value + ':00Z');
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 16) === value;
+};
+const integer = (value: unknown, minimum = 0): value is number => Number.isSafeInteger(value) && Number(value) >= minimum;
+export function validMedia(value: unknown): value is MediaRef {
+  return object(value) && typeof value.assetId === 'string' && /^[a-f0-9]{64}$/.test(value.assetId)
+    && typeof value.sha256 === 'string' && /^[a-f0-9]{64}$/.test(value.sha256)
+    && value.assetId === value.sha256 && value.url === `/api/media/${value.sha256}`
+    && ['image/jpeg', 'image/png', 'image/webp'].includes(String(value.mimeType))
+    && integer(value.size, 1) && integer(value.width, 1) && integer(value.height, 1)
+    && ['saved', 'not_configured'].includes(String(value.cloudStatus));
 }
-export interface ShareItem {
-  id: string;
-  item: CollectionItem;
-  sender: string;
-  receivedAt: string;
-  unread: boolean;
-}
-export interface AppData {
-  collections: CollectionItem[];
-  shares: ShareItem[];
-  community: CommunityItem[];
-  profile: { name: string; bio: string };
-  likedCommunityIds: string[];
-}
-
-const categories = ['movie', 'travel', 'daily', 'exhibition'];
-const generations = ['reference', 'queued', 'processing', 'blocked', 'ready', 'failed'];
-const isObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-const isString = (value: unknown): value is string => typeof value === 'string';
-const isStrings = (value: unknown): value is string[] => Array.isArray(value) && value.every(isString);
-const isNumber = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value);
-const mediaValid = (value: Record<string, unknown>) =>
-  ['assetId', 'modelId', 'generationJobId', 'generationError', 'sender'].every(key => value[key] == null || isString(value[key]))
-  && ['customImage', 'modelUrl'].every(key => value[key] == null || (isString(value[key]) && value[key].startsWith('/api/')));
-
-function isCollection(value: unknown): value is CollectionItem {
-  return isObject(value) && ['id', 'title', 'note', 'date', 'art'].every(key => isString(value[key]))
-    && isString(value.category) && categories.includes(value.category)
-    && isStrings(value.tags) && isNumber(value.addedAt)
-    && (value.source === 'mine' || value.source === 'friend')
-    && isString(value.generation) && generations.includes(value.generation)
-    && isNumber(value.version) && Number.isInteger(value.version) && value.version >= 1
-    && mediaValid(value) && (value.generation !== 'ready' || isString(value.modelUrl));
-}
-function isCommunity(value: unknown): value is CommunityItem {
-  return isObject(value) && ['id', 'title', 'art', 'author', 'description'].every(key => isString(value[key]))
-    && isString(value.category) && categories.includes(value.category)
-    && ['exposures', 'saves', 'likes'].every(key => isNumber(value[key]) && Number.isInteger(value[key]) && value[key] >= 0)
-    && isString(value.generation) && generations.includes(value.generation)
-    && mediaValid(value) && (value.generation !== 'ready' || isString(value.modelUrl));
+function validTicket(value: unknown): value is Ticket {
+  if (!object(value) || !identifier(value.id) || !object(value.fields) || !object(value.fieldSources)) return false;
+  const fields = value.fields, sources = value.fieldSources;
+  return fieldNames.every(key => typeof fields[key] === 'string' && fields[key].length <= (key === 'title' ? 120 : 200) && ['user', 'ocr', 'migration', 'empty'].includes(String(sources[key])))
+    && showtime(fields.showtime)
+    && integer(value.createdAt) && integer(value.updatedAt) && integer(value.version, 1) && integer(value.inputVersion, 1)
+    && (value.deletedAt === null || integer(value.deletedAt)) && identifier(value.operationId)
+    && object(value.media) && validMedia(value.media.original) && (value.media.poster === null || validMedia(value.media.poster))
+    && object(value.processing) && value.processing.status === 'not_started' && value.processing.error === null;
 }
 export function validateData(value: unknown): asserts value is AppData {
-  if (!isObject(value)
-    || !Array.isArray(value.collections) || !value.collections.every(isCollection)
-    || !Array.isArray(value.shares) || !value.shares.every(share => isObject(share) && isString(share.id)
-      && isCollection(share.item) && isString(share.sender) && isString(share.receivedAt) && typeof share.unread === 'boolean')
-    || !Array.isArray(value.community) || !value.community.every(isCommunity)
-    || !isObject(value.profile) || !isString(value.profile.name) || !isString(value.profile.bio)
-    || !isStrings(value.likedCommunityIds)) {
-    throw new Error('收藏数据格式异常，未更新已有界面。');
+  if (!object(value) || !Array.isArray(value.tickets) || !value.tickets.every(validTicket)
+    || new Set(value.tickets.map(ticket => ticket.id)).size !== value.tickets.length) {
+    throw new Error('票根数据格式异常，未更新已有界面。');
   }
-  for (const entries of [value.collections, value.shares, value.community]) {
-    if (new Set(entries.map(entry => entry.id)).size !== entries.length) {
-      throw new Error('收藏数据含重复标识，未更新已有界面。');
-    }
-  }
-}
-
-/** Literal historical name matching: never invent a label for a new subject. */
-export function inferTag(title: string, items: CollectionItem[]): string | undefined {
-  const normalize = (text: string) => text.normalize('NFKC').trim().toLocaleLowerCase();
-  const query = normalize(title);
-  if (!query) return undefined;
-  const keywords = query.split(/[\s\p{P}\p{S}]+/u).filter(Boolean);
-  const counts = new Map<string, number>();
-  for (const item of items) {
-    const name = normalize(item.title);
-    if (!name || !(name.includes(query) || query.includes(name)
-      || keywords.some(keyword => name.includes(keyword)))) continue;
-    for (const tag of new Set(item.tags.map(tag => tag.trim()).filter(Boolean))) {
-      counts.set(tag, (counts.get(tag) ?? 0) + 1);
-    }
-  }
-  let winner: string | undefined;
-  let highest = 0;
-  for (const [tag, count] of counts) {
-    if (count > highest) { highest = count; winner = tag; }
-  }
-  return winner;
 }

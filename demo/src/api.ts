@@ -1,4 +1,4 @@
-import { validateData, type AppData } from './data';
+import { validateData, validMedia, type AppData } from './data';
 
 export const API_BASE = '';
 export interface User { id: string; email: string; name: string }
@@ -20,8 +20,7 @@ export interface ServerState {
   userId: string;
   revision: number;
   data: AppData | null;
-  generationRecovery: { jobId: string; collectionId: string; error: string }[];
-  generationEngine?: { available: boolean; reason?: string; pipeline?: string };
+  capabilities: { processing: false; cloudStorage: boolean; deviceSync: false };
 }
 export interface MediaAsset {
   assetId: string;
@@ -115,7 +114,7 @@ async function request<T>(path: string, options: RequestOptions, consume: (respo
   const abort = () => controller.abort();
   init.signal?.addEventListener('abort', abort, { once: true });
   if (init.signal?.aborted) abort();
-  const timeout = setTimeout(abort, path === '/api/media' || path === '/api/backup' ? 120000 : 30000);
+  const timeout = setTimeout(abort, path === '/api/media' ? 120000 : 30000);
   const checkActive = () => {
     if (started !== epoch || controller.signal.aborted) staleRequest();
   };
@@ -215,7 +214,7 @@ export function resetPassword(email: string, code: string, password: string) {
 }
 
 function checkedState(value: unknown, expectedUser: string): ServerState {
-  if (!value || typeof value !== 'object') throw new ApiError('收藏服务返回的数据格式不正确。');
+  if (!value || typeof value !== 'object') throw new ApiError('票根服务返回的数据格式不正确。');
   const state = value as ServerState;
   if (state.userId !== expectedUser || activeSession?.user.id !== expectedUser) {
     expireSession();
@@ -223,15 +222,12 @@ function checkedState(value: unknown, expectedUser: string): ServerState {
   }
   if (typeof state.initialized !== 'boolean' || typeof state.serverId !== 'string' || !state.serverId
       || !Number.isSafeInteger(state.revision) || state.revision < 0) {
-    throw new ApiError('收藏状态不完整，未更新界面。');
+    throw new ApiError('票根状态不完整，未更新界面。');
   }
-  if (!Array.isArray(state.generationRecovery) || state.generationRecovery.some(item => !item
-      || typeof item.jobId !== 'string' || !item.jobId || typeof item.collectionId !== 'string' || !item.collectionId
-      || typeof item.error !== 'string')) {
-    throw new ApiError('生成恢复状态不完整，未更新界面。');
-  }
+  if (!state.capabilities || state.capabilities.processing !== false || state.capabilities.deviceSync !== false
+      || typeof state.capabilities.cloudStorage !== 'boolean') throw new ApiError('功能状态不完整，未更新界面。');
   if (state.initialized) validateData(state.data);
-  else if (state.data !== null) throw new ApiError('收藏空间尚未准备完成。');
+  else if (state.data !== null) throw new ApiError('票根空间尚未准备完成。');
   return state;
 }
 export async function getState(signal?: AbortSignal): Promise<ServerState> {
@@ -258,24 +254,17 @@ export async function uploadMedia(file: File): Promise<MediaAsset> {
   body.append('file', file);
   const asset = await jsonRequest<MediaAsset>('/api/media', { method: 'POST', body, authenticated: true });
   assertSessionEpoch(scope);
-  if (!asset || typeof asset.assetId !== 'string' || !asset.url?.startsWith('/api/media/')) {
+  if (!validMedia({ ...asset, cloudStatus: 'not_configured' })) {
     throw new ApiError('图片上传结果不完整，请重试。');
   }
   return asset;
 }
-export function fetchModel(path: string, signal: AbortSignal) {
-  return request(path, { signal, authenticated: true }, response => response.arrayBuffer());
-}
-export async function downloadBackup(): Promise<void> {
+
+export async function getOperationStatus(operationId: string): Promise<{ operationId: string; applied: boolean }> {
+  if (!/^[A-Za-z0-9_-]{1,120}$/.test(operationId)) throw new ApiError('操作标识无效。');
   const scope = epoch;
-  const blob = await request('/api/backup', { authenticated: true }, response => response.blob());
+  const result = await jsonRequest<{ operationId: string; applied: boolean }>(`/api/operations/${encodeURIComponent(operationId)}`, { authenticated: true });
   assertSessionEpoch(scope);
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = 'memoverse-backup.zip';
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  if (!result || result.operationId !== operationId || typeof result.applied !== 'boolean') throw new ApiError('操作核对结果不完整，草稿仍保留。');
+  return result;
 }

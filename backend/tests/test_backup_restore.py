@@ -1,4 +1,5 @@
-"""Exercise account export, isolated restore, integrity and ownership together."""
+"""Account backup preserves schema-3 semantics without reviving deleted media."""
+import io
 import json
 import stat
 import zipfile
@@ -6,234 +7,197 @@ import zipfile
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.app import create_app
-from backend.backups import BackupError, create_account_backup, restore_account_backup
-from backend.object_storage import LocalObjectStore, StorageError
-from backend import jobs, relief_engine
 from backend import backups
-from account_fixtures import FakeAuthFactory, ORIGIN, WRITE_HEADERS, signed_in
-from test_api import build_app, create_collection, edit_payload, get_item, state
-from test_jobs import fixture_generate
+from backend.backups import BackupError, create_account_backup, restore_account_backup
+from backend.app import create_app
+from backend.object_storage import LocalObjectStore, ObjectReader
+from account_fixtures import FakeAuthFactory, ORIGIN, USERS, WRITE_HEADERS, signed_in
+from test_api import make_app, create, delete, patch, upload
 
 
 @pytest.fixture
-def exported(tmp_path, monkeypatch):
-    monkeypatch.setattr(jobs, "engine_status", lambda: {"available": True, "reason": "fixture"})
-    monkeypatch.setattr(relief_engine, "generate_relief", fixture_generate)
-    app, _ = build_app(tmp_path)
+def exported(tmp_path):
+    app = make_app(tmp_path)
     with TestClient(app, base_url=ORIGIN) as client:
         signed_in(client)
-        item = create_collection(client)
-        assert app.state.worker.run_one()
-        item = get_item(state(client.get("/api/state")), item["id"])
-        state(client.patch(f"/api/collections/{item['id']}", headers=WRITE_HEADERS,
-                           json=edit_payload(item, title="恢复我的收藏", note="原图、模型、笔记都要保留")))
-        state(client.put("/api/community/community-1/like", headers=WRITE_HEADERS, json={"liked": True}))
-        state(client.post("/api/shares/share-1/read", headers=WRITE_HEADERS))
-        before = state(client.get("/api/state"))
-        expected_objects = {}
-        for item in before["data"]["collections"]:
-            for key in ("customImage", "modelUrl"):
-                expected_objects[item[key]] = client.get(item[key]).content
-        archive = create_account_backup(app.state.store, "user-alice")
+        state, payload = create(client, fields={"title": "Private movie"})
+        deleted, deleted_payload = create(client, "deleted", asset=upload(client, "blue"))
+        assert delete(client, "deleted").status_code == 200
         signed_in(client, "bob")
-        bob = create_collection(client)
-        assert app.state.worker.run_one()
-        yield app, archive, before, expected_objects, bob
+        create(client, "bob-only", asset=upload(client, "green"))
+    archive = create_account_backup(app.state.store, USERS["alice"]["id"])
+    return app, archive, payload, deleted_payload
 
 
-def test_export_restore_refresh_preserves_records_models_and_account_isolation(exported, tmp_path):
-    original, archive, before, expected_objects, bob = exported
+def restored_app(destination):
+    return create_app(destination, object_store=LocalObjectStore(destination / "objects"), auth_provider=FakeAuthFactory())
+
+
+def test_backup_is_scoped_and_deleted_only_media_bytes_are_not_exported(exported, tmp_path):
+    app, archive, payload, deleted_payload = exported
+    with zipfile.ZipFile(archive) as source:
+        manifest = json.loads(source.read("manifest.json"))
+        assert manifest["user"]["id"] == USERS["alice"]["id"]
+        assert {row["id"] for row in manifest["tickets"]} == {"ticket-1", "deleted"}
+        assert len(source.namelist()) == 2
+        assert not any(deleted_payload["originalAssetId"] in name for name in source.namelist())
+        assert not any("auth" in name or "session" in name for name in source.namelist())
     destination = tmp_path / "restored"
-    summary = restore_account_backup(archive, destination, user_id="user-alice")
-    assert summary["verified"] and summary["requeuedJobs"] == 0
-    restored = create_app(destination, run_worker=False, auth_provider=FakeAuthFactory(),
-                          object_store=LocalObjectStore(destination / "objects"), template_dir=tmp_path / "template")
-    for _ in range(2):
-        with TestClient(restored, base_url=ORIGIN) as client:
-            signed_in(client)
-            after = state(client.get("/api/state"))
-            assert after["data"] == before["data"]
-            assert after["revision"] == before["revision"]
-            assert after["serverId"] != before["serverId"]
-            for url, expected in expected_objects.items():
-                assert client.get(url).content == expected
-            assert client.get(f"/api/jobs/{bob['generationJobId']}").status_code == 404
-            with restored.state.store.transaction() as db:
-                assert db.execute("SELECT id FROM users").fetchall()[0][0] == "user-alice"
-                assert not db.execute("PRAGMA foreign_key_check").fetchall()
-            signed_in(client, "bob")
-            state(client.get("/api/state"))
-            private = next(item for item in before["data"]["collections"] if item.get("generationJobId"))
-            for url in (private["customImage"], private["modelUrl"], f"/api/jobs/{private['generationJobId']}"):
-                assert client.get(url).status_code == 404
-    assert original.state.store.database != restored.state.store.database
+    result = restore_account_backup(archive, destination, user_id=USERS["alice"]["id"])
+    assert result["verified"] and result["tickets"] == 2 and result["files"] == 1
+    with TestClient(restored_app(destination), base_url=ORIGIN) as client:
+        signed_in(client)
+        state = client.get("/api/state").json()
+        assert [row["id"] for row in state["data"]["tickets"]] == ["ticket-1"]
+        assert state["data"]["tickets"][0]["fields"]["title"] == "Private movie"
+        assert client.post("/api/tickets", headers=WRITE_HEADERS, json=payload).json() == state
+        assert client.post("/api/tickets", headers=WRITE_HEADERS, json=deleted_payload).json() == state
+        assert client.post("/api/tickets", headers=WRITE_HEADERS, json={**deleted_payload, "operationId": "revive"}).status_code == 409
+        assert client.get("/api/media/" + deleted_payload["originalAssetId"]).status_code == 404
+        assert client.get("/api/media/" + payload["originalAssetId"]).status_code == 200
+        assert state["capabilities"]["cloudStorage"] is False
+        signed_in(client, "bob")
+        assert client.get("/api/state").json()["data"]["tickets"] == []
+        assert client.get("/api/media/" + payload["originalAssetId"]).status_code == 404
+    second_archive = create_account_backup(restored_app(destination).state.store, USERS["alice"]["id"])
+    assert second_archive.exists(), "Restored tombstone references need no missing media bytes"
 
 
-def rewrite_archive(source, target, mutate):
-    with zipfile.ZipFile(source) as incoming:
-        entries = {name: incoming.read(name) for name in incoming.namelist()}
-    manifest = json.loads(entries["manifest.json"])
-    mutate(manifest, entries)
-    entries["manifest.json"] = json.dumps(manifest).encode()
-    with zipfile.ZipFile(target, "w") as outgoing:
-        for name, raw in entries.items():
-            outgoing.writestr(name, raw)
-    return target
+def test_shared_media_is_exported_when_any_reference_remains_live(tmp_path):
+    app = make_app(tmp_path)
+    with TestClient(app, base_url=ORIGIN) as client:
+        signed_in(client)
+        asset = upload(client)
+        create(client, "one", asset)
+        create(client, "two", asset)
+        delete(client, "one")
+    archive = create_account_backup(app.state.store, USERS["alice"]["id"])
+    with zipfile.ZipFile(archive) as source:
+        assert len(source.namelist()) == 2
+    assert restore_account_backup(archive, tmp_path / "restored", user_id=USERS["alice"]["id"])["files"] == 1
 
 
-@pytest.mark.parametrize("damage", ["bytes", "missing", "extra", "owner", "job_owner", "job_revision", "model_original", "path", "size",
-                                    "missing_title", "bad_tags", "snapshot_title", "share_unread", "community_count", "profile",
-                                    "community_missing_model", "share_missing_model", "wrong_camera", "snapshot_generation"])
-def test_invalid_archives_do_not_publish_a_destination(exported, tmp_path, damage):
-    _, archive, _, _, _ = exported
-    def mutate(manifest, entries):
-        key = manifest["files"][0]["path"]
-        if damage == "bytes": entries[key] = b"corrupted"
-        elif damage == "missing": entries.pop(key)
-        elif damage == "extra": entries["other-account.txt"] = b"unexpected"
-        elif damage == "owner": manifest["userId"] = "user-bob"
-        elif damage == "job_owner": manifest["jobs"][0]["user_id"] = "user-bob"
-        elif damage == "job_revision": manifest["jobs"][0]["input_revision"] += 1
-        elif damage == "model_original": manifest["models"][0]["asset_id"] = "missing"
+def rewrite(archive, destination, change):
+    with zipfile.ZipFile(archive) as source:
+        files = {name: source.read(name) for name in source.namelist()}
+    manifest = json.loads(files["manifest.json"])
+    change(files, manifest)
+    files["manifest.json"] = json.dumps(manifest).encode()
+    with zipfile.ZipFile(destination, "w") as target:
+        for name, raw in files.items():
+            target.writestr(name, raw)
+
+
+@pytest.mark.parametrize("damage", ["hash", "missing", "path", "owner", "schema", "field", "source", "negative", "duplicate-record", "deleted-bytes", "unknown-member"])
+def test_corrupt_backups_never_publish_destination(exported, tmp_path, damage):
+    _, archive, _, deleted_payload = exported
+    bad = tmp_path / (damage + ".zip")
+    def change(files, manifest):
+        key = next(name for name in files if name != "manifest.json")
+        if damage == "hash":
+            files[key] = b"x" * len(files[key])
+        elif damage == "missing":
+            del files[key]
         elif damage == "path":
-            manifest["files"][0]["path"] = "../escape"
-            entries["../escape"] = entries.pop(key)
-        elif damage == "size": manifest["files"][0]["size"] = -1
-        elif damage in {"missing_title", "bad_tags"}:
-            payload = json.loads(manifest["collections"][0]["payload"])
-            if damage == "missing_title": payload.pop("title")
-            else: payload["tags"] = [123]
-            manifest["collections"][0]["payload"] = json.dumps(payload)
-        elif damage == "snapshot_title": manifest["data"]["collections"][0]["title"] = "Different from stored row"
-        elif damage == "share_unread": manifest["data"]["shares"][0]["unread"] = "false"
-        elif damage == "community_count": manifest["data"]["community"][0]["likes"] = -1
-        elif damage == "profile": manifest["data"]["profile"]["name"] = 123
-        elif damage == "community_missing_model": manifest["data"]["community"][0].pop("modelId")
-        elif damage == "share_missing_model": manifest["data"]["shares"][0]["item"].pop("modelId")
-        elif damage == "wrong_camera": manifest["data"]["community"][0]["modelCamera"] = {}
-        elif damage == "snapshot_generation": manifest["data"]["collections"][0]["generation"] = "failed"
-    broken = rewrite_archive(archive, tmp_path / "broken.zip", mutate)
-    with pytest.raises((BackupError, ValueError)):
-        restore_account_backup(broken, tmp_path / "not-published", user_id="user-alice")
-    assert not (tmp_path / "not-published").exists()
-    assert not (tmp_path / "escape").exists()
-
-
-def test_existing_destination_and_owner_reassignment_are_rejected(exported, tmp_path):
-    _, archive, _, _, _ = exported
-    destination = tmp_path / "existing"
-    destination.mkdir()
-    sentinel = destination / "keep.txt"
-    sentinel.write_text("do not replace")
+            files["../outside"] = files.pop(key)
+        elif damage == "owner":
+            manifest["tickets"][0]["user_id"] = "other"
+        elif damage == "schema":
+            manifest["schemaVersion"] = 2
+        elif damage == "field":
+            manifest["tickets"][0]["fields"] = '{"category":"movie"}'
+        elif damage == "source":
+            sources = json.loads(manifest["tickets"][0]["field_sources"])
+            sources["title"] = "invented"
+            manifest["tickets"][0]["field_sources"] = json.dumps(sources)
+        elif damage == "negative":
+            manifest["tickets"][0]["version"] = -1
+        elif damage == "duplicate-record":
+            manifest["tickets"].append(manifest["tickets"][0])
+        elif damage == "deleted-bytes":
+            files["media/" + deleted_payload["originalAssetId"] + ".png"] = b"deleted"
+        else:
+            files["auth.sqlite3"] = b"secret"
+    rewrite(archive, bad, change)
+    destination = tmp_path / (damage + "-output")
     with pytest.raises(BackupError):
-        restore_account_backup(archive, destination, user_id="user-alice")
-    assert sentinel.read_text() == "do not replace"
+        restore_account_backup(bad, destination, user_id=USERS["alice"]["id"])
+    assert not destination.exists()
+
+
+def test_destination_and_owner_reassignment_are_rejected(exported, tmp_path):
+    _, archive, _, _ = exported
+    existing = tmp_path / "existing"
+    existing.mkdir()
+    (existing / "keep").write_text("keep")
     with pytest.raises(BackupError):
-        restore_account_backup(archive, tmp_path / "wrong-owner", user_id="user-bob")
-
-
-def test_duplicate_zip_names_are_rejected(exported, tmp_path):
-    _, archive, _, _, _ = exported
-    duplicate = tmp_path / "duplicate.zip"
-    duplicate.write_bytes(archive.read_bytes())
-    with zipfile.ZipFile(duplicate, "a") as bundle, pytest.warns(UserWarning):
-        bundle.writestr("manifest.json", "{}")
+        restore_account_backup(archive, existing, user_id=USERS["alice"]["id"])
+    assert (existing / "keep").read_text() == "keep"
     with pytest.raises(BackupError):
-        restore_account_backup(duplicate, tmp_path / "duplicate", user_id="user-alice")
+        restore_account_backup(archive, tmp_path / "wrong-owner", user_id=USERS["bob"]["id"])
 
 
-def test_interrupted_publication_is_marked_and_cannot_start_as_an_app(exported, tmp_path, monkeypatch):
-    _, archive, _, _, _ = exported
-    rename = backups.os.rename
-    def interrupted(source, target):
-        if source.name == "memoverse.sqlite3":
-            raise OSError("fixture publication interrupted")
-        return rename(source, target)
-    monkeypatch.setattr(backups.os, "rename", interrupted)
-    destination = tmp_path / "incomplete-restore"
-    with pytest.raises(OSError, match="interrupted"):
-        restore_account_backup(archive, destination, user_id="user-alice")
-    assert (destination / "RESTORE_INCOMPLETE").is_file()
-    with pytest.raises(RuntimeError, match="[Ii]ncomplete"):
-        create_app(destination, run_worker=False, auth_provider=FakeAuthFactory(),
-                   object_store=LocalObjectStore(destination / "objects"), template_dir=tmp_path / "template")
-
-
-def test_export_never_emits_an_archive_exceeding_its_restore_limits(exported, monkeypatch):
-    app, _, _, _, _ = exported
-    before = set((app.state.store.root / "exports").iterdir())
-    monkeypatch.setattr(backups, "MAX_MANIFEST_BYTES", 16)
-    with pytest.raises(BackupError, match="restore limits"):
-        create_account_backup(app.state.store, "user-alice")
-    assert set((app.state.store.root / "exports").iterdir()) == before
-
-
-def test_export_stops_an_oversized_stream_before_writing_or_consuming_more(exported, monkeypatch):
-    app, _, _, _, _ = exported
-    storage = app.state.store.storage
-    original_open = storage.open
-    events = []
-    class Overflow:
-        def __init__(self, key):
-            reader = original_open(key)
-            self.size = reader.size
-            reader.close()
-        def chunks(self):
-            events.append("first")
-            yield b"x" * (self.size + 1)
-            pytest.fail("Oversized source must stop before reading another chunk")
-        def close(self):
-            events.append("closed")
-    before = set((app.state.store.root / "exports").iterdir())
-    monkeypatch.setattr(storage, "open", Overflow)
-    with pytest.raises(StorageError, match="exceeds"):
-        create_account_backup(app.state.store, "user-alice")
-    assert events == ["first", "closed"]
-    assert set((app.state.store.root / "exports").iterdir()) == before
-
-
-def test_symlink_archive_member_is_rejected(exported, tmp_path):
-    _, archive, _, _, _ = exported
-    linked = tmp_path / "linked.zip"
-    with zipfile.ZipFile(archive) as incoming, zipfile.ZipFile(linked, "w") as outgoing:
-        for info in incoming.infolist():
-            if info.filename.startswith("media/"):
+def test_duplicate_and_symlink_members_are_rejected(exported, tmp_path):
+    _, archive, _, _ = exported
+    with zipfile.ZipFile(archive) as source:
+        raw = source.read("manifest.json")
+    for kind in ("duplicate", "symlink"):
+        bad = tmp_path / (kind + ".zip")
+        with zipfile.ZipFile(bad, "w") as target:
+            target.writestr("manifest.json", raw)
+            if kind == "duplicate":
+                with pytest.warns(UserWarning):
+                    target.writestr("manifest.json", raw)
+            else:
+                info = zipfile.ZipInfo("link")
+                info.create_system = 3
                 info.external_attr = (stat.S_IFLNK | 0o777) << 16
-            outgoing.writestr(info, incoming.read(info))
-    with pytest.raises(BackupError, match="ordinary"):
-        restore_account_backup(linked, tmp_path / "linked", user_id="user-alice")
+                target.writestr(info, "outside")
+        with pytest.raises(BackupError):
+            restore_account_backup(bad, tmp_path / (kind + "-out"), user_id=USERS["alice"]["id"])
 
 
-@pytest.mark.parametrize("limit", ["MAX_FILES", "MAX_EXPANDED_BYTES", "MAX_MANIFEST_BYTES"])
-def test_restore_resource_limits_reject_before_publication(exported, tmp_path, monkeypatch, limit):
-    _, archive, _, _, _ = exported
+@pytest.mark.parametrize("limit", ["MAX_MEMBERS", "MAX_TOTAL_BYTES", "MAX_MANIFEST_BYTES"])
+def test_archive_limits_apply_to_export_and_restore(exported, tmp_path, monkeypatch, limit):
+    app, archive, _, _ = exported
     monkeypatch.setattr(backups, limit, 1)
     with pytest.raises(BackupError):
-        restore_account_backup(archive, tmp_path / "limited", user_id="user-alice")
-    assert not (tmp_path / "limited").exists()
+        restore_account_backup(archive, tmp_path / "restored", user_id=USERS["alice"]["id"])
+    with pytest.raises(BackupError):
+        create_account_backup(app.state.store, USERS["alice"]["id"])
 
 
-def test_backup_during_processing_requeues_only_restored_current_task(tmp_path, monkeypatch):
-    app, _ = build_app(tmp_path)
-    with TestClient(app, base_url=ORIGIN) as client:
+def test_export_stops_oversized_stream_and_closes_reader(exported, monkeypatch):
+    app, _, _, _ = exported
+    body = io.BytesIO(b"x" * 2000)
+    monkeypatch.setattr(app.state.store.storage, "open", lambda key: ObjectReader(body, 10))
+    with pytest.raises(BackupError, match="length"):
+        create_account_backup(app.state.store, USERS["alice"]["id"])
+    assert body.closed
+
+
+def test_interrupted_publication_is_marked_and_app_refuses_it(exported, tmp_path, monkeypatch):
+    _, archive, _, _ = exported
+    def fail(*args):
+        raise OSError("injected publication failure")
+    monkeypatch.setattr(backups.os, "rename", fail)
+    destination = tmp_path / "interrupted"
+    with pytest.raises(OSError, match="injected"):
+        restore_account_backup(archive, destination, user_id=USERS["alice"]["id"])
+    assert (destination / "RESTORE_INCOMPLETE").exists()
+    with pytest.raises(RuntimeError, match="Incomplete"):
+        create_app(destination, object_store=object())
+
+
+def test_restored_tombstone_grants_do_not_authorize_attaching_missing_media(exported, tmp_path):
+    _, archive, _, deleted_payload = exported
+    destination = tmp_path / "restored-no-revival"
+    restore_account_backup(archive, destination, user_id=USERS["alice"]["id"])
+    with TestClient(restored_app(destination), base_url=ORIGIN) as client:
         signed_in(client)
-        item = create_collection(client)
-        with app.state.store.transaction(True) as db:
-            db.execute("UPDATE jobs SET status='processing' WHERE id=?", (item["generationJobId"],))
-        archive = create_account_backup(app.state.store, "user-alice")
-    destination = tmp_path / "restored-processing"
-    assert restore_account_backup(archive, destination, user_id="user-alice")["requeuedJobs"] == 1
-    restored = create_app(destination, run_worker=False, auth_provider=FakeAuthFactory(),
-                          object_store=LocalObjectStore(destination / "objects"), template_dir=tmp_path / "template")
-    monkeypatch.setattr(jobs, "engine_status", lambda: {"available": True, "reason": "fixture"})
-    monkeypatch.setattr(relief_engine, "generate_relief", fixture_generate)
-    with TestClient(restored, base_url=ORIGIN) as client:
-        signed_in(client)
-        assert get_item(state(client.get("/api/state")), item["id"])["generation"] == "queued"
-        assert restored.state.worker.run_one()
-        ready = get_item(state(client.get("/api/state")), item["id"])
-        assert ready["generation"] == "ready"
-        assert client.get(ready["modelUrl"]).status_code == 200
-    with app.state.store.transaction() as db:
-        assert db.execute("SELECT status FROM jobs WHERE id=?", (item["generationJobId"],)).fetchone()[0] == "processing"
+        response = client.post("/api/tickets", headers=WRITE_HEADERS,
+                               json={**deleted_payload, "id": "new-id", "operationId": "new-op"})
+        assert response.status_code == 404
+        response = client.patch("/api/tickets/ticket-1", headers=WRITE_HEADERS,
+                                json={"originalAssetId": deleted_payload["originalAssetId"], "operationId": "replace-missing"})
+        assert response.status_code == 404

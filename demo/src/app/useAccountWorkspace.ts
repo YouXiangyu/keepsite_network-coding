@@ -6,10 +6,11 @@ export interface OperationHandlers<T> {
   onStart?: () => void;
   onSuccess?: (value: T) => void;
   onError?: (error: unknown) => void;
+  onCancel?: () => void;
 }
 export type RunMutation = (operation: () => Promise<ServerState>, handlers?: OperationHandlers<AppData>) => Promise<void>;
 
-const emptyData = (): AppData => ({ collections: [], shares: [], community: [], profile: { name: '', bio: '' }, likedCommunityIds: [] });
+const emptyData = (): AppData => ({ tickets: [] });
 const cancelled = (error: unknown) => error instanceof DOMException && error.name === 'AbortError';
 
 export function useAccountWorkspace(session: SignedInSession, watchDetail: boolean) {
@@ -19,8 +20,7 @@ export function useAccountWorkspace(session: SignedInSession, watchDetail: boole
   const [storageError, setStorageError] = useState('');
   const [pollError, setPollError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [engine, setEngine] = useState<ServerState['generationEngine']>();
-  const [generationRecovery, setGenerationRecovery] = useState<ServerState['generationRecovery']>([]);
+  const [capabilities, setCapabilities] = useState<ServerState['capabilities']>();
   const alive = useRef(true);
   const operationLock = useRef(false);
   const operationGeneration = useRef(0);
@@ -29,7 +29,6 @@ export function useAccountWorkspace(session: SignedInSession, watchDetail: boole
   const revision = useRef({ serverId: '', value: -1, requestOrder: -1 });
   const requestOrder = useRef(0);
   const retryAction = useRef<(() => void) | null>(null);
-  const hasActiveJobs = data.collections.some(item => ['queued', 'processing', 'blocked'].includes(item.generation));
 
   useEffect(() => {
     alive.current = true;
@@ -37,15 +36,13 @@ export function useAccountWorkspace(session: SignedInSession, watchDetail: boole
   }, []);
 
   const acceptState = useCallback((state: ServerState, order: number) => {
-    if (!state.initialized || !state.data) throw new Error('收藏空间正在准备中，请稍后重试。');
-    if (revision.current.serverId && revision.current.serverId !== state.serverId) throw new Error('收藏空间已更新，请重新加载后继续。');
+    if (!state.initialized || !state.data) throw new Error('票根空间正在准备中，请稍后重试。');
+    if (revision.current.serverId && revision.current.serverId !== state.serverId) throw new Error('票根空间已更新，请重新加载后继续。');
     if (state.revision > revision.current.value || state.revision === revision.current.value && order >= revision.current.requestOrder) {
       revision.current = { serverId: state.serverId, value: state.revision, requestOrder: order };
       latest.current = state.data;
       setData(state.data);
-      setEngine(state.generationEngine);
-      // Recovery metadata may change while the database revision stays the same.
-      setGenerationRecovery(state.generationRecovery);
+      setCapabilities(state.capabilities);
     }
     return latest.current;
   }, []);
@@ -65,13 +62,13 @@ export function useAccountWorkspace(session: SignedInSession, watchDetail: boole
   }, [bootAttempt, session.csrfToken, acceptState]);
 
   useEffect(() => {
-    if (!ready || (!hasActiveJobs && !watchDetail)) return;
+    if (!ready || !watchDetail) return;
     let live = true;
     let timer: ReturnType<typeof setTimeout>;
     let controller: AbortController | null = null;
     const poll = async () => {
       if (operationLock.current) {
-        timer = setTimeout(poll, hasActiveJobs ? 4000 : 10000);
+        timer = setTimeout(poll, 10000);
         return;
       }
       controller = new AbortController();
@@ -85,19 +82,19 @@ export function useAccountWorkspace(session: SignedInSession, watchDetail: boole
         if (live && !operationLock.current && generation === operationGeneration.current && !cancelled(error)) setPollError(errorMessage(error));
       } finally {
         if (activePoll.current === controller) activePoll.current = null;
-        if (live) timer = setTimeout(poll, hasActiveJobs ? 4000 : 10000);
+        if (live) timer = setTimeout(poll, 10000);
       }
     };
-    timer = setTimeout(poll, hasActiveJobs ? 4000 : 10000);
+    timer = setTimeout(poll, 10000);
     return () => {
       live = false;
       clearTimeout(timer);
       controller?.abort();
       if (activePoll.current === controller) activePoll.current = null;
     };
-  }, [ready, hasActiveJobs, watchDetail, session.csrfToken, acceptState]);
+  }, [ready, watchDetail, session.csrfToken, acceptState]);
 
-  // A single lock covers business writes, upload-and-save and account exports.
+  // A single lock covers business writes, upload-and-save.
   const runExclusive = useCallback(async <T,>(operation: () => Promise<T>, handlers: OperationHandlers<T> = {}) => {
     if (operationLock.current) return;
     operationLock.current = true;
@@ -111,7 +108,8 @@ export function useAccountWorkspace(session: SignedInSession, watchDetail: boole
       assertSessionEpoch(scope);
       if (alive.current) handlers.onSuccess?.(result);
     } catch (error) {
-      if (alive.current && !cancelled(error)) {
+      if (alive.current && cancelled(error)) handlers.onCancel?.();
+      else if (alive.current) {
         if (handlers.onError) handlers.onError(error);
         else setStorageError(errorMessage(error));
       }
@@ -132,6 +130,7 @@ export function useAccountWorkspace(session: SignedInSession, watchDetail: boole
   }, {
     onStart: () => { if (!handlers.onError) setStorageError(''); handlers.onStart?.(); },
     onSuccess: next => { retryAction.current = null; handlers.onSuccess?.(next); },
+    onCancel: handlers.onCancel,
     onError: error => {
       if (handlers.onError) handlers.onError(error);
       else {
@@ -147,5 +146,5 @@ export function useAccountWorkspace(session: SignedInSession, watchDetail: boole
     void runMutation(() => getState(), { onSuccess: () => { setPollError(''); setStorageError(''); } });
   };
 
-  return { data, ready, busy, engine, generationRecovery, hasActiveJobs, storageError, pollError, setStorageError, runMutation, runExclusive, retry };
+  return { data, ready, busy, capabilities, storageError, pollError, setStorageError, runMutation, runExclusive, retry };
 }

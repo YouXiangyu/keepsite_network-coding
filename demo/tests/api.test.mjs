@@ -17,13 +17,12 @@ const logoutUrl = 'https://memoverse.auth.ap-northeast-3.amazoncognito.com/logou
 afterEach(() => { api.installSession(null); globalThis.fetch = originalFetch; });
 after(() => { globalThis.fetch = originalFetch; });
 
-test('anonymous code cannot request workspace, upload, model or mutations', async () => {
+test('anonymous code cannot request workspace, upload or mutations', async () => {
   let requests = 0;
   globalThis.fetch = async () => { requests += 1; throw new Error('unexpected fetch'); };
   await assert.rejects(api.getState(), error => error.status === 401);
-  await assert.rejects(api.mutate('/api/collections', 'POST', {}), error => error.status === 401);
+  await assert.rejects(api.mutate('/api/tickets', 'POST', {}), error => error.status === 401);
   await assert.rejects(api.uploadMedia(new File(['x'], 'image.png', { type: 'image/png' })), error => error.status === 401);
-  await assert.rejects(api.fetchModel('/api/models/model/model.glb', new AbortController().signal), error => error.status === 401);
   assert.equal(requests, 0);
 });
 
@@ -72,17 +71,17 @@ test('email codes are passed verbatim without length assumptions', async () => {
   await api.resetPassword('a@example.test', code, 'A-password-12!');
 });
 
-test('authenticated writes attach the active CSRF token and preserve versions', async () => {
+test('authenticated writes attach the active CSRF token and preserve operation identifiers', async () => {
   api.installSession(signedSession());
   globalThis.fetch = async (path, options) => {
-    assert.equal(path, '/api/collections/item-1');
+    assert.equal(path, '/api/tickets/item-1');
     assert.equal(options.headers.get('X-MemoVerse-Client'), 'web');
     assert.equal(options.headers.get('X-CSRF-Token'), 'test-csrf-a');
     assert.equal(options.credentials, 'same-origin');
-    assert.deepEqual(JSON.parse(options.body), { version: 2, title: '保留草稿' });
+    assert.deepEqual(JSON.parse(options.body), { operationId: 'op-2', fields: { title: '保留草稿' } });
     return Response.json(serverState());
   };
-  assert.equal((await api.mutate('/api/collections/item-1', 'PATCH', { version: 2, title: '保留草稿' })).revision, 7);
+  assert.equal((await api.mutate('/api/tickets/item-1', 'PATCH', { operationId: 'op-2', fields: { title: '保留草稿' } })).revision, 7);
 });
 
 test('a state from another user invalidates the current session', async () => {
@@ -142,36 +141,6 @@ test('switching account while decoding a body also discards the old response', a
   api.installSession(signedSession('b'));
   resolveBody(serverState('a'));
   await assert.rejects(pending, error => error.name === 'AbortError');
-});
-
-test('model 401 expires the session instead of leaving private business UI authenticated', async () => {
-  api.installSession(signedSession());
-  let expired = false;
-  const unsubscribe = api.onSessionExpired(() => { expired = true; });
-  globalThis.fetch = async () => Response.json({ detail: '登录已过期' }, { status: 401 });
-  await assert.rejects(api.fetchModel('/api/models/model/model.glb', new AbortController().signal), error => error.status === 401);
-  assert.equal(expired, true);
-  unsubscribe();
-});
-
-test('logout aborts pending model loading and clears the account scope', async () => {
-  api.installSession(signedSession());
-  let resolveModel;
-  let modelSignal;
-  globalThis.fetch = async (path, options) => {
-    if (path === '/api/auth/logout') {
-      assert.equal(options.headers.get('X-CSRF-Token'), 'test-csrf-a');
-      return Response.json({ ok: true });
-    }
-    modelSignal = options.signal;
-    return new Promise(resolve => { resolveModel = resolve; });
-  };
-  const loading = api.fetchModel('/api/models/model/model.glb', new AbortController().signal);
-  await api.signOut(origin);
-  assert.equal(modelSignal.aborted, true);
-  resolveModel(new Response(new Uint8Array([1, 2, 3])));
-  await assert.rejects(loading, error => error.name === 'AbortError');
-  await assert.rejects(api.getState(), error => error.status === 401);
 });
 
 test('explicit logout forwards only the validated Cognito destination after clearing the local session', async () => {
@@ -245,23 +214,21 @@ test('multipart uploads keep original bytes and authenticated CSRF', async () =>
     assert.equal(options.body.get('file'), file);
     assert.equal(options.headers.get('Content-Type'), null);
     assert.equal(options.headers.get('X-CSRF-Token'), 'test-csrf-a');
-    return Response.json({ assetId: 'asset-1', url: '/api/media/asset-1', sha256: 'hash', size: 4, width: 1, height: 1, mimeType: 'image/png' });
+    return Response.json({ assetId: 'a'.repeat(64), url: '/api/media/' + 'a'.repeat(64), sha256: 'a'.repeat(64), size: 4, width: 1, height: 1, mimeType: 'image/png' });
   };
-  assert.equal((await api.uploadMedia(file)).url, '/api/media/asset-1');
+  assert.equal((await api.uploadMedia(file)).url, '/api/media/' + 'a'.repeat(64));
 });
 
 test('conflict and network errors do not turn into fake successful state', async () => {
   api.installSession(signedSession());
   globalThis.fetch = async () => Response.json({ detail: '版本已更新' }, { status: 409 });
-  await assert.rejects(api.mutate('/api/collections/item-1', 'PATCH', {}), error => error.status === 409 && error.message === '版本已更新');
+  await assert.rejects(api.mutate('/api/tickets/item-1', 'PATCH', {}), error => error.status === 409 && error.message === '版本已更新');
   globalThis.fetch = async () => { throw new TypeError('network failed'); };
   await assert.rejects(api.getState(), /暂时无法连接服务/);
 });
 
 for (const [label, consume, start, limit] of [
-  ['JSON save', 'json', () => api.mutate('/api/collections/item-1', 'PATCH', { version: 1 }), 30000],
-  ['backup', 'blob', () => api.downloadBackup(), 120000],
-  ['model', 'arrayBuffer', () => api.fetchModel('/api/models/model/model.glb', new AbortController().signal), 30000],
+  ['JSON save', 'json', () => api.mutate('/api/tickets/item-1', 'PATCH', { version: 1 }), 30000],
 ]) {
   test(`${label} expires even when successful response body ignores cancellation`, async context => {
     context.mock.timers.enable({ apis: ['setTimeout'] });
@@ -318,8 +285,38 @@ test('account cancellation promptly rejects a body that never finishes', async (
   await rejected;
 });
 
-test('malformed generation recovery metadata cannot silently hide a recovery action', async () => {
+test('malformed capabilities cannot claim unfinished device sync', async () => {
   api.installSession(signedSession());
-  globalThis.fetch = async () => Response.json({ ...serverState(), generationRecovery: [{ jobId: 'j', error: 'failed' }] });
-  await assert.rejects(api.getState(), /生成恢复状态不完整/);
+  globalThis.fetch = async () => Response.json({ ...serverState(), capabilities: { processing: false, deviceSync: true, cloudStorage: true } });
+  await assert.rejects(api.getState(), /功能状态不完整/);
+});
+
+test('upload confirmation rejects mismatched identities, unsupported types and incomplete dimensions', async () => {
+  api.installSession(signedSession());
+  const valid = { assetId: 'a'.repeat(64), sha256: 'a'.repeat(64), url: '/api/media/' + 'a'.repeat(64), size: 4, width: 1, height: 1, mimeType: 'image/png' };
+  for (const invalid of [{ ...valid, assetId: 'b'.repeat(64) }, { ...valid, width: 0 }, { ...valid, mimeType: 'text/html' }, { ...valid, url: '/api/media/elsewhere' }]) {
+    globalThis.fetch = async () => Response.json(invalid);
+    await assert.rejects(api.uploadMedia(new File(['test'], 'ticket.png', { type: 'image/png' })), /图片上传结果不完整/);
+  }
+});
+
+test('operation lookup uses the active session and validates the exact receipt', async () => {
+  await assert.rejects(api.getOperationStatus('write-1'), error => error.status === 401);
+  api.installSession(signedSession());
+  globalThis.fetch = async (path, options) => {
+    assert.equal(path, '/api/operations/write-1'); assert.equal(options.credentials, 'same-origin');
+    return Response.json({ operationId: 'write-1', applied: false });
+  };
+  assert.deepEqual(await api.getOperationStatus('write-1'), { operationId: 'write-1', applied: false });
+  for (const receipt of [{ operationId: 'other', applied: true }, { operationId: 'write-1', applied: 'true' }]) {
+    globalThis.fetch = async () => Response.json(receipt);
+    await assert.rejects(api.getOperationStatus('write-1'), /操作核对结果不完整/);
+  }
+  await assert.rejects(api.getOperationStatus('../other'), /操作标识无效/);
+});
+test('a receipt from a replaced session cannot confirm another account draft', async () => {
+  api.installSession(signedSession('a')); let release;
+  globalThis.fetch = () => new Promise(resolve => { release = resolve; });
+  const pending = api.getOperationStatus('write-1'); const rejection = assert.rejects(pending, error => error.name === 'AbortError');
+  api.installSession(signedSession('b')); release(Response.json({ operationId: 'write-1', applied: true })); await rejection;
 });

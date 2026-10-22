@@ -1,117 +1,62 @@
-# MemoVerse 账号后端
+# MemoVerse 电影票后端
 
-FastAPI 在服务器 `127.0.0.1:8000` 提供 API，由 Nginx HTTPS 同源代理。当前实现为账号隔离的 SQLite schema 2、Cognito 身份服务和显式配置的对象存储。正式环境使用 AWS S3；本地文件存储只用于显式指定的开发和测试环境，不作为 S3 故障时的静默回退。
+M1 使用独立 SQLite schema 3、账号隔离和私有媒体引用。默认数据目录是 `backend/data-v3`；正式环境使用 `/var/lib/memoverse-v3`。应用遇到旧 schema 1/2 会在写入前拒绝启动，不能把旧目录直接切给新版本。
 
-## 数据与权限
+## 当前能力与边界
 
-- 业务数据库与加密会话库位于新的 `MEMOVERSE_DATA_DIR`。默认本机目录为 `backend/data-v2`，正式目录为 `/var/lib/memoverse-v2`。旧 schema 1 会被拒绝，不自动升级或覆盖 `backend/data` / `/var/lib/memoverse`。
-- 每个账号的收藏、分享、社区示例互动、资料、revision 和生成任务独立。后端按认证身份查询和写入；同一个模板 ID 在不同账户间不能串数据。
-- 初始化模板由运维提供、版本与文件哈希校验通过后使用。第一次完成身份验证后原子初始化，重复登录不重置。模板文件可以复用，账号授权关系与可编辑记录独立。
-- 图片与模型保持不可变对象：`media/<sha>.<ext>`、`models/<modelId>/*`。访问先验证会话与账号授权，再从私有对象存储传输。匿名、退出会话、仅猜到 ID 都不能读取。
-- 上传解码校验 JPG/PNG/WebP，最多 12 MiB、4000 万像素。对象上传成功后才提交引用；网络 I/O 不持有 SQLite 写锁。实例角色不具备对象删除权限，删除收藏不会破坏其他账号或模板的共享文件。
-- 单 worker 处理各账户的持久任务；完成时再次核对 owner、job 与输入版本。中断任务可恢复，失败不报告 ready，不复活已删除记录。
-- 每账号 ZIP 备份只包含本人有权访问的数据与文件，包括分享/社区模板；不导出身份令牌、会话数据库或其他用户数据。全站运维备份与用户导出是不同范围。
+- 保留 Cognito 邮箱/Google 登录、HttpOnly 服务端会话、加密令牌、精确 Origin 和 CSRF 校验；业务归属只取服务器认证身份。
+- 新账号创建空票夹，无初始化模板、社交、分类、标签、徽章或浮雕任务。原 AnyImage worker 不再加载；不安装或下载旧模型。
+- 票根包含片名、影院、影厅、座位和放映时间，允许为空。放映时间只接受可靠的本地 ISO 分钟格式 `YYYY-MM-DDTHH:mm`。字段来源、时间、版本、输入版本与删除墓碑单独保存。
+- 按字段在线修改；同字段按服务端事务应用顺序生效，不同字段分别保留。每次写入携带稳定 `operationId`；相同操作重放返回当前状态，不同载荷复用操作标识返回 409。删除墓碑阻止旧请求复活记录。
+- 原票和海报分别引用；纠错不提前撤下既有有效海报。M1 不运行 OCR/海报抓取，处理状态明确为 `not_started`，`capabilities.processing=false`。Redis、上传意图恢复、浏览器持久缓存、增量/WebSocket 和设备 P2P 留待 M2—M5。
 
-## 鉴权
+## 媒体与授权
 
-Cognito 提供邮箱密码、验证码确认、重置密码以及 Google 联合登录。Google 使用授权码、PKCE、state 和 nonce；JWT 校验签名、issuer、audience/client_id、用途、有效期、用户标识与邮箱验证状态，不按邮箱自动合并不同身份。
+上传支持解码核验的 JPG/PNG/WebP，最多 12 MiB、4000 万像素；SHA-256 寻址，不覆盖已有不同内容。S3 写入带校验和、AES256 和条件写，私有对象存储的网络 I/O 不持有 SQL 写事务。显式 `MEMOVERSE_STORAGE=local` 仅用于开发测试，不作为 S3 故障回退。
 
-浏览器只保存 HttpOnly 会话 Cookie；身份提供方令牌由服务器加密保存。会话有绝对有效期，短效令牌自动轮换。业务写请求要求精确 Origin、`X-MemoVerse-Client: web` 和会话的 `X-CSRF-Token`。注销先使本地会话失效，再撤销上游令牌。Nginx 和 Uvicorn 不记录 OAuth 回调查询参数。
+上传返回图片身份，不声称票根已保存。只有已提交本人有效票根引用时才可通过 `/api/media/{sha}` 读取；S3 引用显示 `saved`，本地开发显示 `not_configured`。缓存、设备和 OCR 未就绪不伪装成成功。
 
-未配置完整身份服务时，匿名状态返回 `configured: false`，登录拒绝，业务仍要求认证。生产没有测试账户后门、模拟提供方开关或固定请求头绕过认证。
+`asset_grants` 仅记录账号归属。`upload_receipts` 记录上传已验证且待业务引用；创建票根或换原票要求有效上传凭证或本人已有未删除票根引用，提交时消费凭证。删除后仅有 grant 不能新建记录重新挂回旧文件；显式重新上传并核验后可建立新票根。该凭证不是 M2 的完整可恢复上传意图。
 
-## 必需配置
+删除提交墓碑后撤销后续业务媒体授权；另一条有效票根仍引用相同文件时继续可读。M1 不删除 S3 对象、本地旧文件、数据库或模型缓存，云对象和历史版本回收由后续策略处理。
 
-| 配置 | 用途 |
+## HTTP 契约
+
+| 接口 | 请求/行为 |
 | --- | --- |
-| `MEMOVERSE_DATA_DIR` | 新 schema 2 账号数据库、会话和临时工作目录 |
-| `MEMOVERSE_TEMPLATE_DIR` | 已核验初始化模板目录 |
-| `MEMOVERSE_STORAGE` | 明确为 `s3` 或开发测试的 `local` |
-| `MEMOVERSE_S3_BUCKET`、`AWS_REGION` | 私有存储桶和区域；服务器凭据来自实例角色 |
-| `MEMOVERSE_COGNITO_REGION`、`MEMOVERSE_COGNITO_USER_POOL_ID`、`MEMOVERSE_COGNITO_CLIENT_ID` | Cognito 用户池和客户端 |
-| `MEMOVERSE_COGNITO_DOMAIN` | 完整 HTTPS Cognito 登录域名 |
-| `MEMOVERSE_PUBLIC_URL` | 精确网站 origin；生产必须 HTTPS |
-| `MEMOVERSE_SESSION_KEY` | Fernet 会话加密密钥，仅保存在受限配置文件 |
-| `MEMOVERSE_GOOGLE_ENABLED` | Google 提供方实际接通后为 `true` |
+| `GET /api/state` | 当前账号完整票夹快照；不包含墓碑 |
+| `GET /api/operations/{operationId}` | `{operationId, applied}`；仅核对当前账号持久操作，未知和其他账号的操作均返回 `applied:false` |
+| `POST /api/media` | multipart `file`；返回 assetId、sha256、URL、类型、尺寸 |
+| `GET /api/media/{sha}` | 仅本人有效票根引用可读 |
+| `POST /api/tickets` | `{id, operationId, originalAssetId, fields:{...}}` |
+| `PATCH /api/tickets/{id}` | `{operationId, fields?:{...}, originalAssetId?}`，只修改显式字段 |
+| `DELETE /api/tickets/{id}` | `{operationId}`；持久墓碑 |
+| `GET /api/backup` | 当前账号 schema 3 ZIP，不包含认证数据库或其他账号 |
 
-部署入口与配置切换见 [Ubuntu 部署说明](../deploy/ubuntu/README.md)，实时资源定位见[项目运行信息](../.agents/skills/memoverse-delivery/references/project-context.md)。不得将真实配置或凭据写入 Git。
+快照及票根写响应统一为 `{initialized, serverId, userId, revision, data:{tickets}, capabilities}`。`revision` 仍是全量快照防旧值标记，不代表已实现增量同步。
 
-## 生成业务责任地图
+写响应丢失时先查询稳定操作标识是否已应用，再决定是否重试。当前图片可能已被另一端替换，不能用当前图片哈希推断先前写入是否成功；操作查询不返回请求内容或其他账号信息。
 
-| 模块 | 负责什么 | 边界 |
-| --- | --- | --- |
-| `jobs.py` | `JobWorker` 的线程、唤醒、停止与一次任务的协调；引擎可用性入口 | 应用仍从这里创建 worker；不在调度层展开 SQL 或文件流水线 |
-| `generation/repository.py` | 启动恢复、领取任务、最终结果发布的数据库事务 | 每次发布核对账户、任务、输入版本与原图；只在短事务内写库 |
-| `generation/pipeline.py` | 下载原图、调用生成器、校验产物、上传不可变模型文件 | 完成全部上传后才返回模型结果，不自行发布数据库状态 |
-| `relief_engine.py` | 推理子进程、超时与进程终止 | 生成算法与进程执行入口，保持资源清理 |
-| `object_storage.py` | 本地/S3 对象访问与完整性校验 | 存储 I/O 不占任务写事务 |
+## 迁移与备份
 
-调用顺序是 `JobWorker → repository 领取 → pipeline 执行 → repository 发布`。`generation/cancellation.py` 区分任务取消与服务停止；最终事务失败只重试发布，最多 3 次、总预算 8 秒。超过预算后，同进程保留完成结果，并通过账户限定的 `generationRecovery` 和重试接口恢复保存。每次发布重新检查账户、任务状态、图片与输入版本；已完成的事务可以幂等重放。
+旧数据通过仓库根目录的 `scripts/migrate-movie-tickets.py` 检查清单并显式迁移到新目录。输入是独立 schema 2 数据库快照和本地原媒体副本；有活动 WAL/journal 的源拒绝。先使用工具的计划模式，`--execute` 才执行隔离迁移。迁移保留源快照与报告，不覆盖旧库、不连接 S3、不删除旧文件。非电影资料保留在旧快照，日期不猜成放映时间；字段来源标为 `migration`。
 
-完成结果保留在进程内存中，服务重启会按持久任务状态重新排队，可能重新推理。任务取消会中断推理子进程并阻止后续阶段；已经执行的 S3 请求仍受连接/读取超时与 SDK 有限重试约束。生产仍是单进程、单 worker，没有新增多 worker 租约。
-
-## 业务与存储边界
-
-| 模块 | 职责 |
-| --- | --- |
-| `app.py` | 配置装配、生命周期、错误处理、安全中间件与认证安装 |
-| `api.py` | 从服务器会话取得身份、校验请求契约、调用业务、返回 JSON/文件流 |
-| `contracts.py` | HTTP 与恢复工具共用的业务字段校验 |
-| `services/collections.py` | 收藏版本/幂等、修改、删除、重试和生成状态查询 |
-| `services/social.py`、`services/profiles.py` | 分享/社区互动与个人资料业务 |
-| `accounts.py` | 首次账户初始化；文件准备在写事务外，写入前再次检查账户是否存在 |
-| `state.py` | 数据展示、账户快照和带生成恢复信息的统一 HTTP 响应 |
-| `store.py` | schema、事务、账户权限与不可变资源元数据存取 |
-| `backups.py` | 一致快照导出、文件与记录校验、隔离恢复；不导出认证数据库 |
-
-## 账户备份恢复
-
-仅把账户 ZIP 恢复到**新的绝对目录**，显式指定原 owner，不覆盖或合并生产数据库：
+schema 3 账户备份包含本人票根、墓碑、操作幂等记录与媒体元数据，仅打包仍被有效票根引用的媒体字节。删除专用文件不通过备份重新开放下载。恢复保留墓碑并拒绝重新引用只有墓碑的媒体；新 `serverId` 标识恢复空间。本地恢复媒体显示 `not_configured`，不会冒称已在 S3 保存。
 
 ```powershell
-backend/.venv/Scripts/python.exe -B scripts/restore-account-backup.py --archive D:/backups/account.zip --destination D:/backups/restored-account --user-id <备份中的userId>
+backend/.venv/Scripts/python.exe -B scripts/restore-account-backup.py --archive D:/backups/account.zip --destination D:/backups/restored-account --user-id <原账号ID>
 ```
 
-目标父目录须已存在且无链接；已有目标一律拒绝。工具核对 ZIP 路径、成员集合、SHA-256/长度、完整业务字段、账户归属、模型三件套、相机、数据库引用与完整性。上限为 50,000 个 ZIP 成员、2 GiB 展开大小、16 MiB manifest；图片沿用上传的 12 MiB/4,000 万像素限制。导出执行相同上限，并在对象流超过声明长度时立即停止。
+目标必须是父目录已存在、没有链接的新绝对目录。恢复验证 ZIP 成员、归属、记录契约、引用、图片类型/尺寸/SHA-256 和 SQLite 完整性；限制 50,000 个成员、2 GiB 展开大小和 16 MiB manifest。禁止覆盖、合并或重新分配原账号。发布中断留下 `RESTORE_INCOMPLETE`，应用会拒绝启动该目录。schema 2 历史备份不由新在线恢复接口解释，先按隔离迁移清单处理；保留历史原始备份。
 
-恢复目录内含 SQLite 和本地 `objects/`，不会上传 S3、改变 Cognito 或自动切换运行环境。恢复中的 processing/blocked 任务转 queued，重新运行时可继续；新 serverId 让旧客户端识别恢复后的空间。若发布恢复目录时中断，`RESTORE_INCOMPLETE` 标记会阻止应用启动；保留现场检查，另选新目录重新恢复，不手动移除标记冒充完整。
+## 配置与验证
 
-## 生成队列观测
+必需环境配置包括明确的 `MEMOVERSE_STORAGE`，S3 模式的 `MEMOVERSE_S3_BUCKET`/`AWS_REGION`，以及既有 Cognito、公共 Origin、会话加密密钥。`MEMOVERSE_TEMPLATE_DIR` 已退出。认证协议配置见 `backend/auth.py`；不得把凭据写入 Git。运行定位与发布边界见[项目运行信息](../.agents/skills/memoverse-delivery/references/project-context.md)。
 
-管理员可在服务所在机器读取聚合状态，不需要登录配置或 AWS 凭据：
+Python 3.12/3.13，依赖使用 `backend/.venv`。测试均在隔离目录，认证/S3 为显式 fixture；真实身份服务及真机验收另行执行。
 
 ```powershell
-backend/.venv/Scripts/python.exe -B scripts/inspect-generation.py --data-dir D:/memoverse/data-v2
+backend/.venv/Scripts/python.exe -B -m pytest backend/tests scripts/tests/test_ticket_migration.py scripts/tests/test_capacity_benchmark.py --basetemp .cache/pytest-movie-tickets-unique -q
 ```
 
-必须显式指定已存在的绝对数据目录。CLI 以 `mode=ro`、`query_only` 在同一读事务中校验 schema 2 并查询业务数据库；不实例化应用、初始化账户或连接对象存储。活跃数据库读取已提交 WAL，不使用 immutable 模式绕过 WAL。未知 schema、恢复未完成标记和不存在目录均拒绝，不创建业务数据库、不修改业务记录。SQLite 可能创建或管理读取所需的 WAL/SHM 与锁状态，因此这不是保证目录逐字节不变的离线文件取证工具。
-
-输出仅含 `sampledAt`（Unix 毫秒）、六种持久任务状态计数、`waitingDepth`（queued + blocked）和 `oldestWaitingJobAgeSeconds`。最后一项是仍在等待的任务中最老的**创建年龄**，包含历史重试时间，不是本次连续排队时长；空队列为 null。`processing` 包含等待恢复发布的任务，不能等同 CPU 正在推理数；ready/failed 是当前状态数量，不是历史成功率。该命令属于本机运维入口，未增加全局指标 HTTP 接口，也不向每次全量状态响应增加聚合查询。
-
-worker 的 `memoverse.generation.metrics` 专用 INFO 日志输出单行 JSON 到 stderr，可由服务日志收集（例如 `journalctl -u memoverse`，使用实际部署 unit 名）。每个 worker 实例产生独立 `runId`；每次实际执行产生无业务含义的随机 `attemptId`。`generation_attempt_finished` 的 `pipelineDurationSeconds` 用单调时钟测量下载、推理、校验及上传总耗时，排除排队和最终数据库发布；`outcome` 为 succeeded/failed/cancelled/interrupted，`totals` 是该 worker 本轮实际执行的分类累计次数。succeeded 仅表示产物准备成功，不代表最终数据库已 ready；服务重启计数重新开始。
-
-发布恢复耗尽记录 `publication_paused`，后续显式重试成功完成状态核对记录 `publication_recovered`；后者也可能确认任务已经失效，不应当作“新增成功模型”计数。发布重试不重新计算执行次数或流水线耗时。日志不携带用户、收藏、任务业务 ID、文件路径、凭据或原始异常；写入失败不影响任务发布。已有诊断异常日志独立保留，结构化观测事件不是这些诊断日志的脱敏替代品。
-
-## 本机容量基线
-
-在仓库根目录使用项目开发依赖运行合成数据基线，输出必须指定新的文件名：
-
-```powershell
-backend/.venv/Scripts/python.exe -B scripts/benchmark-capacity.py --counts 100 1000 --warmup 5 --samples 30 --sql-samples 3 --temp-root D:/100-code/110-Project/network-coding/.cache/capacity-baseline --output D:/100-code/110-Project/network-coding/.cache/capacity-baseline/result-001.json
-```
-
-脚本通过显式 FakeAuth、临时 SQLite 与 LocalObjectStore 生成两类数据：ready 收藏共享合成模板原图与模型；queued 收藏使用各自的微型 PNG 和未启动任务。worker、真实推理、云存储和备份均不执行。准备、预热与 SQL trace 不计入请求计时；报告包含完整响应正文大小、p50/p95/max、SELECT 数与按当前页面代码推导的图片资源清单。每个测试目录由脚本新建，结束后只清理自己的目录，不接受已有业务库作为工作目录，不覆盖已有报告。
-
-这些是串行 TestClient 的本机基线，不包含真实网络、TLS、Cognito、S3、并发或浏览器解码/渲染；合成图片字节数不代表真实用户照片，也不能作为 t3.small 容量保证。报告记录 Git 提交、工作区是否有未提交改动及运行环境；比较时应使用干净提交和相同画像。首轮不设置未经测量的耗时及格线。脚本的小样本、隔离与报告校验测试随后端 PR CI 一起执行。
-
-## 开发验证
-
-Python 3.12/3.13，依赖放 `backend/.venv`。配置有效身份服务和模板后，开发可显式选择 `MEMOVERSE_STORAGE=local`，通过 Vite `/api` 代理同源访问；生产验收在 EC2 进行。
-
-```powershell
-backend/.venv/Scripts/python.exe -m pip install --cache-dir .cache/pip -r backend/requirements-dev.txt
-backend/.venv/Scripts/python.exe -m pytest backend/tests --basetemp .cache/pytest-account-check -q
-backend/.venv/Scripts/python.exe -B scripts/prepare-initial-template.py --verify
-```
-
-`--basetemp` 只能指向新的测试目录，不得使用真实数据目录或此前被拒绝清理的目录。模拟 provider 的测试覆盖认证协议与账户边界；真实 Google 同意及邮箱投递另行验收。AnyImage 仍是固定 MoGe2 CPU 推理加项目浮雕网格导出，模型缓存不在对象存储中充当用户原图，也不需要为每个新账户重复生成相同模板。
+测试目录必须使用新的任务专属路径。核心覆盖空账号、真实 BFF/CSRF、双账号隔离、字段更新、幂等重放、删除与引用授权、上传故障、备份校验和隔离恢复。没有真实 OCR、Redis 或设备同步验收结论。

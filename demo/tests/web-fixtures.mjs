@@ -2,19 +2,15 @@ export const signedSession = (id = 'a') => ({
   authenticated: true, configured: true, providers: { email: true, google: false },
   user: { id, email: `${id}@example.test`, name: `用户 ${id}` }, csrfToken: `test-csrf-${id}`,
 });
+export const media = (cloudStatus = 'saved') => ({ assetId: 'a'.repeat(64), sha256: 'a'.repeat(64), url: '/api/media/' + 'a'.repeat(64), mimeType: 'image/png', size: 68, width: 1, height: 1, cloudStatus });
 export const sampleItem = (id = 'item-1') => ({
-  id, title: '海边的一天', category: 'travel', tags: ['旅行'], note: '沿着海岸走了一整天。',
-  date: '2026-10-14', addedAt: 1, source: 'mine', art: 'sea', version: 1,
-  generation: 'ready', customImage: `/api/media/${id}`, modelUrl: `/api/models/${id}/model.glb`,
+  id, fields: { title: '星际穿越', cinema: '光影影院', hall: '3 号厅', seat: '5 排 6 座', showtime: '2026-10-22T19:30' },
+  fieldSources: { title: 'user', cinema: 'user', hall: 'user', seat: 'user', showtime: 'user' },
+  createdAt: 100, updatedAt: 100, version: 1, inputVersion: 1, deletedAt: null, operationId: 'initial',
+  media: { original: media(), poster: null }, processing: { status: 'not_started', error: null },
 });
-export const sampleData = () => ({
-  collections: [sampleItem()], shares: [],
-  community: [{ id: 'community-1', title: '社区的海边', category: 'travel', art: 'sea', author: '小雨',
-    description: '一份推荐', exposures: 100, saves: 10, likes: 20, generation: 'ready',
-    customImage: '/api/media/community-1', modelUrl: '/api/models/community-1/model.glb' }],
-  profile: { name: '测试用户', bio: '保留喜欢的瞬间' }, likedCommunityIds: [],
-});
+export const sampleData = () => ({ tickets: [sampleItem()] });
 export const serverState = (id = 'a') => ({
-  generationRecovery: [], initialized: true, serverId: 'server', userId: id, revision: 7, data: sampleData(),
-  generationEngine: { available: true, reason: 'fixture', pipeline: 'AnyImage' },
+  initialized: true, serverId: 'server', userId: id, revision: 7, data: sampleData(),
+  capabilities: { processing: false, cloudStorage: true, deviceSync: false },
 });

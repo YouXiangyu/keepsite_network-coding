@@ -97,7 +97,7 @@ try {
         if ($NginxPath) { $Activation += " --nginx '$NginxPath'" }
         & ssh @SshOptions "ubuntu@$Server" $Activation
         if ($LASTEXITCODE -ne 0) { throw 'Activation failed; inspect actual environment/site/current and rollback evidence before continuing.' }
-        Write-Output "Deployed $Commit. Schema-2 data stays in /var/lib/memoverse-v2; origin https://$Domain."
+        Write-Output "Deployed $Commit. Schema-3 data stays in /var/lib/memoverse-v3; legacy data is preserved; origin https://$Domain."
     } else {
         Write-Output "Prepared $Commit only. Current app, environment and public Nginx site were not activated or replaced."
     }

@@ -11,14 +11,14 @@ import { navigate, useLocationPath } from './navigation';
 type Mode = 'login' | 'register' | 'verify-email' | 'forgot-password' | 'reset-password';
 const modes: Mode[] = ['login', 'register', 'verify-email', 'forgot-password', 'reset-password'];
 const titles: Record<Mode, string> = {
-  login: '欢迎回来', register: '创建你的收藏空间', 'verify-email': '验证你的邮箱',
+  login: '欢迎回来', register: '创建你的票夹', 'verify-email': '验证你的邮箱',
   'forgot-password': '找回密码', 'reset-password': '设置新密码',
 };
 const descriptions: Record<Mode, string> = {
-  login: '登录后，继续收藏喜欢的日子。', register: '从一张照片开始，留下属于你的记忆。',
+  login: '登录后，继续票根喜欢的日子。', register: '从一张照片开始，留下属于你的记忆。',
   'verify-email': '输入邮件中的验证码，完成账户验证。',
   'forgot-password': '填写注册邮箱，我们会发送密码重置验证码。',
-  'reset-password': '输入邮件验证码和新密码，重新开启你的收藏。',
+  'reset-password': '输入邮件验证码和新密码，重新开启你的票根。',
 };
 const anonymous: AuthSession = { authenticated: false, configured: false, providers: { google: false, email: false } };
 
@@ -34,7 +34,7 @@ export default function AuthGate({ children }: { children: (session: SignedInSes
   const googleFailure = useRef(initialLocation.searchParams.get('auth_error') === 'google_login_failed');
   initialLocation.searchParams.delete('auth_error');
   const initialPath = initialLocation.pathname + initialLocation.search;
-  const returnTo = useRef(modes.includes(route) || initialPath === '/' ? '/collection' : initialPath);
+  const returnTo = useRef(modes.includes(route) || initialPath === '/' ? '/tickets' : initialPath);
   const [session, setSession] = useState<AuthSession | null>(null);
   const [checking, setChecking] = useState(true);
   const [checkAttempt, setCheckAttempt] = useState(0);
@@ -53,7 +53,7 @@ export default function AuthGate({ children }: { children: (session: SignedInSes
       setSession(previous => ({ ...(previous ?? anonymous), authenticated: false, user: undefined, csrfToken: undefined }));
       setChecking(false);
       setServiceError(reason === 'logout' ? '已退出登录。' : '登录状态已结束，请重新登录。');
-      returnTo.current = '/collection';
+      returnTo.current = '/tickets';
       navigate('/login', true);
     };
     if (reason === 'logout') {
@@ -72,7 +72,7 @@ export default function AuthGate({ children }: { children: (session: SignedInSes
       installSession(next);
       setSession(next);
       setServiceError(!next.authenticated && googleFailure.current ? 'Google 登录未完成，请重试。' : '');
-      if (next.authenticated && (modes.includes(route) || path === '/')) navigate('/collection', true);
+      if (next.authenticated && (modes.includes(route) || path === '/')) navigate('/tickets', true);
     }).catch(error => {
       if (!live) return;
       installSession(null);
@@ -98,7 +98,7 @@ export default function AuthGate({ children }: { children: (session: SignedInSes
         setSession(next);
         if (!next.authenticated) {
           setServiceError('登录状态已结束，请重新登录。');
-          returnTo.current = '/collection';
+          returnTo.current = '/tickets';
           navigate('/login', true);
         }
       } catch {
@@ -244,7 +244,7 @@ function AuthPage({ mode, session, serviceError, retry, onSignedIn }: {
           void perform(async () => { await resendCode(email.trim()); setMessage('验证码已重新发送，请检查收件箱。'); });
         }}>重新发送验证码</button>}
         <div className="auth-switch">{mode === 'login' ? <>还没有账户？<button disabled={busy} onClick={() => move('register')}>注册账户</button></> : mode === 'register' ? <>已经有账户？<button disabled={busy} onClick={() => move('login')}>登录</button></> : <button disabled={busy} onClick={() => move('login')}><ArrowLeft size={16} />返回登录</button>}</div>
-        <p className="auth-footer">登录后，你的收藏只在自己的账户中保存与管理。</p>
+        <p className="auth-footer">登录后，你的票根只在自己的账户中保存与管理。</p>
       </div>
     </section>
   </main>;

@@ -2,31 +2,29 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sampleData } from './web-fixtures.mjs';
-import { glb } from './glb-fixture.mjs';
+import { sampleData, sampleItem, media } from './web-fixtures.mjs';
 
 const root = path.resolve(fileURLToPath(new URL('../dist/client/', import.meta.url)));
-const model = glb();
 const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=', 'base64');
-const backup = Buffer.from('504b0506000000000000000000000000000000000000', 'hex');
 let accounts = new Map();
+let csrfTokens = new Map();
 let createFingerprints = new Map();
 let requests = [];
 let stalls = [];
 let hang;
+let rejectNext;
 
 function account(user) {
   if (!accounts.has(user)) {
     const data = sampleData();
-    data.collections[0].title = `${user.toUpperCase()} 的海边`;
-    data.collections.push({ ...data.collections[0], id: 'item-2', title: '第二件收藏', modelUrl: '/api/models/item-2/model.glb' });
-    accounts.set(user, { revision: 1, data, generationRecovery: [] });
+    data.tickets[0].fields.title = `${user.toUpperCase()} 的电影票`;
+    accounts.set(user, { revision: 1, data });
   }
   return accounts.get(user);
 }
-const snapshot = user => ({ initialized: true, serverId: 'reliability', userId: user, ...account(user), generationEngine: { available: true } });
+const snapshot = user => ({ initialized: true, serverId: 'reliability', userId: user, ...account(user), capabilities: { processing: false, deviceSync: false, cloudStorage: true } });
 const session = user => ({ authenticated: !!user, configured: true, providers: { email: true, google: false },
-  ...(user ? { user: { id: user, email: `${user}@example.test`, name: user }, csrfToken: `csrf-${user}` } : {}) });
+  ...(user ? { user: { id: user, email: `${user}@example.test`, name: user }, csrfToken: csrfTokens.get(user) ?? `csrf-${user}` } : {}) });
 
 async function bodyOf(request) {
   const buffers = [];
@@ -58,7 +56,15 @@ const server = createServer(async (request, response) => {
     const body = ['POST', 'PATCH', 'PUT', 'DELETE'].includes(method) ? await bodyOf(request) : undefined;
     if (pathname === '/__test/reset' && method === 'POST') {
       for (const stalled of stalls) stalled.response.destroy();
-      accounts = new Map(); createFingerprints = new Map(); requests = []; stalls = []; hang = undefined;
+      accounts = new Map(); csrfTokens = new Map(); createFingerprints = new Map(); requests = []; stalls = []; hang = undefined; rejectNext = undefined;
+      return respond(response, pathname, method, { ok: true });
+    }
+    if (pathname === '/__test/reject' && method === 'POST') {
+      rejectNext = body;
+      return respond(response, pathname, method, { ok: true });
+    }
+    if (pathname === '/__test/renew' && method === 'POST') {
+      csrfTokens.set(body.user ?? 'a', 'csrf-renewed');
       return respond(response, pathname, method, { ok: true });
     }
     if (pathname === '/__test/hang' && method === 'POST') {
@@ -87,30 +93,41 @@ const server = createServer(async (request, response) => {
         return respond(response, pathname, method, { ok: true });
       }
       if (!user) return respond(response, pathname, method, { detail: '请登录。' }, 401);
-      if (method !== 'GET' && request.headers['x-csrf-token'] !== `csrf-${user}`) return respond(response, pathname, method, { detail: 'CSRF' }, 403);
+      if (method !== 'GET' && request.headers['x-csrf-token'] !== (csrfTokens.get(user) ?? `csrf-${user}`)) return respond(response, pathname, method, { detail: 'CSRF' }, 403);
       if (pathname === '/api/state') return respond(response, pathname, method, snapshot(user));
-      if (pathname.startsWith('/api/models/')) return respond(response, pathname, method, model, 200, 'model/gltf-binary');
+      if (pathname.startsWith('/api/operations/')) {
+        const operationId = pathname.split('/')[3];
+        return respond(response, pathname, method, { operationId, applied: createFingerprints.has(`${user}/${operationId}`) });
+      }
       if (pathname.startsWith('/api/media/')) return respond(response, pathname, method, image, 200, 'image/png');
-      if (pathname === '/api/backup') return respond(response, pathname, method, backup, 200, 'application/zip');
-      if (pathname === '/api/media') return respond(response, pathname, method, { assetId: 'uploaded', url: '/api/media/uploaded' });
+      if (pathname === '/api/media') return respond(response, pathname, method, media());
+      if (rejectNext?.path === pathname && rejectNext.method === method) {
+        rejectNext = undefined;
+        return respond(response, pathname, method, { detail: '暂时无法提交，请核对后重试。' }, 503);
+      }
       const workspace = account(user);
-      if (pathname === '/api/collections' && method === 'POST') {
-        const key = `${user}/${body.id}`;
-        const fingerprint = JSON.stringify(body);
-        if (workspace.data.collections.some(item => item.id === body.id)) {
-          if (createFingerprints.get(key) !== fingerprint) return respond(response, pathname, method, { detail: '这件收藏已创建且内容不同，请刷新后编辑。' }, 409);
-        } else {
-          createFingerprints.set(key, fingerprint);
-          workspace.data.collections.push({
-            ...body, tags: body.tags ?? [], addedAt: 100, source: 'mine', version: 1,
-            generation: 'queued', generationJobId: 'job-new', customImage: '/api/media/uploaded',
-          });
-        }
-      } else if (pathname.startsWith('/api/collections/') && method === 'PATCH') {
-        const item = workspace.data.collections.find(item => item.id === pathname.split('/')[3]);
-        if (item.version !== body.version) return respond(response, pathname, method, { detail: '版本已更新，草稿仍保留。' }, 409);
-        Object.assign(item, body, { version: item.version + 1 });
+      const key = `${user}/${body?.operationId}`;
+      const fingerprint = JSON.stringify({ pathname, method, body });
+      if (createFingerprints.has(key)) {
+        if (createFingerprints.get(key) !== fingerprint) return respond(response, pathname, method, { detail: '操作标识已使用且内容不同。' }, 409);
+        return respond(response, pathname, method, snapshot(user));
+      }
+      if (pathname === '/api/tickets' && method === 'POST') {
+        if (workspace.data.tickets.some(item => item.id === body.id)) return respond(response, pathname, method, { detail: '票根已创建，请核对后编辑。' }, 409);
+        const ticket = sampleItem(body.id);
+        ticket.fields = { title: '', cinema: '', hall: '', seat: '', showtime: '', ...body.fields };
+        workspace.data.tickets.push(ticket);
+      } else if (pathname.startsWith('/api/tickets/') && method === 'PATCH') {
+        const item = workspace.data.tickets.find(item => item.id === pathname.split('/')[3]);
+        if (!item || item.deletedAt !== null) return respond(response, pathname, method, { detail: '票根不存在。' }, 404);
+        Object.assign(item.fields, body.fields);
+        if (body.originalAssetId) item.media.original = { ...media(), assetId: body.originalAssetId, sha256: body.originalAssetId, url: '/api/media/' + body.originalAssetId };
+        item.version += 1;
+      } else if (pathname.startsWith('/api/tickets/') && method === 'DELETE') {
+        const item = workspace.data.tickets.find(item => item.id === pathname.split('/')[3]);
+        if (item) item.deletedAt = Date.now();
       } else return respond(response, pathname, method, { detail: 'Not found' }, 404);
+      createFingerprints.set(key, fingerprint);
       workspace.revision += 1;
       return respond(response, pathname, method, snapshot(user));
     }

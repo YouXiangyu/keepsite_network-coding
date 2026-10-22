@@ -1,67 +1,51 @@
-"""Shared HTTP and backup validation contracts for account business data."""
-from datetime import date as Date
-from typing import Annotated, Literal
+"""Movie ticket request and backup field contracts."""
+from datetime import datetime
+from typing import Annotated
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-
-Category = Literal["movie", "travel", "daily", "exhibition"]
-
+FIELD_NAMES = ("title", "cinema", "hall", "seat", "showtime")
 Identifier = Annotated[str, Field(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9_-]+$")]
-
-Tags = Annotated[list[Annotated[str, Field(min_length=1, max_length=100)]], Field(max_length=30)]
+AssetId = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
+Text = Annotated[str, Field(max_length=200)]
 
 
 class Model(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
-class CollectionFields(Model):
-    title: Annotated[str, Field(min_length=1, max_length=70)]
-    category: Category
-    tags: Tags | None = None
-    note: Annotated[str, Field(max_length=500)] = ""
-    date: str
-    art: Annotated[str, Field(min_length=1, max_length=80)]
+class TicketFields(Model):
+    title: Annotated[str, Field(max_length=120)] = ""
+    cinema: Text = ""
+    hall: Text = ""
+    seat: Text = ""
+    showtime: str = ""
 
-    @field_validator("date")
+    @field_validator("showtime")
     @classmethod
-    def valid_date(cls, value):
-        if Date.fromisoformat(value).isoformat() != value:
-            raise ValueError("日期应为 YYYY-MM-DD。")
+    def valid_showtime(cls, value):
+        if value and (len(value) != 16 or datetime.strptime(value, "%Y-%m-%dT%H:%M").isoformat(timespec="minutes") != value):
+            raise ValueError("放映时间应为 YYYY-MM-DDTHH:mm。")
         return value
 
 
-class CreateCollection(CollectionFields):
+class Operation(Model):
+    operationId: Identifier
+
+
+class CreateTicket(Operation):
     id: Identifier
-    assetId: Identifier
+    originalAssetId: AssetId
+    fields: TicketFields = Field(default_factory=TicketFields)
 
 
-class UpdateCollection(Model):
-    version: Annotated[int, Field(ge=1)]
-    title: Annotated[str, Field(min_length=1, max_length=70)]
-    category: Category
-    tags: Tags
-    note: Annotated[str, Field(max_length=500)]
-    art: Annotated[str, Field(min_length=1, max_length=80)]
-    date: str | None = None
-    assetId: Identifier | None = None
+class UpdateTicket(Operation):
+    fields: TicketFields = Field(default_factory=TicketFields)
+    originalAssetId: AssetId | None = None
 
-    @field_validator("date")
-    @classmethod
-    def valid_date(cls, value):
-        if value is not None and Date.fromisoformat(value).isoformat() != value:
-            raise ValueError("日期应为 YYYY-MM-DD。")
-        return value
-
-
-class Version(Model):
-    version: Annotated[int, Field(ge=1)]
-
-
-class Profile(Model):
-    name: Annotated[str, Field(min_length=1, max_length=24)]
-    bio: Annotated[str, Field(max_length=100)] = ""
-
-
-class Like(Model):
-    liked: bool
+    @model_validator(mode="after")
+    def valid_changes(self):
+        if "originalAssetId" in self.model_fields_set and self.originalAssetId is None:
+            raise ValueError("原票不能为空。")
+        if not self.fields.model_fields_set and self.originalAssetId is None:
+            raise ValueError("请提交要修改的字段。")
+        return self
