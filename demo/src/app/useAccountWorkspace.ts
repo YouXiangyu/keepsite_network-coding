@@ -44,7 +44,7 @@ export function useAccountWorkspace(session: SignedInSession) {
     const receipt = await operation(); assertSessionEpoch(scope);
     return sync.catchUp(receipt.committedCursor ?? 0, true, receipt.serverId);
   }, handlers), [sync, runExclusive]);
-  return { data: state.data, ready: state.ready, rebuilding: state.rebuilding, connected: state.connected,
+  return { data: state.data, ready: state.ready, rebuilding: state.rebuilding, connected: state.connected, eventPort: sync,
     busy: busy || state.rebuilding, capabilities: state.capabilities, storageError, syncError: state.error,
     setStorageError, runMutation, runReconciliation, runExclusive, retry: () => { setStorageError(''); sync.refresh(); } };
 }

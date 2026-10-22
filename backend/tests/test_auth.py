@@ -558,3 +558,40 @@ def test_account_switch_revokes_only_old_socket_session_and_unsubscribe_is_idemp
     unsubscribe()
     auth.service.invalidate(new_sid)
     assert revoked == [hashed(old_sid)]
+
+
+def test_peer_digest_authorization_shares_cookie_refresh_lock_and_revocation(auth):
+    from backend.auth import hashed
+    login(auth)
+    sid = auth.client.cookies.get(auth.service.cookie_name)
+    digest = hashed(sid)
+    auth.now[0] += 871
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        cookie = executor.submit(auth.service.websocket_session, sid, PUBLIC)
+        peer = executor.submit(auth.service.websocket_session_key, digest)
+        assert cookie.result() == peer.result()
+    assert auth.provider.refresh_calls == 1
+    auth.service.invalidate(sid)
+    with pytest.raises(AuthError) as error:
+        auth.service.websocket_session_key(digest)
+    assert error.value.status == 401
+    with pytest.raises(AuthError):
+        auth.service.websocket_session_key(sid)
+
+
+def test_peer_digest_transient_failure_preserves_session_and_absolute_expiry_revokes(auth):
+    from backend.auth import hashed, SESSION_SECONDS
+    login(auth)
+    sid = auth.client.cookies.get(auth.service.cookie_name)
+    digest = hashed(sid)
+    auth.now[0] += 871
+    auth.provider.refresh_error = AuthError(503, "temporary", "provider_unavailable")
+    with pytest.raises(AuthError) as error:
+        auth.service.websocket_session_key(digest)
+    assert error.value.status == 503
+    with auth.service.db() as db:
+        assert db.execute("SELECT 1 FROM sessions WHERE sid_hash=?", (digest,)).fetchone()
+    auth.now[0] += SESSION_SECONDS
+    with pytest.raises(AuthError) as error:
+        auth.service.websocket_session_key(digest)
+    assert error.value.status == 401

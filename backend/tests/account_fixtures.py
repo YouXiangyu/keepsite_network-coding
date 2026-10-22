@@ -22,7 +22,8 @@ ORIGIN = "https://testserver"
 class FakeAuthFactory:
     """Explicit dependency injection, never imported by production code."""
 
-    def __init__(self):
+    def __init__(self, origin=ORIGIN):
+        self.origin = origin
         self.sessions = {f"session-{name}": user.copy() for name, user in USERS.items()}
         self.cookie_name = "test_session"
         self._revocations = set()
@@ -40,7 +41,7 @@ class FakeAuthFactory:
             if not user:
                 return JSONResponse({"detail": "请先登录。"}, status_code=401)
             if request.method in {"POST", "PATCH", "PUT", "DELETE"}:
-                if request.headers.get("X-CSRF-Token") != "test-csrf" or request.headers.get("Origin") != ORIGIN:
+                if request.headers.get("X-CSRF-Token") != "test-csrf" or request.headers.get("Origin") != self.origin:
                     return JSONResponse({"detail": "请求校验失败。"}, status_code=403)
             await run_in_threadpool(on_authenticated, user)
             request.state.user = user.copy()
@@ -56,7 +57,7 @@ class FakeAuthFactory:
             callback(hashed(sid))
 
     def websocket_session(self, sid, origin):
-        if origin != ORIGIN:
+        if origin != self.origin:
             raise AuthError(403, "请求来源验证失败。", "invalid_origin")
         user = self.sessions.get(sid)
         if user is None:
@@ -64,6 +65,12 @@ class FakeAuthFactory:
         if self._initialize:
             self._initialize(user)
         return {"user": user.copy(), "sessionKey": hashed(sid), "expiresAt": int(time.time() * 1000) + 60_000}
+
+    def websocket_session_key(self, session_key):
+        for sid in tuple(self.sessions):
+            if hashed(sid) == session_key:
+                return self.websocket_session(sid, self.origin)
+        raise AuthError(401, "请先登录。", "authentication_required")
 
     def subscribe_revocations(self, callback):
         with self._lock:

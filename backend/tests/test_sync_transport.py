@@ -25,7 +25,7 @@ def test_pinned_uvicorn_transport_handshake_hints_limits_and_cleanup():
     port = listener.getsockname()[1]
     listener.listen(16)
     config = uvicorn.Config(app, host="127.0.0.1", port=port, ws="websockets-sansio",
-        ws_max_size=4096, ws_ping_interval=0.05, ws_ping_timeout=0.05, ws_per_message_deflate=False,
+        ws_max_size=65536, ws_ping_interval=0.05, ws_ping_timeout=0.05, ws_per_message_deflate=False,
         log_level="error", timeout_graceful_shutdown=1)
     server = uvicorn.Server(config)
     thread = threading.Thread(target=lambda: asyncio.run(server.serve(sockets=[listener])), daemon=True,
@@ -104,7 +104,7 @@ def test_pinned_uvicorn_transport_handshake_hints_limits_and_cleanup():
 def test_production_proxy_and_engine_use_dedicated_bounded_websocket_path():
     root = Path(__file__).resolve().parents[2]
     unit = (root / "deploy/ubuntu/memoverse.service").read_text()
-    assert "--ws websockets-sansio --ws-max-size 4096" in unit
+    assert "--ws websockets-sansio --ws-max-size 65536" in unit
     assert "--ws-ping-interval 15 --ws-ping-timeout 15 --ws-per-message-deflate false" in unit
     proxy = (root / "deploy/ubuntu/nginx.conf.template").read_text()
     location = proxy.split("location = /api/sync/events {", 1)[1].split("}", 1)[0]

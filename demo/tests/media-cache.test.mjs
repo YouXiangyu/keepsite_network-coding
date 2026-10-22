@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
 import { media, png } from './web-fixtures.mjs';
 const hook = registerHooks({ resolve(specifier, context, nextResolve) {
-  if (context.parentURL?.includes('/src/') && ['./api', './data'].includes(specifier)) return { url: new URL(specifier + '.ts', context.parentURL).href, shortCircuit: true };
+  if (context.parentURL?.includes('/src/') && specifier.startsWith('.') && !specifier.endsWith('.ts')) return { url: new URL(specifier + '.ts', context.parentURL).href, shortCircuit: true };
   return nextResolve(specifier, context);
 } });
 const { CACHE_LIMIT, planCacheEviction, verifyMediaBlob } = await import('../src/mediaCache.ts');

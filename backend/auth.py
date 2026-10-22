@@ -434,9 +434,12 @@ class AuthService:
 
     def invalidate(self, sid):
         if sid:
-            with self.db() as db:
-                db.execute('DELETE FROM sessions WHERE sid_hash=?', (hashed(sid),))
-            self._notify_revoked(hashed(sid))
+            self._invalidate_digest(hashed(sid))
+
+    def _invalidate_digest(self, digest):
+        with self.db() as db:
+            db.execute('DELETE FROM sessions WHERE sid_hash=?', (digest,))
+        self._notify_revoked(digest)
 
     def subscribe_revocations(self, callback):
         """The callback receives only a session digest and must enqueue without I/O."""
@@ -471,14 +474,27 @@ class AuthService:
     def session(self, sid):
         if not self.configured or not isinstance(sid, str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}', sid):
             return None
-        digest = hashed(sid)
+        return self._session_for_digest(hashed(sid), sid)
+
+    def websocket_session_key(self, session_key):
+        """Server-internal peer authorization; no route accepts a session digest."""
+        self.require_config()
+        if not isinstance(session_key, str) or not re.fullmatch(r'[a-f0-9]{64}', session_key):
+            raise AuthError(401, '请先登录。', 'authentication_required')
+        session = self._session_for_digest(session_key)
+        if session is None:
+            raise AuthError(401, '请先登录。', 'authentication_required')
+        return {'user': session['user'], 'sessionKey': session_key,
+                'expiresAt': int(session['expires'] * 1000)}
+
+    def _session_for_digest(self, digest, sid=None):
         with self.locks[int(digest[:4], 16) % len(self.locks)]:
             with self.db() as db:
                 row = db.execute('SELECT * FROM sessions WHERE sid_hash=?', (digest,)).fetchone()
             if row is None:
                 return None
             if row['expires'] <= self.clock():
-                self.invalidate(sid)
+                self._invalidate_digest(digest)
                 return None
             owner = None
             try:
@@ -506,7 +522,7 @@ class AuthService:
                 return {'sid': sid, 'user': user, 'csrf': row['csrf'], 'expires': row['expires']}
             except AuthError as error:
                 if error.status in (401, 403):
-                    self.invalidate(sid)
+                    self._invalidate_digest(digest)
                 raise
             finally:
                 if owner:

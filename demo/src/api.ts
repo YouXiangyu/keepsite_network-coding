@@ -1,4 +1,5 @@
 import { validateData, validMedia, validTicket, type Ticket, type MediaRef } from './data';
+import { bytesOf, validPeerEnvelope, type ClientPeerMessage, type PeerMessage } from './media/peerProtocol';
 
 export const API_BASE = '';
 export interface User { id: string; email: string; name: string }
@@ -14,7 +15,7 @@ export interface SignedInSession extends AuthSession {
   user: User;
   csrfToken: string;
 }
-export interface Capabilities { processing: boolean; processingUnavailableReason: string | null; cloudStorage: boolean; deviceSync: false }
+export interface Capabilities { processing: boolean; processingUnavailableReason: string | null; cloudStorage: boolean; deviceSync: boolean }
 export interface SnapshotPage { serverId: string; userId: string; snapshotId: string; cursor: number; total: number; offset: number; tickets: Ticket[]; nextPageToken: string | null; expiresAt: number; capabilities: Capabilities }
 export type Change = { cursor: number; type: 'upsert'; ticket: Ticket } | { cursor: number; type: 'delete'; id: string; version: number; deletedAt: number };
 export interface ChangePage { serverId: string; userId: string; fromCursor: number; nextCursor: number; headCursor: number; hasMore: boolean; changes: Change[]; capabilities: Capabilities }
@@ -225,7 +226,7 @@ function checkedIdentity(value: { userId: string; serverId: string }, expectedUs
   if (typeof value.serverId !== 'string' || !value.serverId) throw new ApiError('同步服务身份不完整。');
 }
 function checkedCapabilities(value: Capabilities) {
-  if (!value || typeof value.processing !== 'boolean' || value.deviceSync !== false || typeof value.cloudStorage !== 'boolean'
+  if (!value || typeof value.processing !== 'boolean' || typeof value.deviceSync !== 'boolean' || typeof value.cloudStorage !== 'boolean'
       || !(value.processingUnavailableReason === null || typeof value.processingUnavailableReason === 'string')) throw new ApiError('功能状态不完整，未更新界面。');
 }
 async function syncJson<T>(path: string, signal?: AbortSignal): Promise<T> {
@@ -286,7 +287,8 @@ export async function mutate(path: string, method = 'POST', body?: unknown): Pro
   if (!result || typeof result.serverId !== 'string' || !result.serverId || result.operationId !== expected || !integer(result.committedCursor)) throw new ApiError('写入回执不完整，结果尚未确认。');
   return result;
 }
-export function openSyncEvents(onHint: (hint: SyncHint) => void, onClose: () => void) {
+export interface EventConnection { stop(): void; send(message: ClientPeerMessage): boolean }
+export function openSyncEvents(onMessage: (message: SyncHint | PeerMessage) => void, onClose: () => void): EventConnection {
   const scope = epoch, user = activeSession?.user.id;
   if (!user) throw new ApiError('请先登录。', 401);
   const url = new URL('/api/sync/events', window.location.origin); url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -296,17 +298,26 @@ export function openSyncEvents(onHint: (hint: SyncHint) => void, onClose: () => 
   const message = (event: MessageEvent) => {
     if (!current()) return;
     try {
-      if (typeof event.data !== 'string' || event.data.length > 4096) throw new Error();
-      const hint = JSON.parse(event.data) as SyncHint;
-      if (hint.v !== 1 || !['sync.ready', 'sync.hint'].includes(hint.type) || hint.userId !== user || typeof hint.serverId !== 'string' || !hint.serverId || !integer(hint.cursor)) throw new Error();
-      onHint(hint);
+      if (typeof event.data !== 'string' || bytesOf(event.data) > 65536) throw new Error();
+      const value = JSON.parse(event.data) as SyncHint | PeerMessage;
+      if (value.v !== 1 || value.userId !== user || typeof value.serverId !== 'string' || !value.serverId) throw new Error();
+      if (value.type === 'sync.ready' || value.type === 'sync.hint') {
+        if (bytesOf(event.data) > 4096 || !integer((value as SyncHint).cursor)) throw new Error();
+      } else if (!validPeerEnvelope(value as PeerMessage) || bytesOf(event.data) > (value.type === 'peer.signal' && (value as PeerMessage).kind !== 'ice' ? 65536 : 4096)) throw new Error();
+      if (value.type !== 'sync.ready' && value.type !== 'sync.hint') Object.defineProperty(value, 'wireBytes', { value: bytesOf(event.data), enumerable: false });
+      onMessage(value);
     } catch { socket.close(); }
   };
   const end = () => { if (current()) onClose(); };
   socket.addEventListener('message', message); socket.addEventListener('close', end);
   const stop = () => { if (closed) return; closed = true; socket.removeEventListener('message', message); socket.removeEventListener('close', end); socket.close(); unsubscribe(); };
   const unsubscribe = onSessionChanged(stop);
-  return stop;
+  return { stop, send: message => {
+    if (!current() || socket.readyState !== WebSocket.OPEN) return false;
+    const body = JSON.stringify(message);
+    if (bytesOf(body) > (message.type === 'peer.signal' && message.kind !== 'ice' ? 65536 : 4096) || socket.bufferedAmount + bytesOf(body) > 256 * 1024) return false;
+    try { socket.send(body); return true; } catch { return false; }
+  } };
 }
 export async function uploadMedia(file: File, uploadId: string): Promise<MediaAsset & { uploadId: string }> {
   const scope = epoch;
@@ -359,7 +370,7 @@ export async function authorizeMedia(media: MediaRef, signal: AbortSignal): Prom
   }
   return result;
 }
-async function boundedImage(response: Response, signal: AbortSignal, media: MediaRef) {
+async function boundedImage(response: Response, signal: AbortSignal, media: MediaRef, onBytes?: (bytes: number) => void) {
   const mimeType = response.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase();
   if (mimeType !== media.mimeType || !response.body || media.size > 12 * 1024 * 1024) throw new ApiError('图片格式或大小与记录不一致。');
   const reader = response.body.getReader();
@@ -372,6 +383,7 @@ async function boundedImage(response: Response, signal: AbortSignal, media: Medi
       if (signal.aborted) staleRequest();
       const { done, value } = await reader.read();
       if (done) break;
+      onBytes?.(value.byteLength);
       total += value.byteLength;
       if (total > media.size) throw new ApiError('图片大小与记录不一致。');
       chunks.push(new Uint8Array(value));
@@ -380,8 +392,16 @@ async function boundedImage(response: Response, signal: AbortSignal, media: Medi
     return new Blob(chunks, { type: mimeType });
   } finally { signal.removeEventListener('abort', abort); void reader.cancel().catch(() => {}); }
 }
-export async function downloadMedia(media: MediaRef, signal: AbortSignal): Promise<{ blob: Blob; transport: 's3' | 'server' }> {
+export interface MediaDownloadObservation { id: string; transport: 's3' | 'server'; event: 'start' | 'bytes' | 'failed'; bytes?: number }
+export async function downloadMedia(media: MediaRef, signal: AbortSignal, observe?: (event: MediaDownloadObservation) => void): Promise<{ blob: Blob; transport: 's3' | 'server'; downloadId: string }> {
   const scope = epoch;
+  const read = async (url: string, transport: 's3' | 'server') => {
+    const id = crypto.randomUUID(); observe?.({ id, transport, event: 'start' });
+    try {
+      const blob = await request(url, { authenticated: true, signedMedia: transport === 's3', signal }, (response, requestSignal) => boundedImage(response, requestSignal, media, bytes => observe?.({ id, transport, event: 'bytes', bytes })));
+      assertSessionEpoch(scope); return { blob, transport, downloadId: id };
+    } catch (error) { observe?.({ id, transport, event: 'failed' }); throw error; }
+  };
   let authorization = await authorizeMedia(media, signal);
   for (let attempt = 0; attempt < 2; attempt++) {
     assertSessionEpoch(scope);
@@ -390,9 +410,7 @@ export async function downloadMedia(media: MediaRef, signal: AbortSignal): Promi
       break;
     }
     try {
-      const blob = await request(authorization.url, { authenticated: true, signedMedia: authorization.transport === 's3', signal }, (response, requestSignal) => boundedImage(response, requestSignal, media));
-      assertSessionEpoch(scope);
-      return { blob, transport: authorization.transport };
+      return await read(authorization.url, authorization.transport);
     } catch (error) {
       assertSessionEpoch(scope);
       if (signal.aborted || error instanceof DOMException && error.name === 'AbortError') throw error;
@@ -402,7 +420,5 @@ export async function downloadMedia(media: MediaRef, signal: AbortSignal): Promi
     }
   }
   assertSessionEpoch(scope);
-  const blob = await request(`/api/media/${media.assetId}`, { authenticated: true, signal }, (response, requestSignal) => boundedImage(response, requestSignal, media));
-  assertSessionEpoch(scope);
-  return { blob, transport: 'server' };
+  return read(`/api/media/${media.assetId}`, 'server');
 }

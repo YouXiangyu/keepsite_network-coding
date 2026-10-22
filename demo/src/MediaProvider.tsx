@@ -1,23 +1,34 @@
-import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useSyncExternalStore, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { onSessionChanged, sessionEpoch } from './api';
 import { AccountMediaCache } from './mediaCache';
 import type { MediaRef, Ticket } from './data';
+import { PeerMedia } from './media/peerMedia';
+import type { AccountEventPort } from './media/peerProtocol';
 
 const MediaContext = createContext<AccountMediaCache | null>(null);
-export function MediaProvider({ accountId, ready, tickets, children }: { accountId: string; ready: boolean; tickets: Ticket[]; children: ReactNode }) {
+const PeerContext = createContext<{ peer: PeerMedia; wanted: boolean; setWanted(value: boolean): void } | null>(null);
+export function MediaProvider({ accountId, ready, tickets, eventPort, deviceSync, children }: { accountId: string; ready: boolean; tickets: Ticket[]; eventPort: AccountEventPort; deviceSync: boolean; children: ReactNode }) {
   const epoch = sessionEpoch();
-  const cache = useMemo(() => new AccountMediaCache(accountId), [accountId, epoch]);
+  const [wanted, setWanted] = useState(true);
+  const { cache, peer } = useMemo(() => { const cache = new AccountMediaCache(accountId), peer = new PeerMedia(eventPort, cache); cache.setPeer(peer); return { cache, peer }; }, [accountId, epoch, eventPort]);
   useLayoutEffect(() => {
     if (ready) cache.setReferences(tickets.filter(ticket => ticket.deletedAt === null).flatMap(ticket => [ticket.media.original, ...(ticket.media.poster ? [ticket.media.poster] : [])]));
   }, [cache, ready, tickets]);
+  useEffect(() => { peer.setSupported(ready && deviceSync); peer.setWanted(wanted); }, [peer, ready, deviceSync, wanted]);
   useEffect(() => {
-    const unsubscribe = onSessionChanged(() => cache.dispose());
-    const refresh = () => { if (document.visibilityState !== 'hidden') void cache.refresh(); };
+    peer.setForeground(document.visibilityState !== 'hidden'); peer.start();
+    const unsubscribe = onSessionChanged(() => { peer.stop(); cache.dispose(); });
+    const refresh = () => { peer.setForeground(document.visibilityState !== 'hidden'); if (document.visibilityState !== 'hidden') void cache.refresh(); };
     window.addEventListener('focus', refresh);
     document.addEventListener('visibilitychange', refresh);
-    return () => { window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); unsubscribe(); cache.dispose(); };
-  }, [cache]);
-  return <MediaContext.Provider value={cache}>{children}</MediaContext.Provider>;
+    return () => { window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); unsubscribe(); peer.stop(); cache.dispose(); };
+  }, [cache, peer]);
+  return <MediaContext.Provider value={cache}><PeerContext.Provider value={{ peer, wanted, setWanted }}>{children}</PeerContext.Provider></MediaContext.Provider>;
+}
+export function usePeerStatus() {
+  const value = useContext(PeerContext); if (!value) throw new Error('设备状态必须在已登录账号内读取。');
+  const state = useSyncExternalStore(value.peer.subscribe, value.peer.snapshot);
+  return { ...state, wanted: value.wanted, setWanted: value.setWanted, refresh: value.peer.refreshPeers };
 }
 function useCache() {
   const cache = useContext(MediaContext);

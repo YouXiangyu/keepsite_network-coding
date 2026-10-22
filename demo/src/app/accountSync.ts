@@ -1,16 +1,17 @@
-import { ApiError, assertSessionEpoch, errorMessage, getChanges, getSnapshotPage, openSyncEvents, sessionEpoch, type Capabilities, type ChangePage, type SnapshotPage, type SyncHint } from '../api';
+import { ApiError, assertSessionEpoch, errorMessage, getChanges, getSnapshotPage, openSyncEvents, sessionEpoch, type Capabilities, type ChangePage, type SnapshotPage, type SyncHint, type EventConnection } from '../api';
 import type { AppData, Ticket } from '../data';
+import type { AccountEventPort, ClientPeerMessage, EventConnectionState, PeerMessage } from '../media/peerProtocol';
 
 export interface SyncView { data: AppData; ready: boolean; rebuilding: boolean; error: string; connected: boolean; cursor: number; serverId: string; capabilities?: Capabilities }
 export interface SyncTransport {
   snapshot: (token: string | null, signal: AbortSignal) => Promise<SnapshotPage>;
   changes: (serverId: string, after: number, signal: AbortSignal) => Promise<ChangePage>;
-  events: (hint: (value: SyncHint) => void, close: () => void) => () => void;
+  events: (hint: (value: SyncHint | PeerMessage) => void, close: () => void) => EventConnection;
 }
 const defaultTransport: SyncTransport = { snapshot: getSnapshotPage, changes: getChanges, events: openSyncEvents };
 const abortError = () => new DOMException('同步已取消。', 'AbortError');
 
-export class AccountSync {
+export class AccountSync implements AccountEventPort {
   private view: SyncView = { data: { tickets: [] }, ready: false, rebuilding: false, error: '', connected: false, cursor: 0, serverId: '' };
   private listeners = new Set<() => void>();
   private generation = 0;
@@ -22,7 +23,14 @@ export class AccountSync {
   private completed = 0;
   private pull: Promise<void> | null = null;
   private request: AbortController | null = null;
-  private socket: { stop: () => void; ready: boolean; serverId: string } | null = null;
+  private socket: { stop: () => void; send: (message: ClientPeerMessage) => boolean; ready: boolean; serverId: string } | null = null;
+  private connectionGeneration = 0;
+  private connectionListeners = new Set<() => void>();
+  private eventListeners = new Set<(message: PeerMessage) => void>();
+  eventState = (): EventConnectionState => ({ connected: !!this.socket?.ready && this.view.ready && this.socket.serverId === this.view.serverId, serverId: this.socket?.serverId ?? '', generation: this.connectionGeneration });
+  subscribeConnection = (listener: () => void) => { this.connectionListeners.add(listener); return () => { this.connectionListeners.delete(listener); }; };
+  subscribeEvents = (listener: (message: PeerMessage) => void) => { this.eventListeners.add(listener); return () => { this.eventListeners.delete(listener); }; };
+  sendEvent = (message: ClientPeerMessage) => this.eventState().connected && !!this.socket?.send(message);
   private timer: ReturnType<typeof setTimeout> | undefined;
   private watchdog: ReturnType<typeof setTimeout> | undefined;
   private retryDelay = 1000;
@@ -31,7 +39,7 @@ export class AccountSync {
   constructor(userId: string, transport: SyncTransport = defaultTransport) { this.userId = userId; this.transport = transport; }
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   snapshot = () => this.view;
-  private publish(update: Partial<SyncView>) { this.view = { ...this.view, ...update }; for (const listener of this.listeners) listener(); }
+  private publish(update: Partial<SyncView>) { this.view = { ...this.view, ...update }; for (const listener of this.listeners) listener(); for (const listener of this.connectionListeners) listener(); }
   private guard(generation = this.generation) { assertSessionEpoch(this.scope); if (!this.running || generation !== this.generation) throw abortError(); }
   start() {
     this.stop(); this.running = true; this.scope = sessionEpoch(); this.retryDelay = 1000;
@@ -41,6 +49,7 @@ export class AccountSync {
     this.running = false; this.generation++; this.request?.abort(); this.request = null; this.pull = null;
     this.socket?.stop(); this.socket = null; clearTimeout(this.timer); clearTimeout(this.watchdog); this.timer = undefined; this.watchdog = undefined;
     this.desiredCursor = this.view.cursor; this.requested = this.completed = 0;
+    this.connectionGeneration++; for (const listener of this.connectionListeners) listener();
   }
   private report(error: unknown) {
     try { this.guard(); } catch { return; }
@@ -63,7 +72,8 @@ export class AccountSync {
   }
   private connect() {
     if (!this.running || this.socket) return;
-    const generation = this.generation, socket = { stop: () => {}, ready: false, serverId: '' };
+    const generation = this.generation, socket = { stop: () => {}, send: (_message: ClientPeerMessage) => false, ready: false, serverId: '' };
+    this.connectionGeneration++;
     this.socket = socket;
     const close = () => {
       if (this.socket !== socket || generation !== this.generation || !this.running) return;
@@ -71,9 +81,15 @@ export class AccountSync {
       this.publish({ connected: false }); this.scheduleReconnect();
     };
     try {
-      socket.stop = this.transport.events(hint => {
+      const connection = this.transport.events(value => {
         if (this.socket !== socket || generation !== this.generation || !this.running) return;
         try { this.guard(generation); } catch { return; }
+        if (value.type !== 'sync.ready' && value.type !== 'sync.hint') {
+          if (value.serverId !== socket.serverId || value.userId !== this.userId || !this.eventState().connected) return;
+          for (const listener of this.eventListeners) listener(value as PeerMessage);
+          return;
+        }
+        const hint = value as SyncHint;
         if (hint.userId !== this.userId) { close(); return; }
         const wasReady = socket.ready;
         socket.ready = true; socket.serverId = hint.serverId; clearTimeout(this.watchdog); this.watchdog = setTimeout(close, 45000);
@@ -82,6 +98,7 @@ export class AccountSync {
         if (this.view.serverId && this.view.serverId !== hint.serverId) { close(); this.needSnapshot = true; this.desiredCursor = 0; this.request?.abort(); this.background(true); }
         else if (!wasReady || !this.view.ready || this.needSnapshot || this.view.error || hint.cursor > this.view.cursor) this.background(!wasReady || !!this.view.error, hint.cursor);
       }, close);
+      socket.stop = connection.stop; socket.send = connection.send;
       if (!socket.ready) this.watchdog = setTimeout(close, 8000);
     } catch { close(); }
   }

@@ -53,7 +53,7 @@ def _valid_snapshot(payload, user_id, server_id, revision):
         return False
     capabilities, data = payload.get("capabilities"), payload.get("data")
     if (not isinstance(capabilities, dict) or type(capabilities.get("processing")) is not bool
-            or capabilities.get("deviceSync") is not False
+            or type(capabilities.get("deviceSync")) is not bool
             or type(capabilities.get("cloudStorage")) is not bool
             or "processingUnavailableReason" not in capabilities
             or capabilities["processingUnavailableReason"] is not None and (

@@ -11,7 +11,7 @@ Group=memoverse
 WorkingDirectory=/opt/memoverse/current
 EnvironmentFile=/etc/memoverse.env
 Environment=TMPDIR=/opt/memoverse/shared/cache/tmp
-ExecStart=/opt/memoverse/current/backend/.venv/bin/python -B -m uvicorn backend.app:create_app --factory --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1 --ws websockets-sansio --ws-max-size 4096 --ws-ping-interval 15 --ws-ping-timeout 15 --ws-per-message-deflate false
+ExecStart=/opt/memoverse/current/backend/.venv/bin/python -B -m uvicorn backend.app:create_app --factory --host 127.0.0.1 --port 8000 --workers 1 --proxy-headers --forwarded-allow-ips 127.0.0.1 --ws websockets-sansio --ws-max-size 65536 --ws-ping-interval 15 --ws-ping-timeout 15 --ws-per-message-deflate false
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=30

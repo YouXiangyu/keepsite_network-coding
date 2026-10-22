@@ -2,7 +2,7 @@ import { expect, test, type Page, type Route } from '@playwright/test';
 import { sampleItem, media, pngHash, otherHash, otherPng, imageFixture, posterSource } from '../tests/web-fixtures.mjs';
 const password = 'ExamplePassword123!';
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=', 'base64');
-async function mockApi(page: Page, options: { user?: string; configured?: boolean; google?: boolean; sessionGate?: Promise<void>; empty?: boolean; cloud?: boolean; processing?: boolean } = {}) {
+async function mockApi(page: Page, options: { user?: string; configured?: boolean; google?: boolean; sessionGate?: Promise<void>; empty?: boolean; cloud?: boolean; processing?: boolean; deviceSync?: boolean } = {}) {
   const server = {
     user: options.user ?? '', configured: options.configured ?? true, google: options.google ?? false,
     requests: [] as { path: string; method: string; body: any; headers: Record<string, string> }[],
@@ -12,6 +12,7 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
     appliedOperations: new Set<string>(),
     uploads: new Map<string, { uploadId: string; status: string; asset: ReturnType<typeof media> }>(),
     processing: options.processing ?? false,
+    peerMessages: [] as any[],
   };
   const currentData = (user = server.user) => {
     if (!server.data.has(user)) { const ticket = sampleItem(); ticket.fields.title = `${user.toUpperCase()} 的电影票`; ticket.media.original.cloudStatus = options.cloud === false ? 'not_configured' : 'saved'; server.data.set(user, { tickets: options.empty ? [] : [ticket] }); }
@@ -19,7 +20,7 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
   };
   const session = () => ({ authenticated: !!server.user, configured: server.configured, providers: { google: server.google, email: true },
     ...(server.user ? { user: { id: server.user, email: `${server.user}@example.test`, name: server.user }, csrfToken: server.csrfToken ?? `csrf-${server.user}` } : {}) });
-  const capabilities = () => ({ processing: server.processing, processingUnavailableReason: server.processing ? null : '处理配置未就绪，请配置服务端识别。', deviceSync: false, cloudStorage: options.cloud !== false });
+  const capabilities = () => ({ processing: server.processing, processingUnavailableReason: server.processing ? null : '处理配置未就绪，请配置服务端识别。', deviceSync: !!options.deviceSync, cloudStorage: options.cloud !== false });
   const histories = new Map<string, { cursor: number; previous: Map<string, string>; changes: any[] }>();
   const sockets = new Set<{ user: string; send: (value: string) => void }>();
   const views = new Map<string, any>(); let snapshotCount = 0;
@@ -38,6 +39,19 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
   const respond = (route: Route, value: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) });
   await page.routeWebSocket('**/api/sync/events', socket => {
     const entry = { user: server.user, send: (value: string) => socket.send(value) }; sockets.add(entry);
+    let revision = 0, inventory = new Set<string>(), staged = [] as string[];
+    socket.onMessage(raw => {
+      const message = JSON.parse(String(raw)); server.peerMessages.push(message); let response: any;
+      if (message.type === 'device.register') { revision = 0; inventory = new Set(); response = { type: 'device.registered', peerId: 'web-peer', enabled: true, reason: null, heartbeatMs: 15000, leaseMs: 45000, inventoryRevision: 0, limits: { maxInventory: 1024, maxBatchAssets: 32, maxControlBytes: 4096, maxSignalBytes: 65536, maxSdpBytes: 49152, maxIceBytes: 2048, maxActiveTransfers: 2 }, iceServers: [], turnEnabled: false }; }
+      else if (message.type === 'device.list') response = { type: 'device.peers', peers: [{ peerId: 'web-peer', name: '测试浏览器页面' }] };
+      else if (message.type === 'device.heartbeat') response = { type: 'device.alive', leaseMs: 45000, inventoryRevision: revision };
+      else if (message.type === 'device.unregister') { inventory.clear(); response = { type: 'device.unregistered' }; }
+      else if (message.type === 'cache.replace') { if (message.batchIndex === 0) staged = []; staged.push(...message.assetIds); const complete = message.batchIndex === message.batchCount - 1; if (complete) { inventory = new Set(staged); revision = message.revision; } response = { type: 'cache.ack', revision: message.revision, count: staged.length, complete, nextBatchIndex: complete ? null : message.batchIndex + 1 }; }
+      else if (message.type === 'cache.patch') { for (const id of message.add) inventory.add(id); for (const id of message.remove) inventory.delete(id); revision = message.revision; response = { type: 'cache.ack', revision, count: inventory.size, complete: true, nextBatchIndex: null }; }
+      else if (message.type === 'peer.find') response = { type: 'peer.sources', assetId: message.assetId, peers: [] };
+      else response = { type: 'peer.error', code: 'unavailable', message: '测试无在线源' };
+      socket.send(JSON.stringify({ v: 1, serverId: 'web-server', userId: entry.user, requestId: message.requestId, ...response }));
+    });
     socket.send(JSON.stringify({ v: 1, type: 'sync.ready', serverId: 'web-server', userId: entry.user, cursor: history(entry.user).cursor }));
     socket.onClose(() => sockets.delete(entry));
   });
@@ -136,6 +150,50 @@ test('a remote tombstone preserves edited fields and the selected photo while di
   await expect(page.getByAltText('原票预览')).toHaveAttribute('src', preview!);
   await expect(page.getByRole('button', { name: '保存票根' })).toBeDisabled();
   expect(api.requests.filter(request => request.method === 'PATCH')).toHaveLength(0);
+});
+
+test('peer inventory follows durable cache clearing, external eviction and the page toggle without stopping sync', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a', deviceSync: true }); await page.goto('/tickets');
+  await expect(page.getByText('已校验并保存到本机缓存', { exact: true })).toBeVisible();
+  await page.getByRole('link', { name: '设备与状态', exact: true }).click();
+  await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '1');
+  await page.getByLabel('本页启用 P2P 加速').uncheck(); await expect(page.getByTestId('peer-status')).toHaveAttribute('data-enabled', 'false');
+  const before = api.requests.filter(request => request.path.endsWith('/changes')).length;
+  api.data.get('a')!.tickets[0].fields.title = '停用P2P仍同步'; api.data.get('a')!.tickets[0].version++; api.revision++;
+  await expect.poll(() => api.requests.filter(request => request.path.endsWith('/changes')).length).toBeGreaterThan(before);
+  await page.getByLabel('本页启用 P2P 加速').check(); await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '1');
+  await page.evaluate(() => new Promise<void>((resolve, reject) => {
+    const open = indexedDB.open('memoverse-media-cache-v1'); open.onsuccess = () => { const database = open.result, tx = database.transaction('media', 'readwrite'); tx.objectStore('media').clear(); tx.oncomplete = () => { database.close(); resolve(); }; tx.onerror = () => reject(tx.error); };
+  }));
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '0');
+  expect(api.peerMessages.some(message => message.type === 'cache.patch' && message.remove.includes(pngHash))).toBe(true);
+  await page.getByRole('link', { name: '票夹', exact: true }).click(); await expect(page.getByText('停用P2P仍同步', { exact: true })).toBeVisible();
+  await expect(page.getByText('已校验并保存到本机缓存', { exact: true })).toBeVisible();
+  await page.getByRole('link', { name: '设备与状态', exact: true }).click(); await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '1');
+  await page.getByRole('button', { name: '清除本账号本机缓存', exact: true }).click(); await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '0');
+});
+
+test('a quota-failed temporary image is never advertised as a peer source', async ({ page }) => {
+  await page.addInitScript(() => { IDBObjectStore.prototype.put = function() { throw new DOMException('test quota', 'QuotaExceededError'); }; });
+  const api = await mockApi(page, { user: 'a', deviceSync: true }); await page.goto('/tickets');
+  await expect(page.getByText('本机缓存空间不足 · 当前仅临时展示', { exact: true })).toBeVisible();
+  await page.getByRole('link', { name: '设备与状态', exact: true }).click();
+  await expect(page.getByTestId('peer-status')).toHaveAttribute('data-enabled', 'true');
+  await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '0');
+  expect(api.peerMessages.filter(message => message.type === 'cache.replace').every(message => message.assetIds.length === 0)).toBe(true);
+  expect(api.peerMessages.filter(message => message.type === 'cache.patch').every(message => message.add.length === 0)).toBe(true);
+});
+
+test('online page controls and observed transport totals fit all supported viewport widths', async ({ page }, info) => {
+  await mockApi(page, { user: 'a', deviceSync: true }); await page.goto('/tickets');
+  await expect(page.getByText('已校验并保存到本机缓存', { exact: true })).toBeVisible();
+  await page.getByRole('link', { name: '设备与状态', exact: true }).click(); await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '1');
+  for (const width of [360, 390, 768, 1280, 1440]) {
+    await page.setViewportSize({ width, height: 900 }); await page.getByLabel('本页启用 P2P 加速').focus();
+    await expect(page.getByLabel('本页启用 P2P 加速')).toBeFocused(); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: info.outputPath(`devices-${width}.png`), fullPage: true });
+  }
 });
 
 test('session barrier blocks private pages and all business requests', async ({ page }) => {

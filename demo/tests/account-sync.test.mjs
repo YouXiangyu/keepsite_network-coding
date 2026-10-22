@@ -18,7 +18,7 @@ function setup(overrides = {}) {
   const transport = {
     snapshot: overrides.snapshot ?? (async () => snapshotPage()),
     changes: async (...args) => { reads.push(args.slice(0, 2)); count++; maximum = Math.max(maximum, count); try { return await (overrides.changes ?? emptyChanges)(...args); } finally { count--; } },
-    events: (hint, close) => { const connection = { hint, close, stopped: false }; connections.push(connection); return () => { connection.stopped = true; }; },
+    events: (hint, close) => { const connection = { hint, close, stopped: false }; connections.push(connection); return { stop: () => { connection.stopped = true; }, send: () => true }; },
   };
   const actor = new AccountSync('a', transport); actors.push(actor); actor.start();
   return { actor, connections, reads, maximum: () => maximum };

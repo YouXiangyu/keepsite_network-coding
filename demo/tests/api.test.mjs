@@ -5,7 +5,7 @@ import { signedSession, snapshotPage, media, png } from './web-fixtures.mjs';
 
 const apiUrl = new URL('../src/api.ts', import.meta.url).href;
 const hook = registerHooks({ resolve(specifier, context, nextResolve) {
-  if (context.parentURL === apiUrl && specifier === './data') return { url: new URL('../src/data.ts', import.meta.url).href, shortCircuit: true };
+  if (context.parentURL?.includes('/src/') && specifier.startsWith('.') && !specifier.endsWith('.ts')) return { url: new URL(specifier + '.ts', context.parentURL).href, shortCircuit: true };
   return nextResolve(specifier, context);
 } });
 const api = await import(apiUrl);
@@ -286,9 +286,9 @@ test('account cancellation promptly rejects a body that never finishes', async (
   await rejected;
 });
 
-test('malformed capabilities cannot claim unfinished device sync', async () => {
+test('malformed capabilities cannot claim a supported device sync mode', async () => {
   api.installSession(signedSession());
-  globalThis.fetch = async () => Response.json({ ...snapshotPage(), capabilities: { processing: false, deviceSync: true, cloudStorage: true } });
+  globalThis.fetch = async () => Response.json({ ...snapshotPage(), capabilities: { processing: false, deviceSync: 'enabled', cloudStorage: true } });
   await assert.rejects(api.getSnapshotPage(), /功能状态不完整/);
 });
 
@@ -412,4 +412,35 @@ test('write and lookup receipts require the server domain and never accept the o
   await assert.rejects(api.mutate('/api/tickets/item-1', 'PATCH', { operationId: 'op-1' }), /写入回执不完整/);
   globalThis.fetch = async () => Response.json({ operationId: 'op-1', applied: false, committedCursor: null });
   await assert.rejects(api.getOperationStatus('op-1'), /操作核对结果不完整/);
+});
+
+test('cloud observation counts received bytes from failed responses as well as successful downloads', async () => {
+  api.installSession(signedSession()); const events = [];
+  globalThis.fetch = async path => path.endsWith('/download') ? Response.json({ ...authorization(media().url), transport: 'server' }) : new Response(Buffer.concat([png, png]), { headers: { 'Content-Type': 'image/png' } });
+  await assert.rejects(api.downloadMedia(media(), new AbortController().signal, value => events.push(value)), /大小与记录不一致/);
+  assert.equal(events[0].event, 'start'); assert.equal(events.at(-1).event, 'failed');
+  assert.equal(events.filter(event => event.event === 'bytes').reduce((sum, event) => sum + event.bytes, 0), png.length * 2);
+});
+
+test('the shared socket accepts bounded peer envelopes but closes malformed UTF-8 controls without logging out', async () => {
+  const originalSocket = globalThis.WebSocket, originalWindow = globalThis.window, sockets = [];
+  class Socket extends EventTarget {
+    static OPEN = 1; readyState = 1; bufferedAmount = 0; sent = [];
+    constructor(url) { super(); this.url = String(url); sockets.push(this); }
+    close() { this.readyState = 3; this.dispatchEvent(new Event('close')); }
+    send(value) { this.sent.push(value); }
+  }
+  globalThis.WebSocket = Socket; globalThis.window = { location: { origin: 'https://memoverse.example' } };
+  api.installSession(signedSession()); let closed = 0; const received = [];
+  let connection;
+  try {
+    connection = api.openSyncEvents(value => received.push(value), () => { closed++; });
+    assert.equal(sockets[0].url, 'wss://memoverse.example/api/sync/events');
+    sockets[0].dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ v: 1, type: 'device.peers', serverId: 'server', userId: 'a', peers: [] }) }));
+    assert.equal(received[0].type, 'device.peers'); assert.ok(received[0].wireBytes > 0);
+    assert.equal(connection.send({ v: 1, type: 'peer.signal', requestId: 'r', payload: 'x'.repeat(65536) }), false);
+    sockets[0].dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ v: 1, type: 'peer.error', serverId: 'server', userId: 'a', message: '字'.repeat(1600) }) }));
+    assert.equal(closed, 1); assert.equal(received.length, 1);
+    globalThis.fetch = async () => Response.json(snapshotPage()); assert.equal((await api.getSnapshotPage()).userId, 'a');
+  } finally { connection?.stop(); globalThis.WebSocket = originalSocket; globalThis.window = originalWindow; }
 });

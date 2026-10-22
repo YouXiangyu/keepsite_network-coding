@@ -13,12 +13,13 @@ import { fieldNames } from './data';
 import { MediaProvider, CacheStatus } from './MediaProvider';
 import ProcessingStatus from './features/tickets/ProcessingStatus';
 import PosterAttribution from './features/tickets/PosterAttribution';
+import DeviceStatus from './features/tickets/DeviceStatus';
 import { processingLabels, sourceLabels } from './features/tickets/processing';
 
 export default function Prototype({ session }: { session: SignedInSession }) {
   const path = useLocationPath();
   const route = parseRoute(path);
-  const { data, ready, busy, capabilities, storageError, syncError, runMutation, runReconciliation, rebuilding, connected, retry } = useAccountWorkspace(session);
+  const { data, ready, busy, capabilities, storageError, syncError, runMutation, runReconciliation, rebuilding, connected, eventPort, retry } = useAccountWorkspace(session);
   const tickets = data.tickets.filter(ticket => ticket.deletedAt === null);
   const item = 'id' in route ? tickets.find(ticket => ticket.id === route.id) : undefined;
   const [deleting, setDeleting] = useState(false);
@@ -52,9 +53,9 @@ export default function Prototype({ session }: { session: SignedInSession }) {
     <div className="status-panel"><h2>保存状态</h2><p>{item.media.original.cloudStatus === 'saved' ? '原票已保存到云端' : '原票已保存到当前服务器，尚未云存'}</p><p>{item.media.poster ? item.media.poster.cloudStatus === 'saved' ? '海报已保存到云端' : '海报尚未云存' : '暂无海报，正在显示原票'}</p><p>本机可用情况以图片下方的校验与缓存状态为准。</p></div>
     <ProcessingStatus key={item.id} ticket={item} capabilities={capabilities} busy={busy} runMutation={runMutation} runReconciliation={runReconciliation} />
     <div className="action-row"><Link to={`/tickets/${encodeURIComponent(item.id)}/edit`} className="primary-button" disabled={busy}><PencilSimple size={18} />编辑票根</Link><button className="secondary-button" disabled={busy} onClick={() => setDeleting(true)}><Trash size={18} />删除票根</button></div></section></div></>;
-  else if (route.type === 'devices') content = <><header className="page-heading"><div><span className="eyebrow">STORAGE & DEVICES</span><h1>设备与保存状态</h1><p>区分云端保存、处理进度与这台设备上的可用情况。</p></div></header><div className="device-panels"><section className="status-panel"><h2>云端保存</h2><p>{capabilities?.cloudStorage ? '已配置私有云存储；请以每张票根的保存状态为准。' : '当前服务器未配置云存储。当前保存不具备云端恢复保障。'}</p><p>上传完成并确认票根记录后，才会更新保存状态。</p><p>自动识别：{capabilities?.processing ? '配置已就绪' : '配置未就绪'}</p>{!capabilities?.processing && capabilities?.processingUnavailableReason && <p>{capabilities.processingUnavailableReason}</p>}</section><section className="status-panel"><CacheStatus /></section><section className="status-panel"><h2>设备同步</h2><p>在线设备发现与设备间图片传输尚未启用。</p><p>{connected ? '状态提示已连接，变化通过增量同步更新。' : '状态连接恢复中，正在通过增量请求核对。'}</p></section></div></>;
+  else if (route.type === 'devices') content = <><header className="page-heading"><div><span className="eyebrow">STORAGE & DEVICES</span><h1>设备与保存状态</h1><p>区分云端保存、处理进度与这台设备上的可用情况。</p></div></header><div className="device-panels"><section className="status-panel"><h2>云端保存</h2><p>{capabilities?.cloudStorage ? '已配置私有云存储；请以每张票根的保存状态为准。' : '当前服务器未配置云存储。当前保存不具备云端恢复保障。'}</p><p>上传完成并确认票根记录后，才会更新保存状态。</p><p>自动识别：{capabilities?.processing ? '配置已就绪' : '配置未就绪'}</p>{!capabilities?.processing && capabilities?.processingUnavailableReason && <p>{capabilities.processingUnavailableReason}</p>}</section><section className="status-panel"><CacheStatus /></section><section className="status-panel"><DeviceStatus /><p>{connected ? '状态提示已连接，变化通过增量同步更新。' : '状态连接恢复中，正在通过增量请求核对。'}</p></section></div></>;
   else content = <>{back}<div className="empty-state"><h1>票根或页面不存在</h1><p>记录可能已被删除，请返回票夹查看。</p></div></>;
-  return <MediaProvider accountId={session.user.id} ready={ready} tickets={data.tickets}><div className="memoverse-shell" data-authenticated="true" data-user-id={session.user.id}><a className="skip-link" href="#main-content">跳到主要内容</a>
+  return <MediaProvider accountId={session.user.id} ready={ready} tickets={data.tickets} eventPort={eventPort} deviceSync={!!capabilities?.deviceSync}><div className="memoverse-shell" data-authenticated="true" data-user-id={session.user.id}><a className="skip-link" href="#main-content">跳到主要内容</a>
     <header className="app-header"><Link to="/tickets"><Brand /></Link><nav aria-label="主导航"><Link to="/tickets" current={route.type !== 'devices'}><FilmSlate size={20} />票夹</Link><Link to="/devices" current={route.type === 'devices'}><Devices size={20} />设备与状态</Link></nav><div className="account-actions"><span>{session.user.email}</span><button className="icon-button" aria-label="退出登录" disabled={logoutBusy} onClick={() => void logout()}><SignOut size={22} /></button></div></header>
     <main className="workspace" id="main-content" aria-busy={busy}><div ref={heading} tabIndex={-1} className="page-focus-anchor" />
       {(storageError || syncError) && <div className="form-error" role="alert">{storageError || syncError}<button className="text-button" onClick={retry} disabled={busy}>重试</button></div>}

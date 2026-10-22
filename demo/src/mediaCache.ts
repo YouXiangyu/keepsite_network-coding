@@ -1,5 +1,6 @@
 import { assertSessionEpoch, downloadMedia, errorMessage, sessionAccountId, sessionEpoch } from './api';
 import type { MediaRef } from './data';
+import type { PeerAsset, PeerMediaPort } from './media/peerProtocol';
 
 export const CACHE_LIMIT = 128 * 1024 * 1024;
 export const CACHE_DATABASE = 'memoverse-media-cache-v1';
@@ -107,15 +108,16 @@ export function planCacheEviction(records: readonly { sha256: string; size: numb
   return removed;
 }
 async function writeCached(accountId: string, media: MediaRef, blob: Blob, active: Set<string>, signal: AbortSignal, guard: Guard) {
-  return transaction<void>('readwrite', signal, guard, (store, result, fail) => {
+  return transaction<string[]>('readwrite', signal, guard, (store, result, fail) => {
     const request = store.index('accountId').getAll(accountId);
     request.onsuccess = () => {
       try {
         guard();
         const records = (request.result as CachedMedia[]).filter(record => record.sha256 !== media.sha256);
-        for (const hash of planCacheEviction(records.map(record => ({ ...record, size: record.blob.size })), blob.size, active)) store.delete([accountId, hash]);
+        const removed = planCacheEviction(records.map(record => ({ ...record, size: record.blob.size })), blob.size, active);
+        for (const hash of removed) store.delete([accountId, hash]);
         store.put({ accountId, sha256: media.sha256, blob, size: blob.size, mimeType: media.mimeType, accessedAt: Date.now() } satisfies CachedMedia);
-        result();
+        result(removed);
       } catch (error) { fail(error); }
     };
   });
@@ -132,7 +134,7 @@ export async function verifyMediaBlob(blob: Blob, media: Pick<MediaRef, 'sha256'
   if (hash !== media.sha256) throw new Error('图片完整性校验失败，请重试。');
 }
 
-export interface MediaView { status: 'idle' | 'loading' | 'cached' | 'temporary' | 'quota' | 'error'; url?: string; message: string; source?: 'cache' | 's3' | 'server' }
+export interface MediaView { status: 'idle' | 'loading' | 'cached' | 'temporary' | 'quota' | 'error'; url?: string; message: string; source?: 'cache' | 'peer' | 's3' | 'server' }
 export interface CacheSummary { count: number; bytes: number; state: 'checking' | 'ready' | 'unavailable' | 'quota'; clearing: boolean; message: string }
 interface Resource { media: MediaRef; view: MediaView; controller: AbortController; references: number }
 const EMPTY_VIEW: MediaView = { status: 'idle', message: '图片尚未读取' };
@@ -143,6 +145,11 @@ export class AccountMediaCache {
   private readonly epoch: number;
   private generation = 0;
   private live = new Set<string>();
+  private liveMedia = new Map<string, MediaRef>();
+  private inventoryListeners = new Set<() => void>();
+  private peer?: PeerMediaPort;
+  private knownStored = new Set<string>();
+  private invalidStored = new Set<string>();
   private resources = new Map<string, Resource>();
   private downloads = 0;
   private queue: { resource: Resource; controller: AbortController }[] = [];
@@ -151,6 +158,36 @@ export class AccountMediaCache {
   private referenceController: AbortController | null = null;
   private summary: CacheSummary = { count: 0, bytes: 0, state: 'checking', clearing: false, message: '' };
   constructor(accountId: string) { this.accountId = accountId; this.epoch = sessionEpoch(); }
+  setPeer(peer: PeerMediaPort) { this.peer = peer; }
+  subscribeInventory = (listener: () => void) => { this.inventoryListeners.add(listener); return () => { this.inventoryListeners.delete(listener); }; };
+  private inventoryChanged() { for (const listener of this.inventoryListeners) listener(); }
+  canShare = (assetId: string) => !this.summary.clearing && this.live.has(assetId) && this.knownStored.has(assetId);
+  async listShareable(signal: AbortSignal): Promise<PeerAsset[]> {
+    const guard = () => this.guard(signal);
+    const records = await inventory(this.accountId, signal, guard); guard();
+    const valid = records.filter(record => {
+      const media = this.liveMedia.get(record.sha256);
+      return !this.invalidStored.has(record.sha256) && record.accountId === this.accountId && media && record.blob instanceof Blob && record.blob.size === media.size && record.blob.type === media.mimeType;
+    }).sort((a, b) => b.accessedAt - a.accessedAt).slice(0, 1024);
+    const stored = new Set(valid.map(record => record.sha256));
+    const removed = [...this.knownStored].filter(hash => !stored.has(hash)); this.knownStored = stored;
+    if (removed.length) this.peer?.invalidate(removed);
+    return this.summary.clearing ? [] : valid.map(record => this.liveMedia.get(record.sha256)!);
+  }
+  async readForPeer(media: PeerAsset, signal: AbortSignal): Promise<Blob | null> {
+    const guard = () => { this.guard(signal); if (!this.canShare(media.assetId)) throw abortError(); };
+    guard(); const current = this.liveMedia.get(media.assetId);
+    if (!current || current.sha256 !== media.sha256 || current.size !== media.size || current.mimeType !== media.mimeType) return null;
+    const cached = await readCached(this.accountId, media.assetId, signal, guard); guard();
+    if (!cached) { this.knownStored.delete(media.assetId); this.peer?.invalidate([media.assetId]); this.inventoryChanged(); return null; }
+    try { await verifyMediaBlob(cached.blob, media, guard); guard(); return cached.blob; }
+    catch (error) {
+      if (signal.aborted) throw error;
+      this.invalidStored.add(media.assetId); this.knownStored.delete(media.assetId); this.peer?.invalidate([media.assetId]);
+      try { await deleteCached(this.accountId, media.assetId, signal, () => this.guard(signal)); } catch { /* A failed removal is never advertised as usable. */ }
+      this.inventoryChanged(); return null;
+    }
+  }
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   snapshot = (hash: string) => this.resources.get(hash)?.view ?? EMPTY_VIEW;
   cacheSummary = () => this.summary;
@@ -170,7 +207,8 @@ export class AccountMediaCache {
     try {
       const records = await inventory(this.accountId, signal, guard);
       guard();
-      const stored = new Set(records.map(record => record.sha256));
+      const stored = new Set(records.filter(record => { const media = this.liveMedia.get(record.sha256); return media && record.blob instanceof Blob && record.blob.size === media.size && record.blob.type === media.mimeType; }).map(record => record.sha256));
+      const removed = [...this.knownStored].filter(hash => !stored.has(hash)); if (removed.length) { for (const hash of removed) this.knownStored.delete(hash); this.peer?.invalidate(removed); this.inventoryChanged(); }
       for (const resource of this.resources.values()) if (resource.view.status === 'cached' && !stored.has(resource.media.sha256)) {
         this.update(resource, { ...resource.view, status: 'temporary', message: '本机缓存已被回收 · 当前仅临时展示' });
       }
@@ -179,6 +217,7 @@ export class AccountMediaCache {
     } catch (error) {
       if (signal.aborted || generation !== this.generation) return;
       try { guard(); } catch { return; }
+      this.knownStored.clear(); this.peer?.invalidate(); this.inventoryChanged();
       this.summary = { ...this.summary, state: 'unavailable', message: '本机缓存不可用，图片仍可临时展示。' };
       this.notify();
     }
@@ -191,8 +230,10 @@ export class AccountMediaCache {
   }
   setReferences(media: MediaRef[]) {
     const next = new Set(media.map(item => item.sha256));
+    this.liveMedia = new Map(media.map(item => [item.sha256, item]));
     if (next.size === this.live.size && [...next].every(hash => this.live.has(hash)) && this.summary.state !== 'checking') return;
     this.referenceController?.abort();
+    const removed = [...this.live].filter(hash => !next.has(hash)); if (removed.length) { this.peer?.invalidate(removed); for (const hash of removed) this.knownStored.delete(hash); }
     this.live = next;
     for (const [hash, resource] of this.resources) if (!next.has(hash)) this.releaseResource(hash, resource);
     const controller = new AbortController();
@@ -200,7 +241,7 @@ export class AccountMediaCache {
     this.maintenance.add(controller);
     const generation = this.generation;
     const guard = () => { this.guard(controller.signal, generation); if (this.live !== next) throw abortError(); };
-    void removeCached(this.accountId, next, controller.signal, guard).then(() => this.refreshSummary(controller.signal))
+    void removeCached(this.accountId, next, controller.signal, guard).then(() => { this.inventoryChanged(); return this.refreshSummary(controller.signal); })
       .catch(() => this.refreshSummary(controller.signal)).finally(() => this.maintenance.delete(controller));
   }
   acquire(media: MediaRef) {
@@ -261,28 +302,34 @@ export class AccountMediaCache {
           if (cached.accountId !== this.accountId || cached.sha256 !== media.sha256) throw new Error('缓存归属异常。');
           await verifyMediaBlob(cached.blob, media, guard);
           guard();
-          try { await writeCached(this.accountId, media, cached.blob, new Set(this.resources.keys()), signal, guard); } catch { guard(); }
+          try { const removed = await writeCached(this.accountId, media, cached.blob, new Set(this.resources.keys()), signal, guard); for (const hash of removed) this.knownStored.delete(hash); this.peer?.invalidate(removed); this.invalidStored.delete(media.assetId); this.knownStored.add(media.assetId); this.inventoryChanged(); } catch { guard(); }
           guard();
           this.update(resource, { status: 'cached', url: URL.createObjectURL(cached.blob), message: '本机缓存可用 · 已校验', source: 'cache' });
+          this.peer?.recordCache(cached.blob.size);
           return;
         } catch {
           guard();
-          try { await deleteCached(this.accountId, media.sha256, signal, guard); await this.refreshSummary(signal); } catch { guard(); }
+          this.invalidStored.add(media.sha256); this.knownStored.delete(media.sha256); this.peer?.invalidate([media.sha256]);
+          try { await deleteCached(this.accountId, media.sha256, signal, guard); this.inventoryChanged(); await this.refreshSummary(signal); } catch { guard(); }
         }
       }
-      const result = await downloadMedia(media, signal);
-      await verifyMediaBlob(result.blob, media, guard);
+      const peerResult = await this.peer?.tryDownload(media, signal); guard();
+      const result = peerResult ?? await downloadMedia(media, signal, observation => this.peer?.recordCloud(observation.id, observation.transport, observation.event, observation.bytes));
+      try { await verifyMediaBlob(result.blob, media, guard); }
+      catch (error) { if ('downloadId' in result) this.peer?.recordCloud(result.downloadId, result.transport, 'failed'); throw error; }
+      if ('downloadId' in result) this.peer?.recordCloud(result.downloadId, result.transport, 'complete');
       let status: MediaView['status'] = 'cached';
       let message = '已校验并保存到本机缓存';
       try {
-        await writeCached(this.accountId, media, result.blob, new Set(this.resources.keys()), signal, guard);
+        const removed = await writeCached(this.accountId, media, result.blob, new Set(this.resources.keys()), signal, guard);
+        for (const hash of removed) this.knownStored.delete(hash); this.peer?.invalidate(removed); this.invalidStored.delete(media.assetId); this.knownStored.add(media.assetId); this.inventoryChanged();
       } catch (error) {
         guard();
         status = storageFailure(error) === 'quota' ? 'quota' : 'temporary';
         message = status === 'quota' ? '本机缓存空间不足 · 当前仅临时展示' : '本机缓存不可用 · 当前仅临时展示';
       }
       guard();
-      this.update(resource, { status, url: URL.createObjectURL(result.blob), message, source: result.transport });
+      this.update(resource, { status, url: URL.createObjectURL(result.blob), message: (result.transport === 'peer' ? '来自本人在线页面 · ' : '') + message, source: result.transport });
       await this.refreshSummary(signal);
       if (status === 'quota') { this.summary = { ...this.summary, state: 'quota', message }; this.notify(); }
     } catch (error) {
@@ -293,6 +340,7 @@ export class AccountMediaCache {
   }
   async clear() {
     if (this.summary.clearing) return;
+    this.peer?.invalidate(); this.knownStored.clear();
     for (const resource of this.resources.values()) resource.controller.abort();
     for (const controller of this.maintenance) controller.abort();
     const controller = new AbortController();
@@ -307,6 +355,7 @@ export class AccountMediaCache {
         ? { ...resource.view, status: 'temporary', message: '本机缓存已清除 · 当前仅临时展示' }
         : { status: 'error', message: '清理缓存已取消下载，请重试图片。' });
       this.summary = { count: 0, bytes: 0, state: 'ready', clearing: false, message: '已清除本账号的本机缓存，云端记录和图片不受影响。' };
+      this.inventoryChanged();
     } catch (error) {
       try { guard(); } catch { return; }
       this.summary = { ...this.summary, clearing: false, state: 'unavailable', message: '本机缓存清理未完成，请重试。' };
@@ -314,6 +363,7 @@ export class AccountMediaCache {
   }
   dispose() {
     this.generation++;
+    this.peer?.invalidate(); this.knownStored.clear();
     this.queue = [];
     for (const controller of this.maintenance) controller.abort();
     this.maintenance.clear();

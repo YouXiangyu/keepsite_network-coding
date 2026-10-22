@@ -7,7 +7,7 @@ from .store import StoreError, encode
 
 def capabilities(store):
     return {"processing": store.processing_enabled, "processingUnavailableReason": store.processing_unavailable_reason,
-            "cloudStorage": isinstance(store.storage, S3ObjectStore), "deviceSync": False}
+            "cloudStorage": isinstance(store.storage, S3ObjectStore), "deviceSync": True}
 
 
 def media_ref(store, db, user_id, identifier, assets=None):

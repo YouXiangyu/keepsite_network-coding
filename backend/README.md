@@ -84,9 +84,27 @@ Redis I/O 只发生在完成的 SQL 事务之间；写操作直接提交数据�
 
 日志保留窗口为 7 天或每账号最新 10,000 条。清理只删除游标连续前缀，并在同一事务推进 `sync_baselines` 下界 B；票根墓碑、操作幂等记录及云对象不随日志清理删除。不会为分页视图无限保留旧日志；若读取期间 B 已超过 C，客户端重新建快照。失效/非法/跨账号 pageToken 统一返回 410 `snapshot_expired`；游标过期、空间改变、游标超前或日志缺口分别为 410 `cursor_expired`、`server_changed`、`cursor_ahead`、`cursor_gap`，格式 `{detail:{code,message}}`。其他错误保留 detail 字符串。
 
-`WS /api/sync/events` 仅发 ready/hint 水位元数据，不推图片或完整票夹。Store 在 SQL commit 成功并关闭连接后调用快速排队钩子；Redis Pub/Sub 是可丢失提示，断连/重连与周期 SQL 水位校准负责修复漏通知，持久事实始终由增量 HTTP 获取。旧 `/api/state` 已移除，历史全量轮询对照仅在明确的旧 commit 上运行。
+`WS /api/sync/events` 的 `sync.ready`/`sync.hint` 只发水位元数据，不推图片或完整票夹。Store 在 SQL commit 成功并关闭连接后调用快速排队钩子；Redis Pub/Sub 是可丢失提示，断连/重连与周期 SQL 水位校准负责修复漏通知，持久事实始终由增量 HTTP 获取。旧 `/api/state` 已移除，历史全量轮询对照仅在明确的旧 commit 上运行。
 
 WebSocket 不经过 HTTP middleware，因此单独复用 `AuthService.websocket_session`：精确 Origin、HttpOnly 会话 Cookie、原有 JWT/刷新/绝对到期规则；URL 不接受令牌或账号参数。每次提示前重新核验会话，退出/换号在本地删除会话提交后、上游 revoke 前立即通知连接关闭；跨进程还依赖定期复查。401/403 关闭 1008，临时认证不可用关闭 1013，不将服务暂时失败当成退出。启动失败也按生命周期释放已注册通知、线程、缓存视图与客户端。
+
+## 本人页面 P2P 信令
+
+同一 WebSocket 在客户端显式发送 `device.register` 后启用 `device.*`、`cache.*`、`peer.*` v1 消息；未登记的旧客户端仍只收到原样的 `sync.ready`/`sync.hint`。每个在线页面获得随机 `peerId`，同浏览器多标签页分别登记，重连重新生成，不保存设备 SQL 表、稳定设备 ID 或硬件指纹。`capabilities.deviceSync=true` 表示软件支持；实时是否可用以 `device.registered.enabled/reason` 为准。
+
+客户端消息固定含 `{v:1,type,requestId}`，requestId 为 1—64 位字母、数字、下划线或连字符。服务器补充 `serverId/userId`；客户端身份字段、额外字段、重复 JSON key、非整数数字和二进制帧拒绝。`device.register{name}`、`device.heartbeat`、`device.list`、`device.unregister` 管理本页面短租约；心跳 15 秒，在线有效期 45 秒。注销 P2P 不关闭同步 WebSocket。
+
+缓存清单只表示可尝试的来源，不构成文件权限。`cache.replace{revision,batchIndex,batchCount,assetIds}` 每批最多 32 个 SHA-256、最多 32 批/1,024 项，10 秒内完整收到且 SQL 授权有效才原子替换。`cache.patch{revision,add,remove}` 一次最多增减 32 项。新登记版本为 0，下一次修改使用当前版本加一；全量替换各批共用目标版本并顺序等待 ACK。ACK 为 `{revision,count,complete,nextBatchIndex}`；未完成时不会改变已发布版本，完成时 nextBatchIndex 为 null。完全相同的上一批可重试，最近一次完整操作回执保留 10 秒；乱序、旧版本或内容冲突明确拒绝。
+
+`peer.find{assetId}` 查询同账号来源，`peer.open{assetId,targetPeerId}` 创建服务端 transferId；来源收到 `peer.request`，核对本机文件后 `peer.accept`，双端收到 `peer.authorized` 后才能协商。授权绑定双方页面、双方会话和单个 asset；media 固定为 `{assetId,sha256,size,mimeType}`，无 S3 URL 或票根正文。请求方创建 offer，`peer.signal` 的 kind 仅 offer/answer/ice；offer/answer payload 为 `{type,sdp}`，ICE 为标准 candidate 字段对象或 null。`peer.renew` 续期，`peer.cancel` 终止。每次操作、递送和后台复查都重新核验双方登录会话及 SQL `referenced_asset`；内部只使用会话摘要，复用同一刷新锁与绝对到期规则。
+
+传输等待接受最多 5 秒，双端分别每 5 秒续期，授权有效期取双方租约、会话和在线期限的最小值，最多 10 秒；单次硬上限 90 秒。每 peer 的来源与请求任务合计最多 2 条，每账号 8 条，每进程 32 条。单连接每秒 20 条、突发 40 条；find/open 另限每秒 4 次、突发 8 次。控制帧及 sync 消息最多 4 KiB，信令总帧 64 KiB、SDP 文本 48 KiB、单 ICE 2 KiB、双端累计 128 个 ICE 和 512 KiB 信令。单 writer 保持同步提示优先；P2P 输出最多 32 条/256 KiB，慢消费者关闭连接。
+
+Redis 保存可丢失的登记、清单和传输租约；专用 PubSub 队列不与可合并的同步提示混用。Redis 缺失、断连、状态丢失或信令队列溢出时取消本代传输并回退 S3，恢复后重新登记和上报，不维护进程本地 P2P 兼容状态。关闭和启动失败会清理自有线程、队列、订阅和租约，不关闭借用的共享 Redis 客户端。
+
+删除最后有效引用后拒绝新的发现、接受、信令与续期，并主动通知取消；同 hash 仍有其他有效票根引用时保留权限。已发送字节不能收回；前端须在删除、退出、换号、失联和租约到期时关闭 DataChannel。S3 兜底继续使用 `GET /api/media/{assetId}/download`，获得地址不代表对象读取成功，完成读取和哈希校验才算恢复。
+
+当前 `iceServers=[]`、`turnEnabled=false`，只支持 host candidate 可达范围的直连尝试；跨公网失败使用 S3。不配置 STUN 服务或第三方 TURN，不自建中继；免费 TURN 条件和强制中继验收仍未完成。
 
 ## 迁移与备份
 

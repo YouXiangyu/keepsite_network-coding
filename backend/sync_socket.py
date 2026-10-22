@@ -1,4 +1,4 @@
-"""Cookie-authenticated outbound hints. M5 signalling is not implemented here."""
+"""Cookie-authenticated v1 hints and explicitly registered peer signalling."""
 import asyncio
 import json
 import sqlite3
@@ -12,6 +12,8 @@ from starlette.websockets import WebSocketDisconnect
 from .auth import AuthError
 from .store import StoreError
 from .sync_notifications import MAX_MESSAGE_BYTES
+from .peer_contracts import PeerProtocolError, parse_message
+from .peer_registry import RegistryError
 
 SEND_TIMEOUT_SECONDS = 5
 
@@ -21,11 +23,12 @@ class SocketEnd(Exception):
         self.code = code
 
 
-def install_sync_socket(app, hub, auth_service):
+def install_sync_socket(app, hub, auth_service, peer_service=None):
     @app.websocket("/api/sync/events")
     async def events(socket: WebSocket):
-        subscription, tasks, handshake = None, [], False
+        subscription, peer_connection, tasks, handshake = None, None, [], False
         next_heartbeat = 0
+        sent_cursor = -1
         code = 1000
         sid = socket.cookies.get(auth_service.cookie_name)
         origin = socket.headers.get("origin")
@@ -38,16 +41,18 @@ def install_sync_socket(app, hub, auth_service):
             return session
 
         async def send(kind):
-            nonlocal next_heartbeat
+            nonlocal next_heartbeat, sent_cursor
             next_heartbeat = time.monotonic() + hub.heartbeat_seconds
             await authorize()
             if subscription.close_code is not None:
                 raise SocketEnd(subscription.close_code)
+            cursor = subscription.cursor
             raw = json.dumps({"v": 1, "type": kind, "serverId": hub.server_id,
-                "userId": subscription.user_id, "cursor": subscription.cursor}, ensure_ascii=False, separators=(",", ":"))
+                "userId": subscription.user_id, "cursor": cursor}, ensure_ascii=False, separators=(",", ":"))
             if len(raw.encode()) > MAX_MESSAGE_BYTES:
                 raise SocketEnd(1011)
             await asyncio.wait_for(socket.send_text(raw), SEND_TIMEOUT_SECONDS)
+            sent_cursor = cursor
 
         async def writer():
             watermark = await asyncio.to_thread(hub.store.watermark, subscription.user_id)
@@ -64,16 +69,35 @@ def install_sync_socket(app, hub, auth_service):
                 subscription.changed.clear()
                 if subscription.close_code is not None:
                     raise SocketEnd(subscription.close_code)
-                await send("sync.hint")
+                if subscription.cursor > sent_cursor or time.monotonic() >= next_heartbeat:
+                    await send("sync.hint")
+                if peer_connection is not None:
+                    for _ in range(8):
+                        if subscription.cursor > sent_cursor or time.monotonic() >= next_heartbeat:
+                            await send("sync.hint")
+                        message = peer_connection.pop()
+                        if message is None:
+                            break
+                        await authorize()
+                        if subscription.close_code is not None:
+                            raise SocketEnd(subscription.close_code)
+                        message = await asyncio.wait_for(peer_service.prepare_outgoing(peer_connection, message), SEND_TIMEOUT_SECONDS)
+                        await asyncio.wait_for(socket.send_text(json.dumps(message, ensure_ascii=False, separators=(",", ":"))), SEND_TIMEOUT_SECONDS)
+                    if peer_connection.queue:
+                        subscription.changed.set()
 
         async def reader():
-            message = await socket.receive()
-            if message["type"] == "websocket.disconnect":
-                return
-            raw = message.get("bytes")
-            size = len(raw) if raw is not None else len(message.get("text", "").encode())
-            # Protocol ping/pong frames are consumed by Uvicorn; business input is forbidden.
-            raise SocketEnd(1009 if size > MAX_MESSAGE_BYTES else 1008)
+            while True:
+                message = await socket.receive()
+                if message["type"] == "websocket.disconnect":
+                    return
+                raw = message.get("bytes")
+                size = len(raw) if raw is not None else len(message.get("text", "").encode())
+                if peer_connection is None:
+                    raise SocketEnd(1009 if size > MAX_MESSAGE_BYTES else 1008)
+                command = parse_message(message.get("text") if raw is None else raw)
+                await authorize()
+                await asyncio.wait_for(peer_service.dispatch(peer_connection, command), SEND_TIMEOUT_SECONDS)
 
         try:
             if socket.url.query:
@@ -82,6 +106,8 @@ def install_sync_socket(app, hub, auth_service):
             handshake = True
             session = await authorize()
             subscription = hub.register(session["user"]["id"], session["sessionKey"])
+            if peer_service is not None:
+                peer_connection = peer_service.attach(subscription)
             hub.end_handshake()
             handshake = False
             await socket.accept()
@@ -91,6 +117,10 @@ def install_sync_socket(app, hub, auth_service):
                 task.result()
         except SocketEnd as error:
             code = error.code
+        except PeerProtocolError as error:
+            code = error.close_code
+        except RegistryError as error:
+            code = 1013 if error.code in ("unavailable", "capacity") else 1008
         except AuthError as error:
             code = 1008 if error.status in (401, 403) else 1013
         except StoreError as error:
@@ -111,6 +141,8 @@ def install_sync_socket(app, hub, auth_service):
                     task.cancel()
                 if tasks:
                     await asyncio.gather(*tasks, return_exceptions=True)
+                if peer_connection is not None:
+                    await peer_service.detach(peer_connection)
                 if subscription is not None:
                     hub.unregister(subscription)
                 try:

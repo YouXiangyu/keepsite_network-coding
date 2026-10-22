@@ -39,6 +39,7 @@ def create_app(data_dir: Path | None = None, *, auth_provider=None, object_store
     async def lifespan(app):
         try:
             await sync_hub.start()
+            await peer_service.start()
             if run_recovery:
                 recovery.start()
             if run_processing:
@@ -53,7 +54,10 @@ def create_app(data_dir: Path | None = None, *, auth_provider=None, object_store
                 await asyncio.gather(*stops)
             finally:
                 try:
-                    await sync_hub.stop()
+                    try:
+                        await peer_service.stop()
+                    finally:
+                        await sync_hub.stop()
                 finally:
                     sync_http.close()
                     try:
@@ -111,7 +115,12 @@ def create_app(data_dir: Path | None = None, *, auth_provider=None, object_store
         store, user["id"], user["email"], user.get("name", "")))
     from .sync_notifications import SyncNotificationHub
     from .sync_socket import install_sync_socket
+    from .peer_service import PeerService
     sync_hub = SyncNotificationHub(store, shared_state, app.state.auth)
     app.state.sync_hub = sync_hub
-    install_sync_socket(app, sync_hub, app.state.auth)
+    with store.transaction() as db:
+        server_id = db.execute("SELECT value FROM meta WHERE key='server_id'").fetchone()[0]
+    peer_service = PeerService(store, shared_state, app.state.auth, server_id)
+    app.state.peer_service = peer_service
+    install_sync_socket(app, sync_hub, app.state.auth, peer_service)
     return app
