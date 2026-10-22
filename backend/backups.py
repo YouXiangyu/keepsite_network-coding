@@ -215,6 +215,7 @@ def restore_account_backup(archive: Path, destination: Path, *, user_id: str):
                 db.executemany("INSERT INTO asset_grants VALUES (?,?)", ((user_id, identifier) for identifier in indexed["assets"]))
                 _insert(db, "tickets", manifest["tickets"])
                 _insert(db, "operations", manifest["operations"])
+                store.ensure_sync_baseline(db, user_id)
                 if db.execute("PRAGMA foreign_key_check").fetchone() or db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                     raise BackupError("Restored database integrity failure")
                 account_state(store, db, user_id)

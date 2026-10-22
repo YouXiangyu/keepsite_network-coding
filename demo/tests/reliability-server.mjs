@@ -2,12 +2,13 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sampleData, sampleItem, media } from './web-fixtures.mjs';
+import { sampleData, sampleItem, media, pngHash, otherHash, otherPng } from './web-fixtures.mjs';
 
 const root = path.resolve(fileURLToPath(new URL('../dist/client/', import.meta.url)));
 const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=', 'base64');
 let accounts = new Map();
 let csrfTokens = new Map();
+let uploads = new Map();
 let createFingerprints = new Map();
 let requests = [];
 let stalls = [];
@@ -56,7 +57,7 @@ const server = createServer(async (request, response) => {
     const body = ['POST', 'PATCH', 'PUT', 'DELETE'].includes(method) ? await bodyOf(request) : undefined;
     if (pathname === '/__test/reset' && method === 'POST') {
       for (const stalled of stalls) stalled.response.destroy();
-      accounts = new Map(); csrfTokens = new Map(); createFingerprints = new Map(); requests = []; stalls = []; hang = undefined; rejectNext = undefined;
+      accounts = new Map(); csrfTokens = new Map(); uploads = new Map(); createFingerprints = new Map(); requests = []; stalls = []; hang = undefined; rejectNext = undefined;
       return respond(response, pathname, method, { ok: true });
     }
     if (pathname === '/__test/reject' && method === 'POST') {
@@ -81,7 +82,7 @@ const server = createServer(async (request, response) => {
     if (pathname.startsWith('/api/')) {
       const cookie = request.headers.cookie?.match(/(?:^|;\s*)test-user=([^;]*)/)?.[1];
       const user = cookie === 'signed-out' ? '' : cookie || 'a';
-      requests.push({ path: pathname, method, body: Buffer.isBuffer(body) ? undefined : body });
+      requests.push({ path: pathname, method, body: Buffer.isBuffer(body) ? { uploadId: /name="uploadId"\r\n\r\n([^\r]+)/.exec(body.toString())?.[1] } : body });
       if (pathname === '/api/auth/session') return respond(response, pathname, method, session(user));
       if (pathname === '/api/auth/login') {
         const next = body.email.startsWith('b') ? 'b' : 'a';
@@ -99,8 +100,21 @@ const server = createServer(async (request, response) => {
         const operationId = pathname.split('/')[3];
         return respond(response, pathname, method, { operationId, applied: createFingerprints.has(`${user}/${operationId}`) });
       }
-      if (pathname.startsWith('/api/media/')) return respond(response, pathname, method, image, 200, 'image/png');
-      if (pathname === '/api/media') return respond(response, pathname, method, media());
+      if (pathname.startsWith('/api/uploads/')) {
+        const upload = uploads.get(`${user}/${pathname.split('/')[3]}`);
+        return respond(response, pathname, method, upload ?? { detail: '上传不存在' }, upload ? 200 : 404);
+      }
+      if (pathname.endsWith('/download')) {
+        const hash = pathname.split('/')[3];
+        return respond(response, pathname, method, { ...media(), assetId: hash, sha256: hash, url: '/api/media/' + hash, size: hash === otherHash ? otherPng.length : image.length, transport: 'server', expiresAt: Date.now() + 60000 });
+      }
+      if (pathname.startsWith('/api/media/')) return respond(response, pathname, method, pathname.endsWith(otherHash) ? otherPng : image, 200, 'image/png');
+      if (pathname === '/api/media') {
+        const uploadId = /name="uploadId"\r\n\r\n([^\r]+)/.exec(body.toString())?.[1];
+        if (!uploadId) return respond(response, pathname, method, { detail: 'uploadId required' }, 422);
+        uploads.set(`${user}/${uploadId}`, { uploadId, status: 'stored', asset: media() });
+        return respond(response, pathname, method, { ...media(), uploadId });
+      }
       if (rejectNext?.path === pathname && rejectNext.method === method) {
         rejectNext = undefined;
         return respond(response, pathname, method, { detail: '暂时无法提交，请核对后重试。' }, 503);
@@ -121,12 +135,13 @@ const server = createServer(async (request, response) => {
         const item = workspace.data.tickets.find(item => item.id === pathname.split('/')[3]);
         if (!item || item.deletedAt !== null) return respond(response, pathname, method, { detail: '票根不存在。' }, 404);
         Object.assign(item.fields, body.fields);
-        if (body.originalAssetId) item.media.original = { ...media(), assetId: body.originalAssetId, sha256: body.originalAssetId, url: '/api/media/' + body.originalAssetId };
+        if (body.originalAssetId) item.media.original = { ...media(), assetId: body.originalAssetId, sha256: body.originalAssetId, url: '/api/media/' + body.originalAssetId, size: body.originalAssetId === otherHash ? otherPng.length : image.length };
         item.version += 1;
       } else if (pathname.startsWith('/api/tickets/') && method === 'DELETE') {
         const item = workspace.data.tickets.find(item => item.id === pathname.split('/')[3]);
         if (item) item.deletedAt = Date.now();
       } else return respond(response, pathname, method, { detail: 'Not found' }, 404);
+      if (body.originalAssetId) for (const [uploadKey, upload] of uploads) if (uploadKey.startsWith(user + '/') && upload.asset.assetId === body.originalAssetId) upload.status = 'attached';
       createFingerprints.set(key, fingerprint);
       workspace.revision += 1;
       return respond(response, pathname, method, snapshot(user));

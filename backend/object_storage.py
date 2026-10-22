@@ -8,7 +8,9 @@ import io
 import os
 from pathlib import Path, PurePosixPath
 import tempfile
+import time
 from typing import BinaryIO
+from urllib.parse import parse_qs, urlsplit
 
 
 CHUNK_SIZE = 512 * 1024
@@ -58,6 +60,41 @@ class ObjectReader:
 
 
 class ObjectStore:
+    def close(self):
+        pass
+
+    @property
+    def storage_binding(self):
+        return self.cache_identity
+
+    @property
+    def cache_identity(self):
+        raise NotImplementedError
+
+    def verify(self, key, size, sha256, content_type, *, stopping=lambda: False):
+        """Read bounded bytes and verify identity; never trust a client receipt."""
+        digest, total = hashlib.sha256(), 0
+        try:
+            if stopping():
+                return False
+            with closing(self.open(key)) as incoming:
+                if incoming.size != size:
+                    raise StorageError("Object length mismatch")
+                while chunk := incoming.read(min(CHUNK_SIZE, size - total + 1)):
+                    if stopping():
+                        return False
+                    total += len(chunk)
+                    if total > size:
+                        raise StorageError("Object length mismatch")
+                    digest.update(chunk)
+        except ObjectMissing:
+            return False
+        except OSError as error:
+            raise StorageError("Object verification failed") from error
+        if total != size or digest.hexdigest() != sha256:
+            raise StorageError("Object integrity check failed")
+        return True
+
     def put_file(self, key: str, path: Path, sha256: str, content_type: str):
         with path.open("rb") as stream:
             self._put(key, stream, path.stat().st_size, sha256, content_type)
@@ -89,6 +126,15 @@ class LocalObjectStore(ObjectStore):
     def __init__(self, root: Path):
         self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def cache_identity(self):
+        return "local:" + str(self.root)
+
+    @property
+    def storage_binding(self):
+        # A verified local backup is restored in a new directory as one unit.
+        return "local"
 
     def _path(self, key):
         path = self.root.joinpath(*PurePosixPath(object_key(key)).parts)
@@ -143,29 +189,76 @@ class S3ObjectStore(ObjectStore):
     def __init__(self, bucket: str, region: str, *, client=None):
         if not bucket or not region:
             raise StorageError("S3 bucket and AWS region are required")
+        self._owns_client = client is None
         if client is None:
             import boto3
             from botocore.config import Config
             # Credentials come from the normal role/provider chain. No static
             # keys are accepted by this API or written into configuration.
-            client = boto3.client("s3", region_name=region, config=Config(
-                connect_timeout=5, read_timeout=30,
-                retries={"mode": "standard", "total_max_attempts": 3},
+            client = boto3.client("s3", region_name=region, endpoint_url=f"https://s3.{region}.amazonaws.com", config=Config(
+                signature_version="s3v4",
+                connect_timeout=3, read_timeout=5,
+                retries={"mode": "standard", "total_max_attempts": 2},
             ))
-        self.client, self.bucket = client, bucket
+        self.client, self.bucket, self.region = client, bucket, region
 
-    def _matches(self, key, size, digest):
+    def close(self):
+        if self._owns_client:
+            self.client.close()
+
+    @property
+    def cache_identity(self):
+        endpoint = getattr(getattr(self.client, "meta", None), "endpoint_url", "aws-default")
+        return f"s3:{self.region}:{self.bucket}:{endpoint}"
+
+    def verify(self, key, size, sha256, content_type, *, stopping=lambda: False):
+        key = object_key(key)
+        if stopping() or not self._matches(key, size, sha256, content_type):
+            return False
+        return not stopping()
+
+    def download_url(self, key, *, expires_seconds=60):
+        """Short HTTPS GET authorization; credentials never enter business state."""
+        from botocore.exceptions import BotoCoreError, ClientError
+        if expires_seconds != 60:
+            raise StorageError("Unsupported download authorization lifetime")
+        expected_hosts = {f"{self.bucket}.s3.{self.region}.amazonaws.com", f"s3.{self.region}.amazonaws.com"}
+        endpoint = getattr(getattr(self.client, "meta", None), "endpoint_url", None)
+        if endpoint is not None:
+            parsed = urlsplit(endpoint)
+            if parsed.scheme != "https" or parsed.hostname not in expected_hosts or parsed.username or parsed.password or parsed.port not in (None, 443):
+                raise StorageError("Unapproved S3 endpoint")
+        expires_at = int(time.time() * 1000) + expires_seconds * 1000
+        try:
+            url = self.client.generate_presigned_url("get_object", Params={"Bucket": self.bucket, "Key": object_key(key)},
+                                                     ExpiresIn=expires_seconds, HttpMethod="GET")
+        except (BotoCoreError, ClientError) as error:
+            raise StorageError("Cannot authorize private download") from error
+        parsed = urlsplit(url)
+        if parsed.scheme != "https" or parsed.hostname not in expected_hosts or parsed.username or parsed.password or parsed.port not in (None, 443):
+            raise StorageError("Unapproved S3 download URL")
+        query = parse_qs(parsed.query)
+        if query.get("X-Amz-Algorithm") != ["AWS4-HMAC-SHA256"] or query.get("X-Amz-Expires") != ["60"]:
+            raise StorageError("Download URL must use bounded SigV4 authorization")
+        return url, expires_at
+
+    def _matches(self, key, size, digest, content_type=None):
         from botocore.exceptions import BotoCoreError, ClientError
         try:
-            metadata = self.client.head_object(Bucket=self.bucket, Key=key)
+            metadata = self.client.head_object(Bucket=self.bucket, Key=key, ChecksumMode="ENABLED")
         except ClientError as error:
             if error.response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 404:
                 return False
             raise StorageError("Cannot inspect private object") from error
         except BotoCoreError as error:
             raise StorageError("Cannot inspect private object") from error
-        if metadata["ContentLength"] != size or metadata.get("Metadata", {}).get("sha256") != digest:
+        if metadata.get("ContentLength") != size or metadata.get("Metadata", {}).get("sha256") != digest:
             raise StorageError("Immutable object identity conflict")
+        expected_checksum = base64.b64encode(bytes.fromhex(digest)).decode("ascii")
+        if metadata.get("ChecksumSHA256") != expected_checksum or metadata.get("ChecksumType") not in (None, "FULL_OBJECT"):
+            raise StorageError("Verified full-object SHA-256 checksum unavailable or mismatched")
+        if content_type is not None and metadata.get("ContentType") != content_type:
+            raise StorageError("Object media type mismatch")
         return True
 
     def _put(self, key, stream, size, sha256, content_type):

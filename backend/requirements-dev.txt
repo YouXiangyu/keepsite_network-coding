@@ -1,3 +1,4 @@
 -r requirements.txt
 pytest==9.1.1
 httpx==0.28.1
+fakeredis==2.40.0

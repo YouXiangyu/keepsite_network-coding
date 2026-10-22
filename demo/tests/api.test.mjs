@@ -1,7 +1,7 @@
 import { test, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { registerHooks } from 'node:module';
-import { signedSession, serverState } from './web-fixtures.mjs';
+import { signedSession, serverState, media, png } from './web-fixtures.mjs';
 
 const apiUrl = new URL('../src/api.ts', import.meta.url).href;
 const hook = registerHooks({ resolve(specifier, context, nextResolve) {
@@ -22,7 +22,7 @@ test('anonymous code cannot request workspace, upload or mutations', async () =>
   globalThis.fetch = async () => { requests += 1; throw new Error('unexpected fetch'); };
   await assert.rejects(api.getState(), error => error.status === 401);
   await assert.rejects(api.mutate('/api/tickets', 'POST', {}), error => error.status === 401);
-  await assert.rejects(api.uploadMedia(new File(['x'], 'image.png', { type: 'image/png' })), error => error.status === 401);
+  await assert.rejects(api.uploadMedia(new File(['x'], 'image.png', { type: 'image/png' }), 'upload-1'), error => error.status === 401);
   assert.equal(requests, 0);
 });
 
@@ -214,9 +214,10 @@ test('multipart uploads keep original bytes and authenticated CSRF', async () =>
     assert.equal(options.body.get('file'), file);
     assert.equal(options.headers.get('Content-Type'), null);
     assert.equal(options.headers.get('X-CSRF-Token'), 'test-csrf-a');
-    return Response.json({ assetId: 'a'.repeat(64), url: '/api/media/' + 'a'.repeat(64), sha256: 'a'.repeat(64), size: 4, width: 1, height: 1, mimeType: 'image/png' });
+    assert.equal(options.body.get('uploadId'), 'upload-1');
+    return Response.json({ uploadId: 'upload-1', assetId: 'a'.repeat(64), url: '/api/media/' + 'a'.repeat(64), sha256: 'a'.repeat(64), size: 4, width: 1, height: 1, mimeType: 'image/png' });
   };
-  assert.equal((await api.uploadMedia(file)).url, '/api/media/' + 'a'.repeat(64));
+  assert.equal((await api.uploadMedia(file, 'upload-1')).url, '/api/media/' + 'a'.repeat(64));
 });
 
 test('conflict and network errors do not turn into fake successful state', async () => {
@@ -293,10 +294,10 @@ test('malformed capabilities cannot claim unfinished device sync', async () => {
 
 test('upload confirmation rejects mismatched identities, unsupported types and incomplete dimensions', async () => {
   api.installSession(signedSession());
-  const valid = { assetId: 'a'.repeat(64), sha256: 'a'.repeat(64), url: '/api/media/' + 'a'.repeat(64), size: 4, width: 1, height: 1, mimeType: 'image/png' };
+  const valid = { uploadId: 'upload-1', assetId: 'a'.repeat(64), sha256: 'a'.repeat(64), url: '/api/media/' + 'a'.repeat(64), size: 4, width: 1, height: 1, mimeType: 'image/png' };
   for (const invalid of [{ ...valid, assetId: 'b'.repeat(64) }, { ...valid, width: 0 }, { ...valid, mimeType: 'text/html' }, { ...valid, url: '/api/media/elsewhere' }]) {
     globalThis.fetch = async () => Response.json(invalid);
-    await assert.rejects(api.uploadMedia(new File(['test'], 'ticket.png', { type: 'image/png' })), /图片上传结果不完整/);
+    await assert.rejects(api.uploadMedia(new File(['test'], 'ticket.png', { type: 'image/png' }), 'upload-1'), /图片上传结果不完整/);
   }
 });
 
@@ -319,4 +320,66 @@ test('a receipt from a replaced session cannot confirm another account draft', a
   globalThis.fetch = () => new Promise(resolve => { release = resolve; });
   const pending = api.getOperationStatus('write-1'); const rejection = assert.rejects(pending, error => error.name === 'AbortError');
   api.installSession(signedSession('b')); release(Response.json({ operationId: 'write-1', applied: true })); await rejection;
+});
+
+const signedImage = 'https://private-bucket.s3.ap-northeast-3.amazonaws.com/ticket.png?X-Amz-Signature=test';
+const authorization = (url = signedImage, expiresAt = Date.now() + 60000) => ({ url, expiresAt, transport: 's3', sha256: media().sha256, size: png.length, mimeType: 'image/png' });
+const imageResponse = () => new Response(png, { headers: { 'Content-Type': 'image/png' } });
+
+test('S3 images omit credentials and retry a rejected signature exactly once', async () => {
+  api.installSession(signedSession()); let authorizations = 0, downloads = 0;
+  globalThis.fetch = async (path, options) => {
+    if (path.endsWith('/download')) { authorizations++; assert.equal(options.credentials, 'same-origin'); return Response.json(authorization()); }
+    assert.equal(path, signedImage); assert.equal(options.credentials, 'omit'); assert.equal(options.referrerPolicy, 'no-referrer'); assert.equal(options.redirect, 'error'); assert.equal(options.headers.get('X-CSRF-Token'), null);
+    return downloads++ === 0 ? new Response('', { status: 403 }) : imageResponse();
+  };
+  const result = await api.downloadMedia(media(), new AbortController().signal);
+  assert.equal(result.transport, 's3'); assert.equal(result.blob.size, png.length); assert.equal(authorizations, 2); assert.equal(downloads, 2);
+});
+test('expired short URLs are reauthorized before any image request', async () => {
+  api.installSession(signedSession()); let authorizations = 0, downloads = 0;
+  globalThis.fetch = async path => {
+    if (path.endsWith('/download')) return Response.json(authorization(signedImage, authorizations++ === 0 ? Date.now() - 1 : Date.now() + 60000));
+    downloads++; return imageResponse();
+  };
+  await api.downloadMedia(media(), new AbortController().signal); assert.equal(authorizations, 2); assert.equal(downloads, 1);
+});
+test('S3 CORS or network failure falls back once to the authorized same-origin stream', async () => {
+  api.installSession(signedSession()); const calls = [];
+  globalThis.fetch = async (path, options) => {
+    calls.push(path);
+    if (path.endsWith('/download')) return Response.json(authorization());
+    if (path === signedImage) throw new TypeError('CORS');
+    assert.equal(path, media().url); assert.equal(options.credentials, 'same-origin'); return imageResponse();
+  };
+  const result = await api.downloadMedia(media(), new AbortController().signal);
+  assert.equal(result.transport, 'server'); assert.equal(calls.length, 3);
+});
+test('untrusted download URLs and mismatched metadata are rejected before requesting bytes', async () => {
+  api.installSession(signedSession());
+  for (const invalid of [authorization('https://evil.test/image'), authorization('https://private.s3.us-east-1.amazonaws.com.evil.test/image'), { ...authorization(), sha256: 'b'.repeat(64) }, { ...authorization(), transport: 'server', url: '/api/media/another' }]) {
+    let calls = 0; globalThis.fetch = async () => { calls++; return Response.json(invalid); };
+    await assert.rejects(api.downloadMedia(media(), new AbortController().signal), /图片下载授权不完整/); assert.equal(calls, 1);
+  }
+});
+test('media streams reject unexpected bytes instead of allocating unbounded images', async () => {
+  api.installSession(signedSession());
+  globalThis.fetch = async path => path.endsWith('/download')
+    ? Response.json({ ...authorization(media().url), transport: 'server' })
+    : new Response(Buffer.concat([png, png]), { headers: { 'Content-Type': 'image/png' } });
+  await assert.rejects(api.downloadMedia(media(), new AbortController().signal), /图片大小与记录不一致/);
+});
+test('account replacement cancels a signed image and prevents fallback into the new session', async () => {
+  api.installSession(signedSession('a')); let started, release; const downloading = new Promise(resolve => { started = resolve; }); let calls = 0;
+  globalThis.fetch = async path => { calls++; if (path.endsWith('/download')) return Response.json(authorization()); started(); return new Promise(resolve => { release = resolve; }); };
+  const pending = api.downloadMedia(media(), new AbortController().signal); const rejected = assert.rejects(pending, error => error.name === 'AbortError');
+  await downloading; api.installSession(signedSession('b')); release(imageResponse()); await rejected; assert.equal(calls, 2);
+});
+test('upload status cannot confuse another intent or mark a pending object usable', async () => {
+  api.installSession(signedSession());
+  for (const invalid of [{ uploadId: 'other', status: 'stored', asset: media() }, { uploadId: 'upload-1', status: 'pending', asset: media() }, { uploadId: 'upload-1', status: 'attached', asset: null }]) {
+    globalThis.fetch = async () => Response.json(invalid); await assert.rejects(api.getUploadStatus('upload-1'), /上传核对结果不完整/);
+  }
+  globalThis.fetch = async () => Response.json({ uploadId: 'upload-1', status: 'stored', asset: media() });
+  assert.equal((await api.getUploadStatus('upload-1')).asset.assetId, media().assetId);
 });

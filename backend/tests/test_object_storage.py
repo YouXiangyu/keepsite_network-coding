@@ -16,16 +16,19 @@ class FakeS3Client:
         self.objects = {}
         self.readers = []
         self.writes = 0
+        self.content_types = {}
 
     @staticmethod
     def error(status):
         return ClientError({"Error": {"Code": str(status), "Message": "test failure"}, "ResponseMetadata": {"HTTPStatusCode": status}}, "fixture")
 
-    def head_object(self, *, Bucket, Key):
+    def head_object(self, *, Bucket, Key, ChecksumMode):
+        assert ChecksumMode == "ENABLED"
         if Key not in self.objects:
             raise self.error(404)
         raw, metadata = self.objects[Key]
-        return {"ContentLength": len(raw), "Metadata": metadata}
+        return {"ContentLength": len(raw), "Metadata": metadata, "ContentType": self.content_types.get(Key, "image/png"),
+                "ChecksumSHA256": base64.b64encode(hashlib.sha256(raw).digest()).decode(), "ChecksumType": "FULL_OBJECT"}
 
     def put_object(self, **request):
         assert request["IfNoneMatch"] == "*"
@@ -38,6 +41,7 @@ class FakeS3Client:
         if base64.b64encode(hashlib.sha256(raw).digest()).decode() != request["ChecksumSHA256"]:
             raise self.error(400)
         self.objects[request["Key"]] = (raw, request["Metadata"])
+        self.content_types[request["Key"]] = request["ContentType"]
         self.writes += 1
 
     def get_object(self, *, Bucket, Key):
@@ -117,3 +121,43 @@ def test_s3_transport_failures_are_actionable_storage_errors(monkeypatch, method
             store.open("media/test.png")
         else:
             store.put_bytes("media/test.png", b"x", hashlib.sha256(b"x").hexdigest(), "image/png")
+
+
+@pytest.mark.parametrize("damage", ["missing-checksum", "composite", "mime", "size"])
+def test_s3_verification_rejects_unverifiable_object_headers(damage):
+    from account_fixtures import image_bytes
+    client = FakeS3Client()
+    store = S3ObjectStore("test-bucket", "ap-northeast-1", client=client)
+    raw = image_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    key = f"media/{digest}.png"
+    store.put_bytes(key, raw, digest, "image/png")
+    original_head = client.head_object
+    def changed(**kwargs):
+        result = original_head(**kwargs)
+        if damage == "missing-checksum":
+            result.pop("ChecksumSHA256")
+        elif damage == "composite":
+            result["ChecksumType"] = "COMPOSITE"
+        elif damage == "mime":
+            result["ContentType"] = "text/html"
+        else:
+            result["ContentLength"] += 1
+        return result
+    client.head_object = changed
+    with pytest.raises(StorageError):
+        store.verify(key, len(raw), digest, "image/png")
+    assert client.readers == []
+
+
+def test_local_verification_wraps_io_failure_and_closes_stream(tmp_path, monkeypatch):
+    class BrokenStream(io.BytesIO):
+        def read(self, *args):
+            raise OSError("injected broken stream")
+    from backend.object_storage import ObjectReader
+    store = LocalObjectStore(tmp_path / "objects")
+    stream = BrokenStream(b"a")
+    monkeypatch.setattr(store, "open", lambda key: ObjectReader(stream, 1))
+    with pytest.raises(StorageError):
+        store.verify("media/test.png", 1, "0" * 64, "image/png")
+    assert stream.closed

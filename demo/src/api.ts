@@ -1,4 +1,4 @@
-import { validateData, validMedia, type AppData } from './data';
+import { validateData, validMedia, type AppData, type MediaRef } from './data';
 
 export const API_BASE = '';
 export interface User { id: string; email: string; name: string }
@@ -46,6 +46,9 @@ export const errorMessage = (error: unknown) => error instanceof Error ? error.m
 let epoch = 0;
 let activeSession: SignedInSession | null = null;
 const pending = new Set<AbortController>();
+const sessionListeners = new Set<() => void>();
+export const sessionAccountId = () => activeSession?.user.id ?? null;
+export function onSessionChanged(listener: () => void) { sessionListeners.add(listener); return () => { sessionListeners.delete(listener); }; }
 interface SessionEnd { reason: 'expired' | 'logout'; logoutUrl?: string }
 const expiredListeners = new Set<(event: SessionEnd) => void>();
 
@@ -56,6 +59,7 @@ export function assertSessionEpoch(expected: number) {
 
 export function cancelSessionRequests() {
   epoch += 1;
+  for (const listener of sessionListeners) listener();
   for (const controller of pending) controller.abort();
   pending.clear();
 }
@@ -93,14 +97,14 @@ function requireSignedIn(session: AuthSession): SignedInSession {
   return session as SignedInSession;
 }
 
-interface RequestOptions extends RequestInit { authenticated?: boolean }
-async function request<T>(path: string, options: RequestOptions, consume: (response: Response) => Promise<T>): Promise<T> {
-  if (!path.startsWith('/api/') || path.includes('://')) throw new ApiError('请求地址无效。');
-  const { authenticated = false, ...init } = options;
+interface RequestOptions extends RequestInit { authenticated?: boolean; signedMedia?: boolean }
+async function request<T>(path: string, options: RequestOptions, consume: (response: Response, signal: AbortSignal) => Promise<T>): Promise<T> {
+  const { authenticated = false, signedMedia = false, ...init } = options;
+  if (signedMedia ? !validS3Url(path) : !path.startsWith('/api/') || path.includes('://')) throw new ApiError('请求地址无效。');
   if (authenticated && !activeSession) throw new ApiError('请先登录。', 401);
   const started = epoch;
   const headers = new Headers(init.headers);
-  if (init.method && init.method !== 'GET') {
+  if (!signedMedia && init.method && init.method !== 'GET') {
     headers.set('X-MemoVerse-Client', 'web');
     if (activeSession) headers.set('X-CSRF-Token', activeSession.csrfToken);
   }
@@ -120,9 +124,10 @@ async function request<T>(path: string, options: RequestOptions, consume: (respo
   };
   const consumeRequest = async () => {
     checkActive();
-    const response = await fetch(path, { ...init, headers, credentials: 'same-origin', signal: controller.signal });
+    const response = await fetch(path, { ...init, headers, ...(signedMedia ? { credentials: 'omit' as const, mode: 'cors' as const, referrerPolicy: 'no-referrer' as const, redirect: 'error' as const } : { credentials: 'same-origin' as const }), signal: controller.signal });
     checkActive();
     if (!response.ok) {
+      if (signedMedia) throw new ApiError('云端图片读取失败。', response.status);
       let detail = `请求未成功（${response.status}），请重试。`;
       let code: string | undefined;
       try {
@@ -138,7 +143,7 @@ async function request<T>(path: string, options: RequestOptions, consume: (respo
       }
       throw new ApiError(detail, response.status, code);
     }
-    const value = await consume(response);
+    const value = await consume(response, controller.signal);
     checkActive();
     return value;
   };
@@ -154,6 +159,7 @@ async function request<T>(path: string, options: RequestOptions, consume: (respo
     pending.delete(controller);
     controller.signal.removeEventListener('abort', rejectAborted);
     init.signal?.removeEventListener('abort', abort);
+    controller.abort();
   }
 }
 function jsonRequest<T>(path: string, options: RequestOptions = {}) {
@@ -248,13 +254,15 @@ export async function mutate(path: string, method = 'POST', body?: unknown): Pro
   assertSessionEpoch(scope);
   return checkedState(result, user);
 }
-export async function uploadMedia(file: File): Promise<MediaAsset> {
+export async function uploadMedia(file: File, uploadId: string): Promise<MediaAsset & { uploadId: string }> {
   const scope = epoch;
   const body = new FormData();
+  if (!/^[A-Za-z0-9_-]{1,120}$/.test(uploadId)) throw new ApiError('上传标识无效。');
   body.append('file', file);
-  const asset = await jsonRequest<MediaAsset>('/api/media', { method: 'POST', body, authenticated: true });
+  body.append('uploadId', uploadId);
+  const asset = await jsonRequest<MediaAsset & { uploadId: string }>('/api/media', { method: 'POST', body, authenticated: true });
   assertSessionEpoch(scope);
-  if (!validMedia({ ...asset, cloudStatus: 'not_configured' })) {
+  if (asset?.uploadId !== uploadId || !validMedia({ ...asset, cloudStatus: 'not_configured' })) {
     throw new ApiError('图片上传结果不完整，请重试。');
   }
   return asset;
@@ -267,4 +275,80 @@ export async function getOperationStatus(operationId: string): Promise<{ operati
   assertSessionEpoch(scope);
   if (!result || result.operationId !== operationId || typeof result.applied !== 'boolean') throw new ApiError('操作核对结果不完整，草稿仍保留。');
   return result;
+}
+
+export async function getUploadStatus(uploadId: string) {
+  if (!/^[A-Za-z0-9_-]{1,120}$/.test(uploadId)) throw new ApiError('上传标识无效。');
+  const scope = epoch;
+  const result = await jsonRequest<{ uploadId: string; status: 'pending' | 'stored' | 'attached'; asset: MediaAsset | null }>(`/api/uploads/${encodeURIComponent(uploadId)}`, { authenticated: true });
+  assertSessionEpoch(scope);
+  if (!result || result.uploadId !== uploadId || !['pending', 'stored', 'attached'].includes(result.status)
+    || (result.status === 'pending' ? result.asset !== null : !validMedia({ ...result.asset, cloudStatus: 'not_configured' }))) throw new ApiError('上传核对结果不完整，草稿仍保留。');
+  return result;
+}
+
+export function validS3Url(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password && !url.port && !url.hash
+      && /^(?:[a-z0-9][a-z0-9.-]*\.)?s3(?:[.-][a-z0-9-]+)?\.amazonaws\.com(?:\.cn)?$/.test(url.hostname);
+  } catch { return false; }
+}
+interface DownloadAuthorization { url: string; expiresAt: number; transport: 's3' | 'server'; sha256: string; size: number; mimeType: string }
+export async function authorizeMedia(media: MediaRef, signal: AbortSignal): Promise<DownloadAuthorization> {
+  const scope = epoch;
+  const result = await jsonRequest<DownloadAuthorization>(`/api/media/${media.assetId}/download`, { authenticated: true, signal });
+  assertSessionEpoch(scope);
+  if (!result || !Number.isSafeInteger(result.expiresAt) || result.sha256 !== media.sha256 || result.size !== media.size || result.mimeType !== media.mimeType
+    || (result.transport === 'server' ? result.url !== `/api/media/${media.sha256}` : result.transport !== 's3' || !validS3Url(result.url))) {
+    throw new ApiError('图片下载授权不完整。');
+  }
+  return result;
+}
+async function boundedImage(response: Response, signal: AbortSignal, media: MediaRef) {
+  const mimeType = response.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase();
+  if (mimeType !== media.mimeType || !response.body || media.size > 12 * 1024 * 1024) throw new ApiError('图片格式或大小与记录不一致。');
+  const reader = response.body.getReader();
+  const chunks: Uint8Array<ArrayBuffer>[] = [];
+  let total = 0;
+  const abort = () => { void reader.cancel().catch(() => {}); };
+  signal.addEventListener('abort', abort, { once: true });
+  try {
+    while (true) {
+      if (signal.aborted) staleRequest();
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > media.size) throw new ApiError('图片大小与记录不一致。');
+      chunks.push(new Uint8Array(value));
+    }
+    if (total !== media.size) throw new ApiError('图片下载不完整。');
+    return new Blob(chunks, { type: mimeType });
+  } finally { signal.removeEventListener('abort', abort); void reader.cancel().catch(() => {}); }
+}
+export async function downloadMedia(media: MediaRef, signal: AbortSignal): Promise<{ blob: Blob; transport: 's3' | 'server' }> {
+  const scope = epoch;
+  let authorization = await authorizeMedia(media, signal);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    assertSessionEpoch(scope);
+    if (authorization.expiresAt <= Date.now()) {
+      if (attempt === 0) { authorization = await authorizeMedia(media, signal); continue; }
+      break;
+    }
+    try {
+      const blob = await request(authorization.url, { authenticated: true, signedMedia: authorization.transport === 's3', signal }, (response, requestSignal) => boundedImage(response, requestSignal, media));
+      assertSessionEpoch(scope);
+      return { blob, transport: authorization.transport };
+    } catch (error) {
+      assertSessionEpoch(scope);
+      if (signal.aborted || error instanceof DOMException && error.name === 'AbortError') throw error;
+      if (authorization.transport === 'server') throw error;
+      if (attempt === 0 && error instanceof ApiError && error.status === 403) { authorization = await authorizeMedia(media, signal); continue; }
+      break;
+    }
+  }
+  assertSessionEpoch(scope);
+  const blob = await request(`/api/media/${media.assetId}`, { authenticated: true, signal }, (response, requestSignal) => boundedImage(response, requestSignal, media));
+  assertSessionEpoch(scope);
+  return { blob, transport: 'server' };
 }

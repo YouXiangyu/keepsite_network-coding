@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { sampleItem, media } from '../tests/web-fixtures.mjs';
+import { sampleItem, media, pngHash, otherHash, otherPng, imageFixture } from '../tests/web-fixtures.mjs';
 const password = 'ExamplePassword123!';
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=', 'base64');
 async function mockApi(page: Page, options: { user?: string; configured?: boolean; google?: boolean; sessionGate?: Promise<void>; empty?: boolean; cloud?: boolean } = {}) {
@@ -10,6 +10,7 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
     rejectVerification: false, unverifiedLogin: false, holdState: undefined as Promise<void> | undefined,
     csrfToken: undefined as string | undefined, logoutUrl: undefined as string | undefined,
     appliedOperations: new Set<string>(),
+    uploads: new Map<string, { uploadId: string; status: string; asset: ReturnType<typeof media> }>(),
   };
   const currentData = (user = server.user) => {
     if (!server.data.has(user)) { const ticket = sampleItem(); ticket.fields.title = `${user.toUpperCase()} 的电影票`; ticket.media.original.cloudStatus = options.cloud === false ? 'not_configured' : 'saved'; server.data.set(user, { tickets: options.empty ? [] : [ticket] }); }
@@ -19,7 +20,7 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
     ...(server.user ? { user: { id: server.user, email: `${server.user}@example.test`, name: server.user }, csrfToken: server.csrfToken ?? `csrf-${server.user}` } : {}) });
   const state = () => ({ initialized: true, serverId: 'web-server', userId: server.user, revision: server.revision, data: structuredClone(currentData()), capabilities: { processing: false, deviceSync: false, cloudStorage: options.cloud !== false } });
   const respond = (route: Route, value: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) });
-  await page.addInitScript(() => { (window as any).__legacyReads = 0; indexedDB.open = (() => { (window as any).__legacyReads += 1; throw new Error('Legacy data must not be read'); }) as typeof indexedDB.open; });
+  await page.addInitScript(() => { (window as any).__legacyReads = 0; const open = indexedDB.open.bind(indexedDB); indexedDB.open = ((name: string, version?: number) => { if (name === 'memoverse-media-cache-v1') return open(name, version); (window as any).__legacyReads += 1; throw new Error('Legacy data must not be read'); }) as typeof indexedDB.open; });
   await page.route('**/api/**', async route => {
     const request = route.request(), path = new URL(request.url()).pathname, method = request.method();
     let body: any; try { body = request.postDataJSON(); } catch { body = request.postData(); }
@@ -34,12 +35,15 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
     if (path === '/api/state') { const snapshot = state(), held = server.holdState; server.holdState = undefined; if (held) await held; return respond(route, snapshot).catch(() => {}); }
     if (method !== 'GET' && request.headers()['x-csrf-token'] !== (server.csrfToken ?? `csrf-${server.user}`)) return respond(route, { detail: 'CSRF' }, 403);
     if (path.startsWith('/api/operations/')) { const operationId = path.split('/')[3]; return respond(route, { operationId, applied: server.appliedOperations.has(`${server.user}/${operationId}`) }); }
-    if (path.startsWith('/api/media/')) return route.fulfill({ contentType: 'image/svg+xml', body: `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="750"><rect width="600" height="750" fill="#e6e5dd"/><rect x="45" y="140" width="510" height="470" rx="12" fill="#fffdf5"/><path d="M65 420H535" stroke="#aaa798" stroke-width="2" stroke-dasharray="9 7"/><text x="85" y="210" font-family="sans-serif" font-size="20" fill="#696958">MEMOVERSE CINEMA · SAMPLE</text><text x="85" y="295" font-family="sans-serif" font-size="48" fill="#222820">INTERSTELLAR</text><text x="85" y="355" font-family="sans-serif" font-size="22" fill="#535b4e">2026.10.22  /  19:30</text><text x="85" y="480" font-family="sans-serif" font-size="26" fill="#222820">HALL 03    ROW 05    SEAT 06</text><text x="85" y="555" font-family="sans-serif" font-size="16" fill="#696958">SYNTHETIC TEST TICKET · NOT VALID</text></svg>` });
-    if (path === '/api/media') return respond(route, media());
+    if (path.startsWith('/api/uploads/')) { const upload = server.uploads.get(`${server.user}/${path.split('/')[3]}`); return respond(route, upload ?? { detail: '未找到上传' }, upload ? 200 : 404); }
+    if (path.endsWith('/download')) return respond(route, { ...media(), transport: 'server', expiresAt: Date.now() + 60000 });
+    if (path.startsWith('/api/media/')) return route.fulfill({ contentType: 'image/png', body: path.endsWith(otherHash) ? otherPng : png });
+    if (path === '/api/media') { const uploadId = /name="uploadId"\r\n\r\n([^\r]+)/.exec(body)?.[1] ?? ''; const asset = media(); server.uploads.set(`${server.user}/${uploadId}`, { uploadId, status: 'stored', asset }); return respond(route, { ...asset, uploadId }); }
     const data = currentData();
     if (path === '/api/tickets' && method === 'POST') { const ticket = sampleItem(body.id); ticket.fields = { title: '', cinema: '', hall: '', seat: '', showtime: '', ...body.fields }; ticket.media.original.cloudStatus = options.cloud === false ? 'not_configured' : 'saved'; data.tickets.push(ticket); }
     else if (path.startsWith('/api/tickets/')) { const ticket = data.tickets.find(item => item.id === decodeURIComponent(path.split('/')[3])); if (!ticket) return respond(route, { detail: '不存在' }, 404); if (method === 'PATCH') Object.assign(ticket.fields, body.fields); else if (method === 'DELETE') ticket.deletedAt = Date.now(); else return respond(route, {}, 404); ticket.version++; }
     else return respond(route, { detail: 'Not found' }, 404);
+    if (body.originalAssetId) for (const [key, upload] of server.uploads) if (key.startsWith(server.user + '/') && upload.asset.assetId === body.originalAssetId) upload.status = 'attached';
     server.appliedOperations.add(`${server.user}/${body.operationId}`);
     server.revision++; return respond(route, state());
   });
@@ -195,7 +199,7 @@ test('direct links, refresh, back and cloud status remain accurate', async ({ pa
   await mockApi(page, { user: 'a', cloud: false }); await page.goto('/tickets/item-1');
   await expect(page.getByRole('heading', { name: 'A 的电影票' })).toBeVisible();
   await expect(page.getByText('原票已保存到当前服务器，尚未云存')).toBeVisible();
-  await expect(page.getByText('本机持久缓存未启用，图片显示不代表已缓存')).toBeVisible();
+  await expect(page.getByText('本机可用情况以图片下方的校验与缓存状态为准。')).toBeVisible();
   await page.reload(); await expect(page.getByRole('heading', { name: 'A 的电影票' })).toBeVisible();
   await page.getByRole('link', { name: '编辑票根' }).click(); await page.goBack();
   await expect(page.getByRole('heading', { name: 'A 的电影票' })).toBeVisible();
@@ -241,14 +245,14 @@ test('logout discards a late old-account state before another login', async ({ p
 });
 test('temporary photo URLs are released on replacement, navigation and logout', async ({ page }) => {
   await mockApi(page, { user: 'a' });
-  await page.addInitScript(() => { const create = URL.createObjectURL.bind(URL), revoke = URL.revokeObjectURL.bind(URL); (window as any).__urls = []; (window as any).__revoked = []; URL.createObjectURL = value => { const url = create(value); (window as any).__urls.push(url); return url; }; URL.revokeObjectURL = url => { (window as any).__revoked.push(url); revoke(url); }; });
+  await page.addInitScript(() => { const create = URL.createObjectURL.bind(URL), revoke = URL.revokeObjectURL.bind(URL); (window as any).__urls = []; (window as any).__draftUrls = []; (window as any).__revoked = []; URL.createObjectURL = value => { const url = create(value); (window as any).__urls.push(url); if (value instanceof File) (window as any).__draftUrls.push(url); return url; }; URL.revokeObjectURL = url => { (window as any).__revoked.push(url); revoke(url); }; });
   await page.goto('/tickets/new');
   const select = () => page.getByLabel('选择原票照片').setInputFiles({ name: 'ticket.png', mimeType: 'image/png', buffer: png });
   await select(); await select(); await page.getByRole('link', { name: '取消', exact: true }).click();
-  await expect.poll(() => page.evaluate(() => (window as any).__revoked.length)).toBe(2);
+  await expect.poll(() => page.evaluate(() => (window as any).__revoked.filter((url: string) => (window as any).__draftUrls.includes(url)).length)).toBe(2);
   await page.getByRole('link', { name: '上传电影票', exact: true }).click(); await select();
   await page.getByRole('button', { name: '退出登录' }).click();
-  await expect.poll(() => page.evaluate(() => (window as any).__revoked.length)).toBe(3);
+  await expect.poll(() => page.evaluate(() => (window as any).__revoked.filter((url: string) => (window as any).__draftUrls.includes(url)).length)).toBe(3);
 });
 
 test('an authenticated state 401 removes all private UI', async ({ page }) => {
@@ -267,4 +271,180 @@ test('an old detail poll cannot restore a deleted ticket', async ({ page }) => {
   await page.getByRole('button', { name: '删除票根', exact: true }).click(); await page.getByRole('button', { name: '确认删除' }).click();
   await expect(page.getByRole('heading', { name: '你的第一张电影票' })).toBeVisible(); release();
   await expect(page.getByText('A 的电影票', { exact: true })).toHaveCount(0);
+});
+
+async function cacheEntries(page: Page): Promise<{ accountId: string; sha256: string }[]> {
+  return page.evaluate(() => new Promise((resolve, reject) => {
+    const open = indexedDB.open('memoverse-media-cache-v1', 1);
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const database = open.result;
+      if (!database.objectStoreNames.contains('media')) { database.close(); resolve([]); return; }
+      const request = database.transaction('media').objectStore('media').getAll();
+      request.onsuccess = () => { const entries = request.result.map((record: any) => ({ accountId: record.accountId, sha256: record.sha256 })); database.close(); resolve(entries); };
+      request.onerror = () => { database.close(); reject(request.error); };
+    };
+  }));
+}
+const imageReads = (api: Awaited<ReturnType<typeof mockApi>>) => api.requests.filter(request => /^\/api\/media\/[a-f0-9]{64}$/.test(request.path)).length;
+
+test('verified cache survives reload and clearing recovers from the server only on the next read', async ({ page }, info) => {
+  const api = await mockApi(page, { user: 'a' }); await page.goto('/tickets');
+  await expect(page.locator('.media-availability').first()).toContainText('已校验');
+  const firstReads = imageReads(api); expect(firstReads).toBe(1);
+  await page.reload(); await expect(page.locator('.media-availability').first()).toContainText('本机缓存可用');
+  expect(imageReads(api)).toBe(firstReads);
+  await page.getByRole('link', { name: '设备与状态' }).click();
+  await expect(page.getByText(/本账号已存 1 张图片/)).toBeVisible();
+  await page.screenshot({ path: info.outputPath('cache-desktop-1440.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.screenshot({ path: info.outputPath('cache-mobile-390.png'), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole('button', { name: '清除本账号本机缓存' }).click();
+  await expect(page.getByText(/本账号已存 0 张图片/)).toBeVisible();
+  expect(await cacheEntries(page)).toEqual([]); expect(imageReads(api)).toBe(firstReads);
+  await page.getByRole('link', { name: '票夹', exact: true }).click();
+  await expect(page.locator('.media-availability').first()).toContainText('已校验');
+  expect(imageReads(api)).toBe(firstReads + 1);
+});
+test('equal hashes remain isolated across accounts and clearing B keeps A cache', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' }); await page.goto('/tickets');
+  await expect(page.locator('.media-availability').first()).toContainText('已校验');
+  await page.getByRole('button', { name: '退出登录' }).click(); await login(page, 'b@example.test');
+  await expect(page.locator('.media-availability').first()).toContainText('已校验');
+  expect(imageReads(api)).toBe(2);
+  expect((await cacheEntries(page)).map(entry => entry.accountId).sort()).toEqual(['a', 'b']);
+  await page.getByRole('link', { name: '设备与状态' }).click(); await page.getByRole('button', { name: '清除本账号本机缓存' }).click();
+  await expect(page.getByText(/本账号已存 0 张图片/)).toBeVisible();
+  expect((await cacheEntries(page)).map(entry => entry.accountId)).toEqual(['a']);
+});
+test('quota exhaustion still displays the verified cloud image without claiming it is cached', async ({ page }) => {
+  await mockApi(page, { user: 'a' });
+  await page.addInitScript(() => { IDBObjectStore.prototype.put = function() { throw new DOMException('test quota', 'QuotaExceededError'); }; });
+  await page.goto('/tickets/item-1');
+  await expect(page.locator('.ticket-image img')).toBeVisible();
+  await expect(page.locator('.media-availability')).toContainText('本机缓存空间不足');
+  expect(await cacheEntries(page)).toEqual([]);
+  await page.goto('/tickets/new');
+  await page.getByLabel('选择原票照片').setInputFiles({ name: 'quota.png', mimeType: 'image/png', buffer: png });
+  await page.getByLabel('片名').fill('缓存不足也能保存');
+  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '缓存不足也能保存' })).toBeVisible();
+  await expect(page.getByText('原票已保存到云端', { exact: true })).toBeVisible();
+  await expect(page.locator('.media-availability')).toContainText('本机缓存空间不足');
+});
+test('unavailable browser storage does not prevent a verified temporary image', async ({ page }) => {
+  await mockApi(page, { user: 'a' });
+  await page.addInitScript(() => { indexedDB.open = () => { throw new DOMException('test denied', 'SecurityError'); }; });
+  await page.goto('/tickets/item-1');
+  await expect(page.locator('.ticket-image img')).toBeVisible();
+  await expect(page.locator('.media-availability')).toContainText('本机缓存不可用');
+});
+test('a checksum mismatch is never displayed or marked cached', async ({ page }) => {
+  await mockApi(page, { user: 'a' });
+  await page.route('**/api/media/' + pngHash, route => route.fulfill({ contentType: 'image/png', body: Buffer.alloc(png.length) }));
+  await page.goto('/tickets/item-1');
+  await expect(page.locator('.media-availability')).toContainText('图片完整性校验失败');
+  await expect(page.locator('.ticket-image img')).toHaveCount(0);
+  expect(await cacheEntries(page)).toEqual([]);
+});
+test('logout during a download cannot write the old account cache', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' });
+  let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; }); let started = false;
+  await page.route('**/api/media/' + pngHash, async route => { if (api.user === 'a') { started = true; await held; await route.fulfill({ contentType: 'image/png', body: png }).catch(() => {}); } else await route.fallback(); });
+  await page.goto('/tickets'); await expect.poll(() => started).toBeTruthy();
+  await page.getByRole('button', { name: '退出登录' }).click(); await login(page, 'b@example.test'); release();
+  await expect(page.locator('.media-availability').first()).toContainText('已校验');
+  expect((await cacheEntries(page)).map(entry => entry.accountId)).toEqual(['b']);
+});
+test('logout during SHA-256 cannot publish a stale URL or write the old cache', async ({ page }) => {
+  await mockApi(page, { user: 'a' });
+  await page.addInitScript(() => {
+    const digest = crypto.subtle.digest.bind(crypto.subtle); let calls = 0;
+    crypto.subtle.digest = async (algorithm, data) => { const result = await digest(algorithm, data); if (calls++ === 0) { (window as any).__digestStarted = true; await new Promise<void>(resolve => { (window as any).__releaseDigest = resolve; }); } return result; };
+  });
+  await page.goto('/tickets'); await expect.poll(() => page.evaluate(() => (window as any).__digestStarted)).toBeTruthy();
+  await page.getByRole('button', { name: '退出登录' }).click(); await login(page, 'b@example.test');
+  await page.evaluate(() => (window as any).__releaseDigest());
+  await expect(page.locator('.media-availability').first()).toContainText('已校验');
+  expect((await cacheEntries(page)).map(entry => entry.accountId)).toEqual(['b']);
+});
+test('deletion prunes only unreferenced account images and retains shared originals', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' }); const first = sampleItem('first'), second = sampleItem('second');
+  api.data.set('a', { tickets: [first, second] }); await page.goto('/tickets');
+  await expect(page.locator('.media-availability').first()).toContainText('已校验'); expect(await cacheEntries(page)).toHaveLength(1);
+  await page.goto('/tickets/first'); await page.getByRole('button', { name: '删除票根', exact: true }).click(); await page.getByRole('button', { name: '确认删除' }).click();
+  await expect(page.locator('.ticket-card')).toHaveCount(1); expect(await cacheEntries(page)).toHaveLength(1);
+  await page.goto('/tickets/second'); await page.getByRole('button', { name: '删除票根', exact: true }).click(); await page.getByRole('button', { name: '确认删除' }).click();
+  await expect(page.getByRole('heading', { name: '你的第一张电影票' })).toBeVisible();
+  await expect.poll(() => cacheEntries(page)).toEqual([]);
+});
+
+test('focus and device status recheck storage eviction without redownloading an in-memory image', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' }); await page.goto('/tickets/item-1');
+  await expect(page.locator('.media-availability')).toContainText('已校验'); const reads = imageReads(api);
+  await page.evaluate(() => new Promise<void>((resolve, reject) => {
+    const open = indexedDB.open('memoverse-media-cache-v1', 1);
+    open.onsuccess = () => { const database = open.result, tx = database.transaction('media', 'readwrite'); tx.objectStore('media').clear(); tx.oncomplete = () => { database.close(); resolve(); }; tx.onerror = () => reject(tx.error); };
+  }));
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(page.locator('.media-availability')).toContainText('本机缓存已被回收');
+  await expect(page.locator('.ticket-image img')).toBeVisible(); expect(imageReads(api)).toBe(reads);
+  await page.getByRole('link', { name: '设备与状态' }).click();
+  await expect(page.getByText(/本账号已存 0 张图片/)).toBeVisible(); expect(imageReads(api)).toBe(reads);
+});
+
+test('a large library fetches only near-viewport images with at most four concurrent transfers', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' });
+  const images = Array.from({ length: 100 }, (_, index) => imageFixture(index + 1));
+  api.data.set('a', { tickets: images.map((image, index) => ({ ...sampleItem(`many-${index}`), createdAt: 1000 - index, media: { original: image.asset, poster: null } })) });
+  const byHash = new Map(images.map(image => [image.asset.sha256, image]));
+  let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; }); let started = 0, active = 0, maximum = 0;
+  const reads = new Map<string, number>();
+  await page.addInitScript(() => { const revoke = URL.revokeObjectURL.bind(URL); (window as any).__releasedMedia = []; URL.revokeObjectURL = url => { (window as any).__releasedMedia.push(url); revoke(url); }; });
+  await page.route('**/api/media/**', async route => {
+    const path = new URL(route.request().url()).pathname, image = byHash.get(path.split('/')[3]);
+    if (!image) return route.fallback();
+    if (path.endsWith('/download')) return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...image.asset, transport: 'server', expiresAt: Date.now() + 60000 }) });
+    started++; active++; reads.set(image.asset.sha256, (reads.get(image.asset.sha256) ?? 0) + 1); maximum = Math.max(maximum, active); await held;
+    try { await route.fulfill({ contentType: 'image/png', body: image.bytes }); } catch { /* Closed test page. */ } finally { active--; }
+  });
+  await page.goto('/tickets'); await expect.poll(() => started).toBe(4);
+  expect(maximum).toBe(4); release();
+  const eligible = await page.locator('.ticket-image').evaluateAll(nodes => nodes.filter(node => { const bounds = node.getBoundingClientRect(); return bounds.top < innerHeight + 200 && bounds.bottom > -200; }).length);
+  await expect.poll(() => started).toBe(eligible); expect(started).toBeLessThan(100); expect(maximum).toBeLessThanOrEqual(4);
+  await expect(page.locator('.media-availability').first()).toContainText('已校验');
+  const firstUrl = await page.locator('.ticket-image img').first().getAttribute('src');
+  await page.locator('.ticket-card').last().scrollIntoViewIfNeeded();
+  await expect(page.locator('.media-availability').last()).toContainText('已校验');
+  await expect.poll(() => page.evaluate(url => (window as any).__releasedMedia.includes(url), firstUrl)).toBeTruthy();
+  await page.locator('.ticket-card').first().scrollIntoViewIfNeeded();
+  await expect(page.locator('.media-availability').first()).toContainText('本机缓存可用');
+  expect(reads.get(images[0].asset.sha256)).toBe(1);
+});
+test('a collapsed original photo is not downloaded until it is opened', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' }); const poster = imageFixture(123); const ticket = sampleItem(); ticket.media.poster = poster.asset;
+  api.data.set('a', { tickets: [ticket] });
+  await page.route('**/api/media/' + poster.asset.sha256 + '**', route => new URL(route.request().url()).pathname.endsWith('/download')
+    ? route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...poster.asset, transport: 'server', expiresAt: Date.now() + 60000 }) })
+    : route.fulfill({ contentType: 'image/png', body: poster.bytes }));
+  await page.goto('/tickets/item-1'); await expect(page.locator('.media-availability').first()).toContainText('已校验');
+  expect(api.requests.filter(request => request.path === media().url)).toHaveLength(0);
+  await page.getByText('查看原票照片', { exact: true }).click();
+  await expect(page.locator('.original-photo .media-availability')).toContainText('已校验');
+  expect(api.requests.filter(request => request.path === media().url)).toHaveLength(1);
+});
+test('a corrupt cached blob is removed even when cloud retrieval also fails', async ({ page }) => {
+  await mockApi(page, { user: 'a' }); await page.goto('/tickets'); await expect(page.locator('.media-availability').first()).toContainText('已校验');
+  await page.getByRole('link', { name: '设备与状态' }).click();
+  await page.evaluate(() => new Promise<void>((resolve, reject) => {
+    const open = indexedDB.open('memoverse-media-cache-v1', 1);
+    open.onsuccess = () => { const database = open.result, tx = database.transaction('media', 'readwrite'), store = tx.objectStore('media'), request = store.openCursor();
+      request.onsuccess = () => { const cursor = request.result; if (cursor) { const record = cursor.value; record.blob = new Blob([new Uint8Array(record.size)], { type: record.mimeType }); cursor.update(record); } };
+      tx.oncomplete = () => { database.close(); resolve(); }; tx.onerror = () => reject(tx.error); };
+  }));
+  await page.route('**/api/media/' + pngHash, route => route.abort('failed'));
+  await page.getByRole('link', { name: '票夹', exact: true }).click();
+  await expect(page.locator('.media-availability').first()).toContainText('暂时无法连接服务');
+  expect(await cacheEntries(page)).toEqual([]);
 });

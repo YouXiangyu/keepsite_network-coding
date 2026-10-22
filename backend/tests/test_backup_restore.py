@@ -11,6 +11,7 @@ from backend import backups
 from backend.backups import BackupError, create_account_backup, restore_account_backup
 from backend.app import create_app
 from backend.object_storage import LocalObjectStore, ObjectReader
+from backend.shared_state import RedisSharedState
 from account_fixtures import FakeAuthFactory, ORIGIN, USERS, WRITE_HEADERS, signed_in
 from test_api import make_app, create, delete, patch, upload
 
@@ -30,7 +31,7 @@ def exported(tmp_path):
 
 
 def restored_app(destination):
-    return create_app(destination, object_store=LocalObjectStore(destination / "objects"), auth_provider=FakeAuthFactory())
+    return create_app(destination, object_store=LocalObjectStore(destination / "objects"), auth_provider=FakeAuthFactory(), shared_state=RedisSharedState(), run_recovery=False)
 
 
 def test_backup_is_scoped_and_deleted_only_media_bytes_are_not_exported(exported, tmp_path):

@@ -1,30 +1,49 @@
 """Authenticated schema-3 application. OCR and device sync are not yet enabled."""
 import logging
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from . import accounts
 from .api import install_routes
 from .backups import BackupError
-from .media import MAX_IMAGE_BYTES
+from .media import MAX_IMAGE_BYTES, UploadRecovery
 from .object_storage import ObjectMissing, StorageError, configured_store
 from .store import Store, StoreError, require_schema3_root
+from .shared_state import RedisSharedState
 
 ROOT = Path(__file__).resolve().parents[1]
 log = logging.getLogger(__name__)
 
 
-def create_app(data_dir: Path | None = None, *, auth_provider=None, object_store=None):
+def create_app(data_dir: Path | None = None, *, auth_provider=None, object_store=None, shared_state=None, run_recovery=True):
     root = Path(data_dir or os.environ.get("MEMOVERSE_DATA_DIR", ROOT / "backend/data-v3"))
     require_schema3_root(root)
     storage = object_store if object_store is not None else configured_store(root)
     store = Store(root, storage=storage)
-    app = FastAPI(title="MemoVerse Movie Ticket API", version="0.4.0")
+    shared_state = shared_state if shared_state is not None else RedisSharedState.from_env()
+    recovery = UploadRecovery(store)
+
+    @asynccontextmanager
+    async def lifespan(app):
+        if run_recovery:
+            recovery.start()
+        try:
+            yield
+        finally:
+            if run_recovery:
+                await run_in_threadpool(recovery.stop)
+            await run_in_threadpool(shared_state.close)
+            await run_in_threadpool(storage.close)
+
+    app = FastAPI(title="MemoVerse Movie Ticket API", version="0.5.0", lifespan=lifespan)
     app.state.store = store
+    app.state.shared_state, app.state.upload_recovery = shared_state, recovery
 
     @app.exception_handler(StoreError)
     async def business_error(request, error):
@@ -58,7 +77,7 @@ def create_app(data_dir: Path | None = None, *, auth_provider=None, object_store
             response.headers["Cache-Control"] = "no-store, private"
         return response
 
-    install_routes(app, store)
+    install_routes(app, store, shared_state)
     if auth_provider is None:
         from .auth import install_auth
         auth_provider = install_auth

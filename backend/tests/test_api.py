@@ -1,6 +1,7 @@
 """Schema-3 ticket contracts, authorization, persistence and failure boundaries."""
 from concurrent.futures import ThreadPoolExecutor
 import sqlite3
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,12 +9,13 @@ from fastapi.testclient import TestClient
 from backend.app import create_app
 from backend import accounts
 from backend.object_storage import LocalObjectStore, S3ObjectStore, StorageError
+from backend.shared_state import RedisSharedState
 from account_fixtures import FakeAuthFactory, ORIGIN, USERS, WRITE_HEADERS, image_bytes, signed_in
 from test_object_storage import FakeS3Client
 
 
 def make_app(root, storage=None):
-    return create_app(root / "data", auth_provider=FakeAuthFactory(),
+    return create_app(root / "data", auth_provider=FakeAuthFactory(), run_recovery=False, shared_state=RedisSharedState(),
                       object_store=storage or LocalObjectStore(root / "objects"))
 
 
@@ -30,8 +32,9 @@ def client(workspace):
     return workspace[0]
 
 
-def upload(client, color="red"):
+def upload(client, color="red", upload_id=None):
     response = client.post("/api/media", headers=WRITE_HEADERS,
+                           data={"uploadId": upload_id or str(uuid.uuid4())},
                            files={"file": ("ticket.png", image_bytes(color), "image/png")})
     assert response.status_code == 200, response.text
     assert "cloudStatus" not in response.json()
@@ -226,7 +229,7 @@ def test_persistence_and_replay_after_reopening(tmp_path):
 @pytest.mark.parametrize("raw,status", [(b"", 422), (b"not-image", 422), (b"x" * (12 * 1024 * 1024 + 1), 413)], ids=["empty", "invalid", "oversized"])
 def test_invalid_uploads_create_no_grants(workspace, raw, status):
     client, app = workspace
-    response = client.post("/api/media", headers=WRITE_HEADERS, files={"file": ("image.png", raw, "image/png")})
+    response = client.post("/api/media", headers=WRITE_HEADERS, data={"uploadId": "invalid"}, files={"file": ("image.png", raw, "image/png")})
     assert response.status_code == status
     with app.state.store.transaction() as db:
         assert db.execute("SELECT COUNT(*) FROM asset_grants").fetchone()[0] == 0
@@ -237,7 +240,7 @@ def test_storage_upload_failure_is_visible_without_committed_grant(workspace, mo
     def fail(*args):
         raise StorageError("private details")
     monkeypatch.setattr(app.state.store.storage, "put_bytes", fail)
-    response = client.post("/api/media", headers=WRITE_HEADERS, files={"file": ("a.png", image_bytes(), "image/png")})
+    response = client.post("/api/media", headers=WRITE_HEADERS, data={"uploadId": "failure"}, files={"file": ("a.png", image_bytes(), "image/png")})
     assert response.status_code == 503 and "private details" not in response.text
     with app.state.store.transaction() as db:
         assert db.execute("SELECT COUNT(*) FROM assets").fetchone()[0] == 0

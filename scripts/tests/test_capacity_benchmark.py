@@ -30,7 +30,8 @@ class CapacityBenchmarkTests(unittest.TestCase):
         # Poison ambient defaults: explicit injection must ignore these locations.
         with patch.dict(os.environ, {"MEMOVERSE_DATA_DIR": str(self.root / "must-not-open-data"),
                                      "MEMOVERSE_STORAGE": "s3",
-                                     "MEMOVERSE_S3_BUCKET": "must-not-access-cloud"}):
+                                     "MEMOVERSE_S3_BUCKET": "must-not-access-cloud",
+                                     "MEMOVERSE_REDIS_URL": "redis://must-not-connect.invalid:6379/0"}):
             report = benchmark.run_benchmark(self.root, counts=(4, 8), warmup=1, samples=2, sql_samples=2)
         self.assertEqual(len(report["cases"]), 4)
         self.assertEqual(report["application_schema_version"], 3)
@@ -45,8 +46,10 @@ class CapacityBenchmarkTests(unittest.TestCase):
             self.assertEqual(case["response_content_encoding"], "identity")
             self.assertEqual(case["row_counts"]["tickets"], count)
             self.assertEqual(case["row_counts"]["users"], 1)
-            self.assertEqual(set(case["row_counts"]), {"users", "tickets", "assets", "asset_grants", "operations"})
+            self.assertEqual(set(case["row_counts"]), {"users", "tickets", "assets", "asset_grants", "operations", "ticket_changes", "sync_baselines", "upload_intents"})
             self.assertEqual(case["row_counts"]["operations"], 0)
+            self.assertEqual(case["row_counts"]["ticket_changes"], 0)
+            self.assertEqual(case["row_counts"]["upload_intents"], 0)
             self.assertGreater(case["sql"]["select_min"], 0)
             self.assertEqual(case["sql"]["select_min"], case["sql"]["select_max"])
             self.assertEqual(case["sql"]["samples"], 2)

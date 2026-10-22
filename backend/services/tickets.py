@@ -1,7 +1,7 @@
 """Atomic field updates, operation replay, and deletion tombstones."""
 import hashlib
 import json
-from ..state import account_state
+from ..state import account_state, present_ticket
 from ..store import StoreError, encode, now_ms
 
 
@@ -42,5 +42,8 @@ def apply(store, user_id, identifier, action, body):
         else:
             raise ValueError("Unknown ticket action")
         db.execute("INSERT INTO operations VALUES (?,?,?,?)", (user_id, body.operationId, fingerprint, stamp))
+        store.ensure_sync_baseline(db, user_id)
         store.bump(db, user_id)
+        changed = db.execute("SELECT * FROM tickets WHERE user_id=? AND id=?", (user_id, identifier)).fetchone()
+        store.record_ticket_change(db, user_id, present_ticket(store, db, user_id, changed))
         return account_state(store, db, user_id)

@@ -176,6 +176,8 @@ def migrate(source: Path, media_root: Path, destination: Path):
                            VALUES (?,?,?,?,?,NULL,1,1,?,?,NULL,?)""", (
                     movie["user_id"], movie["id"], encode(fields), encode(sources), movie["asset_id"], created, max(created, timestamp), operation,
                 ))
+            for user in snapshot["users"]:
+                store.ensure_sync_baseline(db, user["id"])
             if db.execute("PRAGMA foreign_key_check").fetchall():
                 raise MigrationError("Migrated references failed validation.")
         with closing(store.connect()) as db:

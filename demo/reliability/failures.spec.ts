@@ -1,3 +1,4 @@
+import { otherHash } from '../tests/web-fixtures.mjs';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=', 'base64');
@@ -123,11 +124,11 @@ test('reconciliation merges untouched remote fields and never reattaches a confi
   await page.clock.fastForward(30001); await expect(page.getByRole('alert')).toContainText('请求超时');
   const created = (await status(request)).requests.find((entry: any) => entry.path === '/api/tickets' && entry.method === 'POST').body;
   const remote = await request.patch(`/api/tickets/${created.id}`, { headers: { 'X-CSRF-Token': 'csrf-a' }, data: { operationId: 'remote-fields', fields: { cinema: '另一台设备填写的影院' } } }); expect(remote.ok()).toBeTruthy();
-  const replacement = 'b'.repeat(64);
+  const replacement = otherHash;
   const changedPhoto = await request.patch(`/api/tickets/${created.id}`, { headers: { 'X-CSRF-Token': 'csrf-a' }, data: { operationId: 'remote-photo', originalAssetId: replacement } }); expect(changedPhoto.ok()).toBeTruthy();
   await page.getByRole('button', { name: '核对保存结果，保留草稿' }).click();
   await expect(page.getByLabel('影院')).toHaveValue('另一台设备填写的影院');
-  await expect(page.getByRole('img', { name: '原票预览' })).toHaveAttribute('src', '/api/media/' + replacement);
+  await expect(page.getByRole('img', { name: '原票预览' })).toHaveAttribute('src', /^blob:/);
   await page.getByLabel('片名').fill('新的片名'); await page.getByRole('button', { name: '保存票根', exact: true }).click();
   await expect(page.getByRole('heading', { name: '新的片名' })).toBeVisible();
   const writes = (await status(request)).requests.filter((entry: any) => entry.method === 'PATCH');
@@ -185,4 +186,20 @@ test('a confirmed create deleted elsewhere cannot be mistaken for an unsaved new
   await page.getByRole('button', { name: '核对保存结果，保留草稿' }).click();
   await expect(page.getByRole('alert')).toContainText('已保存的票根已被删除');
   await expect(page.getByRole('button', { name: '保存票根', exact: true })).toBeDisabled();
+});
+
+test('an upload with a lost response is reconciled without uploading its bytes twice', async ({ page, request }) => {
+  await page.clock.install(); await page.goto('/tickets/new');
+  await page.getByLabel('选择原票照片').setInputFiles({ name: 'photo.png', mimeType: 'image/png', buffer: png });
+  await page.getByLabel('片名').fill('上传回执核对'); await hang(request, '/api/media', 'POST');
+  await waitForHeaders(page, '/api/media', () => page.getByRole('button', { name: '保存票根', exact: true }).click());
+  await page.clock.fastForward(120001); await expect(page.getByRole('alert')).toContainText('请求超时');
+  await expect(page.getByRole('img', { name: '原票预览' })).toBeVisible();
+  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '上传回执核对' })).toBeVisible();
+  const received = (await status(request)).requests;
+  const uploads = received.filter((entry: any) => entry.path === '/api/media' && entry.method === 'POST');
+  expect(uploads).toHaveLength(1); expect(uploads[0].body.uploadId).toBeTruthy();
+  expect(received.some((entry: any) => entry.path === '/api/uploads/' + uploads[0].body.uploadId)).toBeTruthy();
+  expect(received.filter((entry: any) => entry.path === '/api/tickets' && entry.method === 'POST')).toHaveLength(1);
 });

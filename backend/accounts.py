@@ -10,3 +10,4 @@ def ensure_account(store, user_id, email, name):
             return
     with store.transaction(True) as db:
         db.execute("INSERT OR IGNORE INTO users VALUES (?,?,?,?,?)", (user_id, email, name, 0, now_ms()))
+        store.ensure_sync_baseline(db, user_id)

@@ -14,7 +14,8 @@ while (queue.length) {
   const source = readFileSync(filename, 'utf8');
   const relative = path.relative(root, filename).replaceAll('\\', '/');
   if (relative.startsWith('src/mobile/')) failures.push(`${relative}: simulated device runtime is reachable from the web entry`);
-  if (/\b(indexedDB|readMigrationSource|markMigrationCompleted|makeSeedData)\b/.test(source)) failures.push(`${relative}: browser boot must not migrate or create account data`);
+  if (/\b(readMigrationSource|markMigrationCompleted|makeSeedData)\b/.test(source)) failures.push(`${relative}: browser boot must not migrate or create account data`);
+  if (/\bindexedDB\b/.test(source) && relative !== 'src/mediaCache.ts') failures.push(`${relative}: only the account-scoped media cache may open browser storage`);
   if (relative.endsWith('.ts') || relative.endsWith('.tsx')) {
     if (/\bfetch\s*\(/.test(source) && relative !== 'src/api.ts') failures.push(`${relative}: requests must use the session-scoped transport`);
     const imports = source.matchAll(/(?:\b(?:import|export)\s+(?:[^;]*?\s+from\s*)?|\bimport\s*\(\s*)['"]([^'"]+)['"]/g);
@@ -27,6 +28,8 @@ while (queue.length) {
     }
   }
 }
+const cache = readFileSync(path.join(root, 'src/mediaCache.ts'), 'utf8');
+if (!cache.includes("keyPath: ['accountId', 'sha256']") || !cache.includes("createObjectStore('media'") || !cache.includes('assertSessionEpoch') || !cache.includes('verifyMediaBlob')) failures.push('mediaCache.ts: account/content addressing and verification contract is missing');
 const html = readFileSync(path.join(root, 'index.html'), 'utf8');
 if (!/name="viewport"\s+content="width=device-width, initial-scale=1\.0"/.test(html) || /user-scalable\s*=\s*no|maximum-scale\s*=/.test(html)) failures.push('index.html: browser viewport must allow native scaling');
 const api = readFileSync(path.join(root, 'src/api.ts'), 'utf8');

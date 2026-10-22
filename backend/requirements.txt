@@ -6,3 +6,4 @@ python-multipart==0.0.32
 boto3==1.43.114
 PyJWT[crypto]==2.15.1
 cryptography==50.0.2
+redis==8.1.0

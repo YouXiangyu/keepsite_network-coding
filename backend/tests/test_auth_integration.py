@@ -8,6 +8,7 @@ from backend.app import create_app
 from backend import accounts
 from backend.auth import AuthConfig, hashed, install_auth
 from backend.object_storage import LocalObjectStore
+from backend.shared_state import RedisSharedState
 from account_fixtures import image_bytes
 from test_auth import FakeProvider
 
@@ -30,7 +31,7 @@ def integrated(tmp_path, signing_key):
     def signed_cognito_test_factory(app, data_root, *, on_authenticated):
         return install_auth(app, data_root, on_authenticated=on_authenticated,
                             config=config, provider=provider, clock=clock)
-    app = create_app(tmp_path / "account-data", auth_provider=signed_cognito_test_factory,
+    app = create_app(tmp_path / "account-data", auth_provider=signed_cognito_test_factory, run_recovery=False, shared_state=RedisSharedState(),
                      object_store=LocalObjectStore(tmp_path / "objects"))
     with TestClient(app, base_url=PUBLIC) as client:
         yield client, app, provider, config
@@ -58,6 +59,7 @@ def test_real_login_csrf_account_switch_and_logout_protect_old_urls(integrated):
     assert a["data"] == {"tickets": []}
     alice_headers = {**HEADERS, "X-CSRF-Token": alice["csrfToken"]}
     upload = client.post("/api/media", headers=alice_headers,
+                         data={"uploadId": "alice-photo"},
                          files={"file": ("private.png", image_bytes(), "image/png")})
     assert upload.status_code == 200, upload.text
     asset = upload.json()

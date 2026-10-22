@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Camera, Check } from '@phosphor-icons/react';
-import { ApiError, assertSessionEpoch, errorMessage, getOperationStatus, getState, mutate, sessionEpoch, uploadMedia } from '../../api';
+import { ApiError, assertSessionEpoch, errorMessage, getOperationStatus, getUploadStatus, getState, mutate, sessionEpoch, uploadMedia } from '../../api';
 import { emptyFields, fieldNames, type FieldName, type Ticket, type TicketFields } from '../../data';
 import type { RunMutation } from '../../app/useAccountWorkspace';
 import Link from '../../app/Link';
+import { useMedia } from '../../MediaProvider';
+import { verifyMediaBlob } from '../../mediaCache';
 
 export const fieldLabels: Record<FieldName, string> = { title: '片名', cinema: '影院', hall: '影厅', seat: '座位', showtime: '放映时间' };
 export default function TicketEditor({ item, busy, runMutation, onSaved }: {
@@ -17,7 +19,12 @@ export default function TicketEditor({ item, busy, runMutation, onSaved }: {
   const submissions = useRef(new Map<string, { operationId: string; file: File | null; fieldEdits: Partial<Record<FieldName, number>>; applied: boolean }>());
   const [deleted, setDeleted] = useState(false);
   const [editing, setEditing] = useState(!!item);
-  const [preview, setPreview] = useState(item?.media.original.url ?? '');
+  const [preview, setPreview] = useState('');
+  const [persistedMedia, setPersistedMedia] = useState(item?.media.original);
+  const originalImage = useMedia(persistedMedia, !preview);
+  const displayPreview = preview || originalImage.url;
+  const uploadIntent = useRef<{ file: File; uploadId: string; attempted: boolean } | null>(null);
+  const [uploadStatus, setUploadStatus] = useState('');
   const [error, setError] = useState('');
   const [uncertain, setUncertain] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -34,6 +41,8 @@ export default function TicketEditor({ item, busy, runMutation, onSaved }: {
       setError('请选择不超过 12 MiB 的 JPG、PNG 或 WebP 图片。'); return;
     }
     releasePreview(); file.current = next; uploaded.current = null;
+    uploadIntent.current = { file: next, uploadId: crypto.randomUUID(), attempted: false };
+    setUploadStatus('原票尚未上传，当前仅为页面草稿。');
     objectUrl.current = URL.createObjectURL(next); setPreview(objectUrl.current); setError('');
   };
   const submit = (event: FormEvent) => {
@@ -48,9 +57,23 @@ export default function TicketEditor({ item, busy, runMutation, onSaved }: {
       let assetId: string | undefined;
       if (selected) {
         if (uploaded.current?.file !== selected) {
-          const media = await uploadMedia(selected);
+          const intent = uploadIntent.current;
+          if (!intent || intent.file !== selected) throw new Error('上传草稿已改变，请重新选择图片。');
+          let media;
+          if (intent.attempted) {
+            try {
+              const status = await getUploadStatus(intent.uploadId);
+              if (status.status === 'attached') throw new ApiError('图片已关联票根，请先核对保存结果。', 409);
+              media = status.asset ?? undefined;
+            } catch (error) { if (!(error instanceof ApiError) || error.status !== 404) throw error; }
+          }
+          intent.attempted = true;
+          setUploadStatus('正在上传或核对原票…');
+          if (!media) media = await uploadMedia(selected, intent.uploadId);
+          await verifyMediaBlob(selected, media, () => assertSessionEpoch(scope));
           assertSessionEpoch(scope);
           if (!alive.current) throw new DOMException('编辑页面已关闭。', 'AbortError');
+          setUploadStatus('图片已上传，票根引用尚待确认；这不代表票根已保存。');
           uploaded.current = { file: selected, assetId: media.assetId };
         }
         assetId = uploaded.current!.assetId;
@@ -66,7 +89,7 @@ export default function TicketEditor({ item, busy, runMutation, onSaved }: {
       return mutate(editing ? `/api/tickets/${encodeURIComponent(id)}` : '/api/tickets', editing ? 'PATCH' : 'POST', { ...payload, operationId: operation.current.id });
     }, {
       onStart: () => setError(''),
-      onError: failure => { if (alive.current) { setError(errorMessage(failure)); setUncertain(!(failure instanceof ApiError) || failure.status === 0 || failure.status === 409 || failure.status >= 500); } },
+      onError: failure => { if (alive.current) { if (uploadIntent.current?.attempted && !uploaded.current) setUploadStatus('原票上传结果尚未确认，草稿仍保留。'); setError(errorMessage(failure)); setUncertain(!(failure instanceof ApiError) || failure.status === 0 || failure.status === 409 || failure.status >= 500); } },
       onCancel: () => { if (alive.current) { setError('保存请求已取消，结果尚未确认。请核对保存结果，草稿仍保留。'); setUncertain(true); } },
       onSuccess: next => {
         if (!alive.current) return;
@@ -120,7 +143,7 @@ export default function TicketEditor({ item, busy, runMutation, onSaved }: {
         for (const key of touched.current.keys()) merged[key] = fields[key];
         baseline.current = current.fields;
         setFields(merged);
-        if (!file.current) setPreview(current.media.original.url);
+        if (!file.current) { setPreview(''); setPersistedMedia(current.media.original); setUploadStatus(''); }
         setEditing(true);
         if (operation.current && submissions.current.get(operation.current.id)?.applied) operation.current = null;
       }
@@ -131,9 +154,11 @@ export default function TicketEditor({ item, busy, runMutation, onSaved }: {
   return <section><h1>{editing ? '编辑票根' : '上传电影票'}</h1><p className="page-intro">保留原票照片，电影信息可以稍后补充。</p>
     <form className="ticket-editor" onSubmit={submit}><fieldset disabled={busy}>
       <div><button type="button" className="upload-card" onClick={() => fileInput.current?.click()}>
-        {preview ? <img src={preview} alt="原票预览" /> : <span><Camera size={36} /><strong>选择电影票照片</strong><small>JPG / PNG / WebP · 最大 12 MiB</small></span>}
+        {displayPreview ? <img src={displayPreview} alt="原票预览" /> : <span><Camera size={36} /><strong>选择电影票照片</strong><small>JPG / PNG / WebP · 最大 12 MiB</small></span>}
       </button><input ref={fileInput} type="file" className="visually-hidden" accept="image/jpeg,image/png,image/webp" aria-label="选择原票照片" onChange={event => { select(event.target.files?.[0]); event.target.value = ''; }} />
-        <p className="field-hint">{preview ? '点击图片可以重新选择。' : ''}提交确认前仅为当前页面草稿，清除浏览器数据后无法恢复。</p>
+        <p className="field-hint">{displayPreview ? '点击图片可以重新选择。' : ''}提交确认前仅为当前页面草稿，清除浏览器数据后无法恢复。</p>
+        {uploadStatus && <p className="field-hint" role="status">{uploadStatus}</p>}
+        {!preview && persistedMedia && <p className="field-hint" role="status">{originalImage.message}</p>}
         <p className="status-note">OCR 与海报处理尚未启用。当前可以手动填写或留空。</p></div>
       <div className="ticket-fields">{fieldNames.map(key => <label key={key}>{fieldLabels[key]} <small>选填</small>
         <input type={key === 'showtime' ? 'datetime-local' : 'text'} maxLength={key === 'title' ? 120 : 200} value={fields[key]} onChange={event => { touched.current.set(key, ++editSequence.current); setFields(previous => ({ ...previous, [key]: event.target.value })); }} />

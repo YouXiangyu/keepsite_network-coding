@@ -33,6 +33,7 @@ if str(ROOT) not in sys.path:
 from fastapi.testclient import TestClient
 
 from backend.app import create_app
+from backend.shared_state import RedisSharedState
 from backend.object_storage import LocalObjectStore
 from backend.store import encode
 from backend.tests.account_fixtures import FakeAuthFactory, ORIGIN, USERS, WRITE_HEADERS, image_bytes, signed_in
@@ -97,6 +98,7 @@ def _seed(store, count: int, profile: str) -> dict[str, int]:
                        (USER_ID, identifier, encode(fields), encode({key: "user" for key in fields}),
                         descriptor["id"], None, index, index, identifier))
         store.bump(db, USER_ID)
+        db.execute("UPDATE sync_baselines SET cursor=(SELECT revision FROM users WHERE id=?) WHERE user_id=?", (USER_ID, USER_ID))
         return {row["id"]: row["size"] for row in db.execute("SELECT id,size FROM assets")}
 
 
@@ -115,7 +117,7 @@ def _checked_response(response, count: int, expected_body: bytes | None = None) 
 
 
 def _row_counts(store) -> dict[str, int]:
-    tables = ("users", "assets", "asset_grants", "tickets", "operations")
+    tables = ("users", "assets", "asset_grants", "tickets", "operations", "ticket_changes", "sync_baselines", "upload_intents")
     with store.transaction() as db:
         return {table: db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in tables}
 
@@ -158,7 +160,8 @@ def _behavior_checks(client, count: int) -> dict:
         return response.json()
 
     raw = image_bytes("purple")
-    media = success(client.post("/api/media", files={"file": ("probe.png", raw, "image/png")}, headers=WRITE_HEADERS))
+    media = success(client.post("/api/media", data={"uploadId": "probe-upload"},
+                                files={"file": ("probe.png", raw, "image/png")}, headers=WRITE_HEADERS))
     payload = {"id": "behavior-probe", "originalAssetId": media["assetId"],
                "operationId": "probe-create", "fields": {"title": "操作校验"}}
     created = client.post("/api/tickets", json=payload, headers=WRITE_HEADERS)
@@ -198,7 +201,8 @@ def _sample_case(root: Path, profile: str, count: int, warmup: int, samples: int
     with ExitStack() as guards:
         for target in ("backend.app.configured_store", "backend.api.create_account_backup"):
             guards.enter_context(patch(target, side_effect=AssertionError("Capacity baseline must not use cloud defaults or create a backup")))
-        app = create_app(root / "workspace", auth_provider=FakeAuthFactory(), object_store=storage)
+        app = create_app(root / "workspace", auth_provider=FakeAuthFactory(), object_store=storage,
+                         shared_state=RedisSharedState(), run_recovery=False)
         store = app.state.store
         with TestClient(app, base_url=ORIGIN) as client:
             signed_in(client)

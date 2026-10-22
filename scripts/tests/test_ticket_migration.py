@@ -87,6 +87,8 @@ def test_migration_preserves_complete_snapshot_originals_and_ownership(legacy, t
         assert ticket["media"]["original"]["cloudStatus"] == "not_configured"
         assert ticket["media"]["poster"] is None
         assert ticket["processing"]["status"] == "not_started"
+        assert db.execute("SELECT cursor FROM sync_baselines WHERE user_id='alice'").fetchone()[0] == alice["revision"]
+        assert db.execute("SELECT count(*) FROM ticket_changes").fetchone()[0] == 0
     with pytest.raises(migration.MigrationError, match="new directory"):
         migration.migrate(source, media, destination)
 

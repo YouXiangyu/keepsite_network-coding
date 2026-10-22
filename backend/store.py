@@ -41,6 +41,14 @@ def require_schema3_root(root: Path):
 class Store:
     def __init__(self, root: Path, *, storage: ObjectStore):
         require_schema3_root(root)
+        existing = root / "memoverse.sqlite3"
+        if existing.exists():
+            with closing(sqlite3.connect(existing.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+                binding = db.execute("SELECT value FROM meta WHERE key='storage_binding'").fetchone()
+                if binding and binding[0] != storage.storage_binding:
+                    raise RuntimeError("Storage binding changed: use an explicitly verified isolated restore or migration.")
+                if not binding and db.execute("SELECT COUNT(*) FROM assets").fetchone()[0]:
+                    raise RuntimeError("Storage binding is unknown for existing media: use an explicitly verified isolated restore.")
         self.root, self.storage = root.resolve(), storage
         for folder in (self.root, self.root / "tmp", self.root / "exports"):
             folder.mkdir(parents=True, exist_ok=True)
@@ -83,10 +91,32 @@ class Store:
                     fingerprint TEXT NOT NULL, created_at INTEGER NOT NULL,
                     PRIMARY KEY(user_id,id)
                 );
+                CREATE TABLE IF NOT EXISTS sync_baselines (
+                    user_id TEXT PRIMARY KEY REFERENCES users(id), cursor INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS ticket_changes (
+                    user_id TEXT NOT NULL REFERENCES users(id), cursor INTEGER NOT NULL,
+                    ticket_id TEXT NOT NULL, payload TEXT NOT NULL, created_at INTEGER NOT NULL,
+                    PRIMARY KEY(user_id,cursor)
+                );
+                CREATE TABLE IF NOT EXISTS upload_intents (
+                    user_id TEXT NOT NULL REFERENCES users(id), id TEXT NOT NULL,
+                    asset_id TEXT NOT NULL, object_key TEXT NOT NULL, mime TEXT NOT NULL,
+                    size INTEGER NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('pending','stored','attached')),
+                    storage_identity TEXT NOT NULL, created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL, last_checked_at INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY(user_id,id)
+                );
+                CREATE INDEX IF NOT EXISTS upload_pending ON upload_intents(status,last_checked_at,created_at);
                 CREATE INDEX IF NOT EXISTS tickets_active ON tickets(user_id,deleted_at,created_at);
             """)
-            for key, value in {"schema_version": "3", "server_id": str(uuid.uuid4())}.items():
+            for key, value in {"schema_version": "3", "server_id": str(uuid.uuid4()), "storage_binding": storage.storage_binding}.items():
                 db.execute("INSERT OR IGNORE INTO meta VALUES (?,?)", (key, value))
+            bound = db.execute("SELECT value FROM meta WHERE key='storage_binding'").fetchone()[0]
+            if bound != storage.storage_binding:
+                raise RuntimeError("Storage binding changed during initialization; application was not started.")
+            db.execute("INSERT OR IGNORE INTO sync_baselines SELECT id,revision FROM users")
             db.commit()
 
     def connect(self, *, timeout=15):
@@ -121,6 +151,18 @@ class Store:
             raise StoreError(401, "账号不可用，请重新登录。")
 
     @staticmethod
+    def ensure_sync_baseline(db, user_id):
+        """Imported/restored metadata begins at this cursor, not invented history."""
+        Store.require_user(db, user_id)
+        db.execute("INSERT OR IGNORE INTO sync_baselines SELECT id,revision FROM users WHERE id=?", (user_id,))
+
+    @staticmethod
+    def record_ticket_change(db, user_id, ticket):
+        revision = Store.require_user(db, user_id)["revision"]
+        db.execute("INSERT INTO ticket_changes VALUES (?,?,?,?,?)",
+                   (user_id, revision, ticket["id"], encode(ticket), now_ms()))
+
+    @staticmethod
     def asset(db, user_id, identifier):
         row = db.execute("SELECT a.* FROM assets a JOIN asset_grants g ON g.asset_id=a.id WHERE g.user_id=? AND a.id=?", (user_id, identifier)).fetchone()
         if not row:
@@ -135,14 +177,16 @@ class Store:
             raise StoreError(404, "图片不存在或无权访问。")
         return asset
 
-    @staticmethod
-    def attach_asset(db, user_id, identifier):
+    def attach_asset(self, db, user_id, identifier):
         """Only a freshly verified upload or an existing live reference is attachable."""
         asset = Store.asset(db, user_id, identifier)
-        receipt = db.execute("SELECT 1 FROM upload_receipts WHERE user_id=? AND asset_id=?", (user_id, identifier)).fetchone()
+        receipt = db.execute("SELECT 1 FROM upload_receipts r JOIN upload_intents u ON u.user_id=r.user_id AND u.asset_id=r.asset_id WHERE r.user_id=? AND r.asset_id=? AND u.status='stored' AND u.storage_identity=? LIMIT 1",
+                             (user_id, identifier, self.storage.cache_identity)).fetchone()
         if not receipt:
             Store.referenced_asset(db, user_id, identifier)
         db.execute("DELETE FROM upload_receipts WHERE user_id=? AND asset_id=?", (user_id, identifier))
+        db.execute("UPDATE upload_intents SET status='attached',updated_at=? WHERE user_id=? AND asset_id=? AND status IN ('pending','stored')",
+                   (now_ms(), user_id, identifier))
         return asset
 
     @staticmethod
