@@ -135,7 +135,7 @@ export async function verifyMediaBlob(blob: Blob, media: Pick<MediaRef, 'sha256'
 }
 
 export interface MediaView { status: 'idle' | 'loading' | 'cached' | 'temporary' | 'quota' | 'error'; url?: string; message: string; source?: 'cache' | 'peer' | 's3' | 'server' }
-export interface CacheSummary { count: number; bytes: number; state: 'checking' | 'ready' | 'unavailable' | 'quota'; clearing: boolean; message: string }
+export interface CacheSummary { count: number; bytes: number; state: 'checking' | 'ready' | 'unavailable' | 'quota'; clearing: boolean; cleanupPending: boolean; message: string }
 interface Resource { media: MediaRef; view: MediaView; controller: AbortController; references: number }
 const EMPTY_VIEW: MediaView = { status: 'idle', message: '图片尚未读取' };
 
@@ -156,7 +156,11 @@ export class AccountMediaCache {
   private listeners = new Set<() => void>();
   private maintenance = new Set<AbortController>();
   private referenceController: AbortController | null = null;
-  private summary: CacheSummary = { count: 0, bytes: 0, state: 'checking', clearing: false, message: '' };
+  private cleanupTask: Promise<void> | null = null;
+  private cleanupPending = false;
+  private cleanupError = '';
+  private clearError = '';
+  private summary: CacheSummary = { count: 0, bytes: 0, state: 'checking', clearing: false, cleanupPending: false, message: '' };
   constructor(accountId: string) { this.accountId = accountId; this.epoch = sessionEpoch(); }
   setPeer(peer: PeerMediaPort) { this.peer = peer; }
   subscribeInventory = (listener: () => void) => { this.inventoryListeners.add(listener); return () => { this.inventoryListeners.delete(listener); }; };
@@ -212,37 +216,59 @@ export class AccountMediaCache {
       for (const resource of this.resources.values()) if (resource.view.status === 'cached' && !stored.has(resource.media.sha256)) {
         this.update(resource, { ...resource.view, status: 'temporary', message: '本机缓存已被回收 · 当前仅临时展示' });
       }
-      this.summary = { ...this.summary, count: records.length, bytes: records.reduce((total, record) => total + (record.blob instanceof Blob ? record.blob.size : 0), 0), state: 'ready', message: '' };
+      this.summary = { ...this.summary, count: records.length, bytes: records.reduce((total, record) => total + (record.blob instanceof Blob ? record.blob.size : 0), 0), state: 'ready', cleanupPending: this.cleanupPending, message: this.clearError || this.cleanupError };
       this.notify();
     } catch (error) {
       if (signal.aborted || generation !== this.generation) return;
       try { guard(); } catch { return; }
       this.knownStored.clear(); this.peer?.invalidate(); this.inventoryChanged();
-      this.summary = { ...this.summary, state: 'unavailable', message: '本机缓存不可用，图片仍可临时展示。' };
+      this.summary = { ...this.summary, state: 'unavailable', cleanupPending: this.cleanupPending, message: this.clearError || this.cleanupError || '本机缓存不可用，图片仍可临时展示。' };
       this.notify();
     }
   }
   async refresh() {
+    if (this.summary.clearing) return;
     const controller = new AbortController();
     this.maintenance.add(controller);
-    try { await this.refreshSummary(controller.signal); }
+    try { await this.pruneReferences(); await this.refreshSummary(controller.signal); }
     finally { this.maintenance.delete(controller); }
+  }
+  private pruneReferences(): Promise<void> {
+    if (!this.cleanupPending) return Promise.resolve();
+    if (this.cleanupTask) return this.cleanupTask;
+    const next = this.live, generation = this.generation, controller = new AbortController();
+    this.referenceController = controller; this.maintenance.add(controller);
+    const guard = () => { this.guard(controller.signal, generation); if (this.live !== next) throw abortError(); };
+    const task = (async () => {
+      try {
+        await removeCached(this.accountId, next, controller.signal, guard); guard();
+        this.cleanupPending = false; this.cleanupError = ''; this.summary = { ...this.summary, cleanupPending: false };
+        this.inventoryChanged();
+      } catch {
+        try { guard(); } catch { return; }
+        this.cleanupPending = true; this.cleanupError = '无引用缓存清理未完成，返回页面或重新同步后会重试。';
+        this.summary = { ...this.summary, cleanupPending: true, message: this.clearError || this.cleanupError }; this.notify();
+      } finally { this.maintenance.delete(controller); }
+    })();
+    this.cleanupTask = task;
+    void task.finally(() => { if (this.cleanupTask === task) this.cleanupTask = null; if (this.referenceController === controller) this.referenceController = null; });
+    return task;
   }
   setReferences(media: MediaRef[]) {
     const next = new Set(media.map(item => item.sha256));
     this.liveMedia = new Map(media.map(item => [item.sha256, item]));
-    if (next.size === this.live.size && [...next].every(hash => this.live.has(hash)) && this.summary.state !== 'checking') return;
+    if (next.size === this.live.size && [...next].every(hash => this.live.has(hash))) {
+      if (this.summary.state === 'checking') this.cleanupPending = true;
+      if (this.cleanupPending && !this.cleanupTask) void this.refresh();
+      return;
+    }
     this.referenceController?.abort();
+    this.referenceController = null; this.cleanupTask = null; this.cleanupPending = true;
+    this.summary = { ...this.summary, cleanupPending: true };
     const removed = [...this.live].filter(hash => !next.has(hash)); if (removed.length) { this.peer?.invalidate(removed); for (const hash of removed) this.knownStored.delete(hash); }
     this.live = next;
     for (const [hash, resource] of this.resources) if (!next.has(hash)) this.releaseResource(hash, resource);
-    const controller = new AbortController();
-    this.referenceController = controller;
-    this.maintenance.add(controller);
-    const generation = this.generation;
-    const guard = () => { this.guard(controller.signal, generation); if (this.live !== next) throw abortError(); };
-    void removeCached(this.accountId, next, controller.signal, guard).then(() => { this.inventoryChanged(); return this.refreshSummary(controller.signal); })
-      .catch(() => this.refreshSummary(controller.signal)).finally(() => this.maintenance.delete(controller));
+    void this.refresh();
   }
   acquire(media: MediaRef) {
     let resource = this.resources.get(media.sha256);
@@ -343,22 +369,25 @@ export class AccountMediaCache {
     this.peer?.invalidate(); this.knownStored.clear();
     for (const resource of this.resources.values()) resource.controller.abort();
     for (const controller of this.maintenance) controller.abort();
+    this.referenceController = null; this.cleanupTask = null;
     const controller = new AbortController();
     this.maintenance.add(controller);
-    const generation = this.generation;
+    const generation = this.generation, references = this.live;
     const guard = () => this.guard(controller.signal, generation);
-    this.summary = { ...this.summary, clearing: true, message: '' };
+    this.clearError = ''; this.summary = { ...this.summary, clearing: true, message: '' };
     this.notify();
     try {
       await removeCached(this.accountId, new Set(), controller.signal, guard);
+      if (this.live === references) { this.cleanupPending = false; this.cleanupError = ''; }
       for (const resource of this.resources.values()) this.update(resource, resource.view.url
         ? { ...resource.view, status: 'temporary', message: '本机缓存已清除 · 当前仅临时展示' }
         : { status: 'error', message: '清理缓存已取消下载，请重试图片。' });
-      this.summary = { count: 0, bytes: 0, state: 'ready', clearing: false, message: '已清除本账号的本机缓存，云端记录和图片不受影响。' };
+      this.summary = { count: 0, bytes: 0, state: 'ready', clearing: false, cleanupPending: this.cleanupPending, message: this.cleanupError || '已清除本账号的本机缓存，云端记录和图片不受影响。' };
       this.inventoryChanged();
     } catch (error) {
       try { guard(); } catch { return; }
-      this.summary = { ...this.summary, clearing: false, state: 'unavailable', message: '本机缓存清理未完成，请重试。' };
+      this.clearError = '本机缓存清理未完成，请重试。';
+      this.summary = { ...this.summary, clearing: false, state: 'unavailable', message: this.clearError };
     } finally { this.maintenance.delete(controller); this.notify(); }
   }
   dispose() {
@@ -367,6 +396,7 @@ export class AccountMediaCache {
     this.queue = [];
     for (const controller of this.maintenance) controller.abort();
     this.maintenance.clear();
+    this.referenceController = null; this.cleanupTask = null; this.cleanupPending = true;
     for (const [hash, resource] of this.resources) this.releaseResource(hash, resource);
   }
 }

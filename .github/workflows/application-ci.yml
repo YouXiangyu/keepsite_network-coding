@@ -44,7 +44,7 @@ jobs:
           python -B scripts/prepare-ocr.py --destination "$RUNNER_TEMP/ocr-models" --execute
           echo "MEMOVERSE_TEST_OCR_MODEL_DIR=$RUNNER_TEMP/ocr-models" >> "$GITHUB_ENV"
       - name: Test backend contracts, isolation, and recovery
-        run: python -B -m pytest backend/tests scripts/tests/test_capacity_benchmark.py scripts/tests/test_sync_benchmark.py scripts/tests/test_ticket_migration.py scripts/tests/test_ocr_preparation.py -q -ra --basetemp "$RUNNER_TEMP/pytest-backend" --junitxml=test-results/backend.xml
+        run: python -B -m pytest backend/tests scripts/tests/test_capacity_benchmark.py scripts/tests/test_sync_benchmark.py scripts/tests/test_processing_benchmark.py scripts/tests/test_ticket_migration.py scripts/tests/test_ocr_preparation.py -q -ra --basetemp "$RUNNER_TEMP/pytest-backend" --junitxml=test-results/backend.xml
       - name: Upload backend failure report
         if: ${{ failure() }}
         uses: actions/upload-artifact@v4
@@ -98,11 +98,20 @@ jobs:
         env:
           AWS_EC2_METADATA_DISABLED: 'true'
           PLAYWRIGHT_JUNIT_OUTPUT_FILE: test-results/p2p-junit.xml
+      - name: Test benchmark accounting and isolated browser smoke matrix
+        run: |
+          node --test ../scripts/tests/browser-benchmark.test.mjs
+          npm run build:benchmark
+          node ../scripts/benchmark-browser.mjs --count 3 --sample 3 --output "$RUNNER_TEMP/m6-browser-smoke" --execute
+        env:
+          AWS_EC2_METADATA_DISABLED: 'true'
       - name: Upload frontend failure reports and traces
         if: ${{ failure() }}
         uses: actions/upload-artifact@v4
         with:
           name: frontend-failure-reports
-          path: demo/test-results/
+          path: |
+            demo/test-results/
+            ${{ runner.temp }}/m6-browser-smoke/
           if-no-files-found: ignore
           retention-days: 7

@@ -2,7 +2,7 @@ import { expect, test, type Page, type Route } from '@playwright/test';
 import { sampleItem, media, pngHash, otherHash, otherPng, imageFixture, posterSource } from '../tests/web-fixtures.mjs';
 const password = 'ExamplePassword123!';
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=', 'base64');
-async function mockApi(page: Page, options: { user?: string; configured?: boolean; google?: boolean; sessionGate?: Promise<void>; empty?: boolean; cloud?: boolean; processing?: boolean; deviceSync?: boolean } = {}) {
+async function mockApi(page: Page, options: { user?: string; configured?: boolean; google?: boolean; sessionGate?: Promise<void>; empty?: boolean; cloud?: boolean; processing?: boolean; deviceSync?: boolean; peerName?: string } = {}) {
   const server = {
     user: options.user ?? '', configured: options.configured ?? true, google: options.google ?? false,
     requests: [] as { path: string; method: string; body: any; headers: Record<string, string> }[],
@@ -43,7 +43,7 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
     socket.onMessage(raw => {
       const message = JSON.parse(String(raw)); server.peerMessages.push(message); let response: any;
       if (message.type === 'device.register') { revision = 0; inventory = new Set(); response = { type: 'device.registered', peerId: 'web-peer', enabled: true, reason: null, heartbeatMs: 15000, leaseMs: 45000, inventoryRevision: 0, limits: { maxInventory: 1024, maxBatchAssets: 32, maxControlBytes: 4096, maxSignalBytes: 65536, maxSdpBytes: 49152, maxIceBytes: 2048, maxActiveTransfers: 2 }, iceServers: [], turnEnabled: false }; }
-      else if (message.type === 'device.list') response = { type: 'device.peers', peers: [{ peerId: 'web-peer', name: '测试浏览器页面' }] };
+      else if (message.type === 'device.list') response = { type: 'device.peers', peers: [{ peerId: 'web-peer', name: options.peerName ?? '测试浏览器页面' }] };
       else if (message.type === 'device.heartbeat') response = { type: 'device.alive', leaseMs: 45000, inventoryRevision: revision };
       else if (message.type === 'device.unregister') { inventory.clear(); response = { type: 'device.unregistered' }; }
       else if (message.type === 'cache.replace') { if (message.batchIndex === 0) staged = []; staged.push(...message.assetIds); const complete = message.batchIndex === message.batchCount - 1; if (complete) { inventory = new Set(staged); revision = message.revision; } response = { type: 'cache.ack', revision: message.revision, count: staged.length, complete, nextBatchIndex: complete ? null : message.batchIndex + 1 }; }
@@ -186,14 +186,22 @@ test('a quota-failed temporary image is never advertised as a peer source', asyn
 });
 
 test('online page controls and observed transport totals fit all supported viewport widths', async ({ page }, info) => {
-  await mockApi(page, { user: 'a', deviceSync: true }); await page.goto('/tickets');
+  await mockApi(page, { user: 'a', deviceSync: true, peerName: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef' }); await page.goto('/tickets');
   await expect(page.getByText('已校验并保存到本机缓存', { exact: true })).toBeVisible();
   await page.getByRole('link', { name: '设备与状态', exact: true }).click(); await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '1');
   for (const width of [360, 390, 768, 1280, 1440]) {
     await page.setViewportSize({ width, height: 900 }); await page.getByLabel('本页启用 P2P 加速').focus();
     await expect(page.getByLabel('本页启用 P2P 加速')).toBeFocused(); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(await page.locator('.peer-toggle').evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+    if (width > 1100) expect(await page.locator('.device-panels').evaluate(element => { const [cloud, cache, peers] = [...element.children].map(child => child.getBoundingClientRect()); return peers.top >= Math.max(cloud.bottom, cache.bottom) && peers.width > cloud.width * 1.8; })).toBe(true);
     await page.screenshot({ path: info.outputPath(`devices-${width}.png`), fullPage: true });
   }
+  await page.evaluate(() => { document.documentElement.style.zoom = '200%'; });
+  await page.getByLabel('本页启用 P2P 加速').focus(); await page.keyboard.press('Space');
+  await expect(page.getByTestId('peer-status')).toHaveAttribute('data-enabled', 'false');
+  await page.keyboard.press('Space'); await expect(page.getByTestId('peer-status')).toHaveAttribute('data-enabled', 'true');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: info.outputPath('devices-1440-zoom200.png'), fullPage: true });
 });
 
 test('session barrier blocks private pages and all business requests', async ({ page }) => {
@@ -655,6 +663,49 @@ async function servePoster(page: Page, image: ReturnType<typeof imageFixture>) {
   await page.route('**/api/media/' + image.asset.sha256 + '**', route => new URL(route.request().url()).pathname.endsWith('/download')
     ? route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...image.asset, transport: 'server', expiresAt: Date.now() + 60000 }) })
     : route.fulfill({ contentType: 'image/png', body: image.bytes }));
+}
+for (const recovery of ['focus', 'metadata'] as const) {
+  test(`failed reference cleanup remains visible and retries on ${recovery} without a background loop`, async ({ page }) => {
+    const api = await mockApi(page, { user: 'a' }), oldPoster = imageFixture(230), nextPoster = imageFixture(231);
+    const first = sampleItem('first'), second = sampleItem('second');
+    first.media.poster = { ...oldPoster.asset, source: posterSource('Old_poster.png') };
+    second.media.poster = { ...nextPoster.asset, source: posterSource('Next_poster.png') };
+    api.data.set('a', { tickets: [first, second] }); await servePoster(page, oldPoster); await servePoster(page, nextPoster);
+    await page.goto('/tickets');
+    await expect(page.locator('.media-availability')).toHaveText(['已校验并保存到本机缓存', '已校验并保存到本机缓存']);
+    await expect.poll(async () => (await cacheEntries(page)).map(entry => entry.sha256)).toEqual([oldPoster.asset.sha256, nextPoster.asset.sha256].sort());
+    await page.getByRole('link', { name: '设备与状态', exact: true }).click(); await expect(page.getByText(/本账号已存 2 张图片/)).toBeVisible();
+    await page.evaluate(() => {
+      const open = IDBIndex.prototype.openCursor;
+      (window as any).__pruneFault = { remaining: 1, attempts: 0 };
+      IDBIndex.prototype.openCursor = function(...args) {
+        if (this.name === 'accountId') {
+          const fault = (window as any).__pruneFault; fault.attempts++;
+          if (fault.remaining > 0) { fault.remaining--; throw new DOMException('Synthetic temporary IDB failure', 'UnknownError'); }
+        }
+        return open.apply(this, args);
+      };
+    });
+    first.media.poster = { ...nextPoster.asset, source: posterSource('Next_poster.png') }; first.version++; api.revision++;
+    await expect(page.getByText('无引用缓存清理未完成，返回页面或重新同步后会重试。', { exact: true })).toBeVisible();
+    expect((await cacheEntries(page)).map(entry => entry.sha256)).toEqual([oldPoster.asset.sha256, nextPoster.asset.sha256].sort());
+    expect(await page.evaluate(() => (window as any).__pruneFault.attempts)).toBe(1);
+    if (recovery === 'focus') {
+      // A failed explicit clear has priority over the earlier prune warning.
+      await page.evaluate(() => { (window as any).__pruneFault.remaining = 1; });
+      await page.getByRole('button', { name: '清除本账号本机缓存', exact: true }).click();
+      await expect(page.getByText('本机缓存清理未完成，请重试。', { exact: true })).toBeVisible();
+      await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    } else { first.fields.title = '同一媒体引用的新状态'; first.version++; api.revision++; }
+    await expect.poll(async () => (await cacheEntries(page)).map(entry => entry.sha256)).toEqual([nextPoster.asset.sha256]);
+    await expect(page.getByText('无引用缓存清理未完成，返回页面或重新同步后会重试。', { exact: true })).toHaveCount(0);
+    expect(await page.evaluate(() => (window as any).__pruneFault.attempts)).toBe(recovery === 'focus' ? 3 : 2);
+    if (recovery === 'focus') {
+      await expect(page.getByText('本机缓存清理未完成，请重试。', { exact: true })).toBeVisible();
+      await page.getByRole('button', { name: '清除本账号本机缓存', exact: true }).click(); await expect.poll(() => cacheEntries(page)).toEqual([]);
+      await expect(page.getByText('已清除本账号的本机缓存，云端记录和图片不受影响。', { exact: true })).toBeVisible();
+    }
+  });
 }
 test('old poster stays through processing and no-match, then changes only with the published reference', async ({ page }) => {
   const api = await mockApi(page, { user: 'a', processing: true }); const oldPoster = imageFixture(201), nextPoster = imageFixture(202);

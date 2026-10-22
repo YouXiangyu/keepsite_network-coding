@@ -52,6 +52,7 @@
 - 写缓存不可用或空间不足时，仍展示已校验的临时 Blob 并明确提示未缓存。缓存写入不是上传前提。
 - 设备状态页实际读取当前账号缓存清单；页面重获焦点也核对系统/其他标签页回收情况。清理只删除当前账号缓存，保留已在内存展示的图片并标记未缓存；之后再次需要时才恢复下载，不因清理立即回填。
 - 最新服务器快照决定有效媒体引用；删除后只回收本账号不再被任何有效票根引用的缓存。退出不删除持久缓存，换号不复用；下载、校验后写入及临时 URL 均受会话 epoch 和取消信号约束。
+- 无引用缓存清理遇到暂时的 IndexedDB 故障时保留待清理标记并显示提示；返回前台或后续状态校准时重试。只有当前引用对应的清理事务成功才清除标记，读取缓存统计成功不能掩盖清理失败。显式清空失败优先提示，不增加后台重试循环。
 - 测试中的 S3 授权与 CORS 故障是模拟验证，不能替代真实桶策略、跨域配置或真实设备验收；本阶段不自动修改云端配置。
 
 ## 责任地图
@@ -96,3 +97,25 @@ npm run test:p2p
 `test:sites` 只校验静态 Worker 输出。测试、构建不代表部署；发布、服务器启停及合并另需用户明确要求。
 
 `test:p2p` 需先 build，使用两个独立 Chromium 进程、真实 FastAPI/WS/SQL、fakeredis 与本机对象存储，端口 4177。合成图片独立核验完整 SHA，记录目标媒体 HTTP 次数、DataChannel 实际帧、候选类型和故障恢复。测试中的服务器媒体字节不算 S3；它不证明真实 Redis 多节点、S3 桶策略、TURN 或物理手机互通。夹具通过专用退出入口正常关闭并等待自己的临时目录移除，避免 Windows 强制结束进程跳过清理。
+
+## 独立浏览器测量入口
+
+`npm run build:benchmark` 将 `benchmark/` 构建到仓库 `.cache/m6-bench-client`，不替换生产入口或 `dist/client`。夹具只允许 `http://127.0.0.1:4178`；通过公开的 AccountSync、AccountMediaCache、PeerMedia 接口执行真实读取与缓存，不修改私有状态、生产配额或连接统计。
+
+`window.__memoVerseBenchmark` 提供 boot、status、setPeerWanted、run、verify、dispose。每阶段最多 300 个不同的自有媒体，任务并发只允许 1/2/4，总截止 120 秒。每个任务从 acquire 到真实缓存终态记录耗时和来源；失败与未调度任务保留，缺失时间不补零。verify 在计时之外逐项读取实际 IDB 并核验大小、MIME 和 SHA-256。生产诊断视图本身只保留最近 50 条，测量入口持续收集并明确报告覆盖情况，不用最后 50 条代替全量任务样本。
+
+运行器是仓库 `scripts/benchmark-browser.mjs`，未加 `--execute` 时只显示计划，输出目录必须是新的绝对路径。正式矩阵使用两个独立 Chromium 进程、300 条元数据及 300 个独立合成 PNG，从中固定选取 60 张 working set；HTTP-only 冷读取、P2P 源预热后的目标冷读取、目标重载后的暖读取分别测试任务并发 1/2/4。每个配置的源端 HTTP 预热成本单列；暖缓存仅指该 working set，不代表整库预热。具体源码、样本、结果和限制见[开发计划](../docs/开发计划.md)。
+
+该测量使用本机对象存储和 fakeredis，保留生产限流及 P2P 两槽/媒体四槽。浏览器端任务耗时包含校验与缓存完成；服务夹具的 ASGI 响应持续时间包含流式输出与背压，不等于纯业务 CPU 或浏览器收完正文的时间。这里的 HTTP、WebSocket 和 DataChannel 应用层字节不代表 TCP/TLS/SCTP 线缆流量，也不用于声称真实 S3 性能、云费用或公网 P2P 成功率。
+
+在仓库根目录运行：
+
+```powershell
+npm --prefix demo run build:benchmark
+node --test scripts/tests/browser-benchmark.test.mjs
+node scripts/benchmark-browser.mjs --output D:/100-code/110-Project/network-coding/.cache/new-browser-measurement
+# 核对计划后显式执行；目录必须尚不存在。
+node scripts/benchmark-browser.mjs --output D:/100-code/110-Project/network-coding/.cache/new-browser-measurement --execute
+```
+
+默认矩阵共 540 个主任务；小规模 CI 传 `--count 3 --sample 3`，用于验证链路，不能代替完整负载证据。正式运行保留完整 JSON 报告及源码/构建哈希，并关闭自有服务与浏览器。

@@ -41,7 +41,8 @@ h1 { font-size: clamp(28px, 4vw, 40px); font-weight: 600; line-height: 1.25; let
 .action-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 24px; }
 .original-photo { margin-top: 20px; }
 .original-photo summary { cursor: pointer; padding: 16px 0; }
-.device-panels { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
+.device-panels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 24px; }
+.device-peer-panel { grid-column: 1 / -1; min-width: 0; }
 .ticket-editor > fieldset { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 64px; padding: 0; border: 0; margin: 32px 0; min-width: 0; }
 .upload-card { width: 100%; aspect-ratio: 4 / 5; border: 1px dashed #b9bfb2; border-radius: 12px; padding: 16px; background: var(--soft); overflow: hidden; }
 .upload-card img { width: 100%; height: 100%; object-fit: contain; }

@@ -13,7 +13,7 @@ export default function DeviceStatus() {
     <p>每个在线页面独立登记；刷新或重连后重新登记，不代表持久安装的设备。</p>
     <p data-testid="peer-inventory" data-count={state.inventoryCount}>本页可分享 {state.inventoryCount} 张已缓存图片；接收 {state.receiving} / 发送 {state.sending}。</p>
     <button className="text-button" disabled={!state.enabled} onClick={() => void state.refresh()}>刷新在线页面</button>
-    <ul className="peer-list">{state.peers.map(peer => <li key={peer.peerId}>{peer.name}{peer.peerId === state.peerId ? '（本页）' : ''}<span>在线</span></li>)}</ul>
+    <ul className="peer-list">{state.peers.map(peer => <li key={peer.peerId}><span className="peer-name">{peer.name}{peer.peerId === state.peerId ? '（本页）' : ''}</span><span className="peer-online">在线</span></li>)}</ul>
     {state.enabled && state.peers.filter(peer => peer.peerId !== state.peerId).length === 0 && <p>当前没有其他可用页面，缺少的图片从云端获取。</p>}
     <p className="field-hint">当前仅支持可直接连接的在线页面；跨网络连接失败时改从云端读取。尚未启用中继服务。页面进入后台会暂停设备传输。</p>
     <h3>本页传输观测</h3>
