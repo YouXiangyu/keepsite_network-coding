@@ -28,7 +28,7 @@ def snapshot(user=USER, server=SERVER, revision=7):
                 "media": {"original": {"assetId": asset, "sha256": asset, "url": "/api/media/" + asset,
                     "mimeType": "image/png", "size": 10, "width": 2, "height": 2, "cloudStatus": "not_configured"}, "poster": None},
                 "processing": {"status": "not_started", "error": None},
-            }]}, "capabilities": {"processing": False, "cloudStorage": False, "deviceSync": False}}
+            }]}, "capabilities": {"processing": False, "processingUnavailableReason": None, "cloudStorage": False, "deviceSync": False}}
 
 
 @pytest.fixture
@@ -96,7 +96,7 @@ def test_corrupt_or_cross_account_cache_contents_are_never_returned(cache, damag
     elif damage == "media-url": ticket["media"]["original"]["url"] = "https://other.example/private"
     elif damage == "media-dimensions": ticket["media"]["original"]["width"] = 0
     elif damage == "missing-poster": del ticket["media"]["poster"]
-    elif damage == "processing": ticket["processing"]["status"] = "ready"
+    elif damage == "processing": ticket["processing"]["status"] = "invented"
     elif damage == "capability": payload["capabilities"]["cloudStorage"] = "true"
     elif damage == "deleted": ticket["deletedAt"] = 3
     elif damage == "missing-operation": del ticket["operationId"]
@@ -119,6 +119,34 @@ def test_oversized_snapshots_are_not_cached_or_returned(cache, monkeypatch):
     monkeypatch.setattr(shared_state, "MAX_SNAPSHOT_BYTES", 20)
     assert get(cache) is None
     assert not put(cache)
+
+
+@pytest.mark.parametrize("status", ["not_started", "queued", "ocr", "poster", "ready", "no_match", "failed"])
+def test_m3_processing_states_and_safe_attribution_survive_cache(cache, status):
+    payload = snapshot()
+    payload["capabilities"].update(processing=True, processingUnavailableReason=None)
+    ticket = payload["data"]["tickets"][0]
+    ticket["processing"] = {"status": status, "error": "处理失败，请重试。" if status == "failed" else None}
+    source = {"provider": "wikimedia_commons", "sourcePage": "https://commons.wikimedia.org/wiki/File:Poster.jpg",
+              "sourceFile": "File:Poster.jpg", "licenseName": "Public domain",
+              "licenseUrl": "https://commons.wikimedia.org/wiki/File:Poster.jpg#Licensing", "author": "Studio", "fetchedAt": 1}
+    ticket["media"]["poster"] = {**ticket["media"]["original"], "cloudStatus": "saved", "source": source}
+    assert put(cache, payload) and get(cache) == payload
+    source["licenseUrl"] = "https://evil.test"
+    raw_write(cache, payload)
+    assert get(cache) is None and not put(cache, payload)
+
+
+def test_missing_capability_reason_and_nontext_processing_error_are_not_cached(cache):
+    payload = snapshot()
+    del payload["capabilities"]["processingUnavailableReason"]
+    assert not put(cache, payload)
+    payload = snapshot()
+    payload["data"]["tickets"][0]["processing"]["error"] = {"private": "data"}
+    assert not put(cache, payload)
+    payload = snapshot()
+    payload["data"]["tickets"][0]["processing"]["status"] = "ready"
+    assert not put(cache, payload)
 
 
 @pytest.mark.parametrize("method,error", [("get", ConnectionError("offline")), ("get", TimeoutError("timeout")),

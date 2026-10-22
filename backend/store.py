@@ -50,6 +50,9 @@ class Store:
                 if not binding and db.execute("SELECT COUNT(*) FROM assets").fetchone()[0]:
                     raise RuntimeError("Storage binding is unknown for existing media: use an explicitly verified isolated restore.")
         self.root, self.storage = root.resolve(), storage
+        self.processing_enabled = False
+        self.processing_unavailable_reason = "电影票处理服务尚未配置。"
+        self.processing_wake = lambda: None
         for folder in (self.root, self.root / "tmp", self.root / "exports"):
             folder.mkdir(parents=True, exist_ok=True)
         self.database = self.root / "memoverse.sqlite3"
@@ -109,6 +112,35 @@ class Store:
                     PRIMARY KEY(user_id,id)
                 );
                 CREATE INDEX IF NOT EXISTS upload_pending ON upload_intents(status,last_checked_at,created_at);
+                CREATE TABLE IF NOT EXISTS processing_jobs (
+                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), ticket_id TEXT NOT NULL,
+                    input_version INTEGER NOT NULL, original_asset_id TEXT NOT NULL,
+                    status TEXT NOT NULL, error TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+                    lease_owner TEXT, lease_token INTEGER NOT NULL DEFAULT 0, lease_until INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at INTEGER NOT NULL, deadline_at INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+                    last_enqueued_at INTEGER NOT NULL DEFAULT 0, ocr_fields TEXT, artifact_id TEXT,
+                    FOREIGN KEY(user_id,ticket_id) REFERENCES tickets(user_id,id),
+                    FOREIGN KEY(user_id,original_asset_id) REFERENCES asset_grants(user_id,asset_id)
+                );
+                CREATE TABLE IF NOT EXISTS ticket_processing (
+                    user_id TEXT NOT NULL, ticket_id TEXT NOT NULL, job_id TEXT NOT NULL REFERENCES processing_jobs(id),
+                    PRIMARY KEY(user_id,ticket_id), FOREIGN KEY(user_id,ticket_id) REFERENCES tickets(user_id,id)
+                );
+                CREATE TABLE IF NOT EXISTS processing_artifacts (
+                    id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES processing_jobs(id), user_id TEXT NOT NULL,
+                    descriptor TEXT NOT NULL, source TEXT NOT NULL, temp_name TEXT NOT NULL, created_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS poster_sources (
+                    user_id TEXT NOT NULL, ticket_id TEXT NOT NULL, asset_id TEXT NOT NULL,
+                    source TEXT NOT NULL, PRIMARY KEY(user_id,ticket_id),
+                    FOREIGN KEY(user_id,ticket_id) REFERENCES tickets(user_id,id),
+                    FOREIGN KEY(user_id,asset_id) REFERENCES asset_grants(user_id,asset_id)
+                );
+                CREATE TABLE IF NOT EXISTS processing_cleanup (
+                    temp_name TEXT PRIMARY KEY, artifact_id TEXT, reason TEXT NOT NULL, cleaned_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS processing_due ON processing_jobs(status,next_attempt_at,last_enqueued_at);
                 CREATE INDEX IF NOT EXISTS tickets_active ON tickets(user_id,deleted_at,created_at);
             """)
             for key, value in {"schema_version": "3", "server_id": str(uuid.uuid4()), "storage_binding": storage.storage_binding}.items():

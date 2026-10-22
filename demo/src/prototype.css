@@ -56,3 +56,19 @@ h1 { font-size: clamp(28px, 4vw, 40px); font-weight: 600; line-height: 1.25; let
 @media (max-width: 760px) { .app-header { padding: 16px 20px; gap: 12px; flex-wrap: wrap; } .app-header > a { flex: 1; } .app-header nav { order: 3; width: 100%; } .app-header nav a { flex: 1; justify-content: center; } .workspace { padding: 28px 20px 56px; } .page-heading { align-items: start; flex-direction: column; gap: 8px; } .ticket-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 12px; } .ticket-card-copy { padding: 14px; } .ticket-card h2 { font-size: 17px; } .ticket-card p { font-size: 12px; } .detail-layout, .ticket-editor > fieldset { grid-template-columns: 1fr; gap: 24px; } .detail-layout .ticket-image { max-height: 540px; } .upload-card { max-height: 440px; } .empty-state { padding: 48px 16px; } }
 
 .media-availability { padding: 10px 14px; margin: 0; color: #53594f; background: var(--soft); font-size: 12px; line-height: 1.6; }
+
+.processing-panel { padding: 24px; margin: 24px 0; border: 1px solid var(--line); border-radius: 10px; line-height: 1.7; }
+.processing-panel h2 { font-size: 18px; margin-bottom: 12px; }
+.processing-panel p { font-size: 14px; margin-bottom: 10px; color: #53594f; overflow-wrap: anywhere; }
+.processing-panel .processing-state { font-size: 17px; color: var(--ink); font-weight: 600; }
+.processing-state.is-processing::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #5c704f; margin-right: 10px; }
+.processing-steps { display: flex; gap: 8px; list-style: none; margin: 16px 0; padding: 0; font-size: 12px; }
+.processing-steps li { flex: 1; padding: 8px 6px; border-bottom: 3px solid var(--line); color: var(--muted); }
+.processing-steps li[aria-current], .processing-steps li[data-complete='true'] { border-bottom-color: #60734f; color: #35412d; }
+.processing-unavailable, .processing-notice { background: var(--soft); padding: 12px; border-radius: 6px; }
+.processing-error { border-left: 3px solid #a6343c; padding-left: 12px; }
+.status-pill[data-state='failed'] { color: #8a2832; background: #fbefef; }
+.poster-attribution { margin-top: 16px; padding: 16px 18px; background: var(--soft); border-radius: 8px; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.poster-attribution p { margin: 6px 0 0; }
+.poster-attribution a { text-decoration: underline; text-underline-offset: 3px; }
+.field-source { display: block; font-size: 12px; font-weight: 400; color: var(--muted); margin-top: 5px; }

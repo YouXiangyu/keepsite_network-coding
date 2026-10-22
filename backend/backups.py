@@ -18,6 +18,7 @@ from .media import image_info, MAX_IMAGE_BYTES
 from .object_storage import LocalObjectStore, StorageError
 from .state import account_state
 from .store import Store, encode
+from .store import now_ms
 
 MAX_MEMBERS = 50_000
 MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
@@ -60,11 +61,21 @@ def snapshot_account(store, user_id):
         operations = [dict(row) for row in db.execute("SELECT * FROM operations WHERE user_id=? ORDER BY id", (user_id,))]
         identifiers = {row[key] for row in tickets for key in ("original_asset_id", "poster_asset_id") if row[key]}
         assets = [dict(store.asset(db, user_id, identifier)) for identifier in sorted(identifiers)]
-    return {"schemaVersion": 3, "user": user, "tickets": tickets, "operations": operations, "assets": assets}
+        sources = [dict(row) for row in db.execute("""SELECT s.* FROM poster_sources s JOIN tickets t
+            ON t.user_id=s.user_id AND t.id=s.ticket_id AND t.poster_asset_id=s.asset_id WHERE s.user_id=?""", (user_id,))]
+        processing = [dict(row) for row in db.execute("""SELECT j.user_id,j.ticket_id,j.input_version,j.original_asset_id,j.status,j.error
+            FROM ticket_processing p JOIN processing_jobs j ON j.id=p.job_id
+            JOIN tickets t ON t.user_id=p.user_id AND t.id=p.ticket_id
+            WHERE p.user_id=? AND t.deleted_at IS NULL AND t.input_version=j.input_version
+            AND t.original_asset_id=j.original_asset_id AND j.status!='cancelled'""", (user_id,))]
+    return {"schemaVersion": 3, "user": user, "tickets": tickets, "operations": operations, "assets": assets,
+            "posterSources": sources, "processingStates": processing}
 
 
 def _validate(manifest, user_id):
-    if not isinstance(manifest, dict) or set(manifest) != {"schemaVersion", "user", "tickets", "operations", "assets"} or manifest["schemaVersion"] != 3:
+    required = {"schemaVersion", "user", "tickets", "operations", "assets"}
+    if (not isinstance(manifest, dict) or not required <= set(manifest)
+            or set(manifest) - required - {"posterSources", "processingStates"} or manifest["schemaVersion"] != 3):
         raise BackupError("Unsupported backup format")
     user = manifest["user"]
     if set(user) != set(COLUMNS["users"].split(",")) or user["id"] != user_id or not isinstance(user_id, str) or not user_id or len(user_id) > 512:
@@ -129,6 +140,40 @@ def _validate(manifest, user_id):
             raise BackupError("Invalid operation")
         TypeAdapter(Identifier).validate_python(row["id"])
         _integer(row["created_at"])
+    sources = manifest.get("posterSources", [])
+    if not isinstance(sources, list) or len(sources) > MAX_MEMBERS:
+        raise BackupError("Invalid poster source records")
+    seen = set()
+    for source in sources:
+        if not isinstance(source, dict) or set(source) != {"user_id", "ticket_id", "asset_id", "source"}:
+            raise BackupError("Invalid poster source")
+        ticket = indexed["tickets"].get(source["ticket_id"])
+        if (source["user_id"] != user_id or not ticket or source["ticket_id"] in seen
+                or ticket["poster_asset_id"] != source["asset_id"]):
+            raise BackupError("Poster source ownership mismatch")
+        from .posters import validate_source
+        if not validate_source(_json(source["source"])):
+            raise BackupError("Invalid poster attribution")
+        seen.add(source["ticket_id"])
+    if seen != {row["id"] for row in indexed["tickets"].values() if row["poster_asset_id"]}:
+        raise BackupError("Missing poster attribution")
+    states = manifest.get("processingStates", [])
+    if not isinstance(states, list) or len(states) > MAX_MEMBERS:
+        raise BackupError("Invalid processing summary")
+    seen = set()
+    for summary in states:
+        if not isinstance(summary, dict) or set(summary) != {"user_id", "ticket_id", "input_version", "original_asset_id", "status", "error"}:
+            raise BackupError("Invalid processing summary")
+        ticket = indexed["tickets"].get(summary["ticket_id"])
+        if (not ticket or summary["ticket_id"] in seen or summary["user_id"] != user_id
+                or ticket["deleted_at"] is not None or summary["input_version"] != ticket["input_version"]
+                or summary["original_asset_id"] != ticket["original_asset_id"]
+                or summary["status"] not in {"queued", "ocr", "poster", "ready", "no_match", "failed"}
+                or summary["error"] is not None and (not isinstance(summary["error"], str) or len(summary["error"]) > 500)):
+            raise BackupError("Invalid processing ownership or state")
+        if summary["status"] == "ready" and not ticket["poster_asset_id"]:
+            raise BackupError("Ready processing is missing a poster")
+        seen.add(summary["ticket_id"])
     return indexed
 
 
@@ -215,6 +260,18 @@ def restore_account_backup(archive: Path, destination: Path, *, user_id: str):
                 db.executemany("INSERT INTO asset_grants VALUES (?,?)", ((user_id, identifier) for identifier in indexed["assets"]))
                 _insert(db, "tickets", manifest["tickets"])
                 _insert(db, "operations", manifest["operations"])
+                for source in manifest.get("posterSources", []):
+                    db.execute("INSERT INTO poster_sources VALUES (?,?,?,?)",
+                               (source["user_id"], source["ticket_id"], source["asset_id"], source["source"]))
+                for summary in manifest.get("processingStates", []):
+                    identifier, stamp = str(uuid.uuid4()), now_ms()
+                    state = summary["status"] if summary["status"] in {"failed", "no_match"} else "failed"
+                    error = summary["error"] if summary["status"] in {"failed", "no_match"} else "图片与字段已恢复到本地，处理任务请显式重试。"
+                    db.execute("""INSERT INTO processing_jobs
+                        (id,user_id,ticket_id,input_version,original_asset_id,status,error,next_attempt_at,deadline_at,created_at,updated_at)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?)""", (identifier, user_id, summary["ticket_id"], summary["input_version"],
+                                                           summary["original_asset_id"], state, error, stamp, stamp, stamp, stamp))
+                    db.execute("INSERT INTO ticket_processing VALUES (?,?,?)", (user_id, summary["ticket_id"], identifier))
                 store.ensure_sync_baseline(db, user_id)
                 if db.execute("PRAGMA foreign_key_check").fetchone() or db.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                     raise BackupError("Restored database integrity failure")

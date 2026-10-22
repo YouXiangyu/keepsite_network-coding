@@ -3,6 +3,7 @@ import hashlib
 import json
 from ..state import account_state, present_ticket
 from ..store import StoreError, encode, now_ms
+from ..processing_repository import enqueue, cancel_current
 
 
 def apply(store, user_id, identifier, action, body):
@@ -16,6 +17,7 @@ def apply(store, user_id, identifier, action, body):
                 raise StoreError(409, "操作标识已用于不同请求，请使用新的操作标识。")
             return account_state(store, db, user_id)
         stamp = now_ms()
+        should_process = False
         if action == "create":
             if db.execute("SELECT 1 FROM tickets WHERE user_id=? AND id=?", (user_id, identifier)).fetchone():
                 raise StoreError(409, "电影票已创建或已删除，不能重复创建。")
@@ -24,6 +26,7 @@ def apply(store, user_id, identifier, action, body):
             sources = {key: "user" if key in body.fields.model_fields_set else "empty" for key in fields}
             db.execute("INSERT INTO tickets VALUES (?,?,?,?,?,?,1,1,?,?,NULL,?)",
                        (user_id, identifier, encode(fields), encode(sources), body.originalAssetId, None, stamp, stamp, body.operationId))
+            should_process = store.processing_enabled
         elif action == "update":
             row = store.ticket(db, user_id, identifier)
             fields, sources = json.loads(row["fields"]), json.loads(row["field_sources"])
@@ -33,17 +36,36 @@ def apply(store, user_id, identifier, action, body):
             original = body.originalAssetId or row["original_asset_id"]
             store.attach_asset(db, user_id, original)
             input_changed = original != row["original_asset_id"] or any(key in changes for key in ("title", "showtime"))
+            if original != row["original_asset_id"]:
+                for name in fields:
+                    if sources[name] == "ocr" and name not in changes:
+                        fields[name], sources[name] = "", "empty"
             db.execute("UPDATE tickets SET fields=?,field_sources=?,original_asset_id=?,poster_asset_id=?,version=version+1,input_version=input_version+?,updated_at=?,operation_id=? WHERE user_id=? AND id=?",
                        (encode(fields), encode(sources), original, row["poster_asset_id"], int(input_changed), stamp, body.operationId, user_id, identifier))
+            if input_changed:
+                cancel_current(db, user_id, identifier)
+                should_process = store.processing_enabled
         elif action == "delete":
             store.ticket(db, user_id, identifier)
             db.execute("UPDATE tickets SET deleted_at=?,updated_at=?,version=version+1,input_version=input_version+1,operation_id=? WHERE user_id=? AND id=?",
                        (stamp, stamp, body.operationId, user_id, identifier))
+            cancel_current(db, user_id, identifier)
+        elif action == "process":
+            store.ticket(db, user_id, identifier)
+            if not store.processing_enabled:
+                raise StoreError(503, store.processing_unavailable_reason or "处理服务暂不可用。")
+            db.execute("UPDATE tickets SET version=version+1,updated_at=?,operation_id=? WHERE user_id=? AND id=?",
+                       (stamp, body.operationId, user_id, identifier))
+            should_process = True
         else:
             raise ValueError("Unknown ticket action")
+        if should_process:
+            enqueue(store, db, user_id, identifier)
         db.execute("INSERT INTO operations VALUES (?,?,?,?)", (user_id, body.operationId, fingerprint, stamp))
         store.ensure_sync_baseline(db, user_id)
         store.bump(db, user_id)
         changed = db.execute("SELECT * FROM tickets WHERE user_id=? AND id=?", (user_id, identifier)).fetchone()
         store.record_ticket_change(db, user_id, present_ticket(store, db, user_id, changed))
-        return account_state(store, db, user_id)
+        result = account_state(store, db, user_id)
+    store.processing_wake()
+    return result

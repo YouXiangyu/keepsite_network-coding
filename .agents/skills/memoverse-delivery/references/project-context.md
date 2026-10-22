@@ -1,8 +1,8 @@
 # 项目运行信息
 
-云资源核验基准：2026-10-18，北京时间；Git 状态、文档结构核验于 2026-10-21；产品范围更新于 2026-10-22，本次未重新核验云资源。以下是定位信息，不能替代操作前的实时查询。
+云资源核验基准：2026-10-18，北京时间；Git 状态、文档结构与本机开发进度更新于 2026-10-22，本次未重新核验云资源。以下是定位信息，不能替代操作前的实时查询。
 
-2026-10-22 产品存储方向修正为：私有 S3 长期保存电影票原图与海报，浏览器缓存、P2P 加速、S3 兜底恢复；先 Web 后 Android，服务端 OCR 使用轻量 CPU 模型。Redis、OCR/海报流水线、WebSocket 与混合媒体传输仍属于待实施目标。下列 S3 位置可用于后续实现前核验；旧模型、用户数据和回滚文件不得因文档删改直接清理。信令与相关服务如何在 EC2 非常驻时可用，按用户要求留待后续决定；本次不改 58 分钟定时器，不启动、部署或调整云资源。
+2026-10-22 产品存储方向修正为：私有 S3 长期保存电影票原图与海报，浏览器缓存、P2P 加速、S3 兜底恢复；先 Web 后 Android，服务端 OCR 使用轻量 CPU 模型。源码分支 `codex/movie-ticket-web` 已完成 M1 电影票改版、M2 可恢复上传/Redis 快照/浏览器缓存；M3 Redis Streams 与轻量 OCR/Commons 海报流水线已完成本地整合与独立审查，具体提交、CI 和测量边界以开发计划及 Git 为准。WebSocket、混合媒体传输和 Android 仍待后续阶段；这些本机改动均未发布到 EC2。下列 S3 位置可用于后续实现前核验；旧模型、用户数据和回滚文件不得因文档删改直接清理。信令与相关服务如何在 EC2 非常驻时可用，按用户要求留待后续决定；本次不改 58 分钟定时器，不启动、部署或调整云资源。
 
 ## 位置与入口
 
@@ -41,8 +41,9 @@
 
 | 用途 | 路径 |
 | --- | --- |
-| 本机旧业务数据 | `backend/data`，保留不覆盖；新账号版本使用下行 schema 2 目录 |
-| 新账号业务目录 | 本机 `backend/data-v2`、服务器 `/var/lib/memoverse-v2`；旧 schema 1 目录保留，禁止新版本自动覆盖 |
+| 本机旧业务数据 | `backend/data`、`backend/data-v2` 保留不覆盖；不能直接作为 schema 3 运行目录 |
+| 电影票代码默认目录 / 发布候选 | 本机 `backend/data-v3`、服务器候选 `/var/lib/memoverse-v3`，schema 3；本轮尚未部署或迁移真实数据，不能据此推断服务器已有该目录 |
+| 最近已部署的账号目录 | `/var/lib/memoverse-v2`，对应下文历史发布；旧 schema 1 目录继续保留 |
 | 初始化模板 | 本机 `.cache/initial-template-v1`，服务器 `/opt/memoverse/shared/initial-template-v1`；18 张图、18 个模型，17 收藏、4 分享、6 社区内容 |
 | 本机网页 / API | `http://127.0.0.1:4173` / `http://127.0.0.1:8000` |
 | SSH 私钥 / 已知主机 | `.cache/server/ssh/id_rsa` / `.cache/server/ssh/known_hosts` |
@@ -52,12 +53,12 @@
 | Google OAuth 凭据 | 本机 `.cache/server/google-oauth.json`，仅本机用户可读；已安全配置到 Cognito，临时 S3 传输副本已按版本删除并核验为空 |
 | 新鉴权环境候选 | 本机 `.cache/server/account.env.next`、服务器 `/etc/memoverse.env.next`；含会话加密密钥，不输出或纳入 Git |
 | DDNS 服务 / 程序 / 状态 | `memoverse-ddns.service` / `/opt/memoverse/admin/sync-cloudflare-dns.py` / `/var/lib/memoverse-ddns/state.json` |
-| 本机模型与推理依赖 | `.cache/models`、`.cache/anyimage`、`.cache/anyimage-deps` |
+| 本机模型与推理依赖 | 当前 CPU OCR 固定模型为 `.cache/ocr-models/ppocrv6-tiny`，依赖在 `backend/.venv`；旧 `.cache/models`、`.cache/anyimage`、`.cache/anyimage-deps` 保留 |
 | 部署入口 | `scripts/deploy-ubuntu.ps1`，`Server` 必填，默认计划模式，`-Execute` 执行；`-PrepareOnly` 只准备，`-EnvironmentPath /etc/memoverse.env.next` 与 `-NginxPath /etc/nginx/sites-available/memoverse.next` 指定候选配置；新机另加 `-InitializeHost` |
 | 一次性数据迁移 | `scripts/package-server-data.py`，SQLite backup API + 文件 SHA-256 清单 |
-| Linux 安装 / 模型准备 | `deploy/ubuntu/install.sh` / `scripts/setup-anyimage.sh` |
+| Linux 安装 / 模型准备 | `deploy/ubuntu/install.sh` / `scripts/prepare-ocr.py`（默认只显示计划）；不再运行旧 AnyImage 准备链 |
 | 发布目录 / 当前链接 | `/opt/memoverse/releases/<完整commit>` / `/opt/memoverse/current` |
-| 服务器持久数据 | 新账号 `/var/lib/memoverse-v2`；旧 `/var/lib/memoverse` 保留 |
+| 服务器持久数据（最近已部署版本） | `/var/lib/memoverse-v2`；旧 `/var/lib/memoverse` 保留。源码的 v3 发布候选尚未启用 |
 | 服务器共享模型缓存 | `/opt/memoverse/shared/cache` |
 | 应用环境 | `/etc/memoverse.env` |
 | 应用服务 | `memoverse.service`，单 Uvicorn worker，`127.0.0.1:8000` |
@@ -94,7 +95,7 @@ HTTPS 由源站 Nginx 使用 Let's Encrypt 证书提供，`certbot.timer` 续期
 
 - 2026-10-21 GitHub API 核验：可靠性 PR #1 与观测能力 PR #2 已合并；“增加本地浮雕调参实验台及跨平台实验 CI”（PR #3，head `0594620`）仍开放。该 head 的五项 CI 均成功，Codex 审查已完成但汇总仍标记存在未解决意见。浮雕已退出新范围；本轮未合并或关闭该 PR，不能沿用它的检查结果验收新方案。
 
-- 2026-10-18 合并流程核验：`main` 已包含 PR #1 的解耦、可靠性修复及前后端 CI。PR 和 main push 自动运行 `Backend tests`、`Frontend tests` 与 `deployment-recovery`。Codex 仓库自动代码审查已设置为“所有 PR”“每次推送时”；这不自动批准或合并 PR。
+- 2026-10-18 合并流程核验：`main` 已包含 PR #1 的解耦、可靠性修复及前后端 CI。当时 PR 和 main push 自动运行 `Backend tests`、`Frontend tests` 与 `deployment-recovery`；2026-10-22 的 M2 同时将分支触发扩至 `codex/**`，`f1e2039` 的三项检查均成功。Codex 仓库自动代码审查已设置为“所有 PR”“每次推送时”；这不自动批准或合并 PR。
 - 同日读取 GitHub 设置：当前私有仓库没有 classic branch protection 或 ruleset；两类设置页面均提示当前套餐不会强制执行私有仓库保护规则。未创建无效规则，未改变仓库可见性或账户套餐。因此当前是代理遵循的合并检查流程，不能宣称平台已强制拦截；后续套餐或配置变化须重新核验。
 - 根 `AGENTS.md` 与 `demo/AGENTS.md`：一般工作规则、响应式 Web 运行契约和账号隔离要求。
 - `docs/项目定义与决策主文档.md`：当前电影票产品规格；`docs/开发计划.md`：实施工作包与验收顺序。旧产品文档、原始研究、五张设计图及旧 API 说明已按用户授权清理，通过改版前 Git 检查点 `d7945d8` 追溯。

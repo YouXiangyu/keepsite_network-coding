@@ -20,7 +20,7 @@ export interface ServerState {
   userId: string;
   revision: number;
   data: AppData | null;
-  capabilities: { processing: false; cloudStorage: boolean; deviceSync: false };
+  capabilities: { processing: boolean; processingUnavailableReason: string | null; cloudStorage: boolean; deviceSync: false };
 }
 export interface MediaAsset {
   assetId: string;
@@ -230,8 +230,9 @@ function checkedState(value: unknown, expectedUser: string): ServerState {
       || !Number.isSafeInteger(state.revision) || state.revision < 0) {
     throw new ApiError('票根状态不完整，未更新界面。');
   }
-  if (!state.capabilities || state.capabilities.processing !== false || state.capabilities.deviceSync !== false
-      || typeof state.capabilities.cloudStorage !== 'boolean') throw new ApiError('功能状态不完整，未更新界面。');
+  if (!state.capabilities || typeof state.capabilities.processing !== 'boolean' || state.capabilities.deviceSync !== false
+      || typeof state.capabilities.cloudStorage !== 'boolean'
+      || !(state.capabilities.processingUnavailableReason === null || typeof state.capabilities.processingUnavailableReason === 'string')) throw new ApiError('功能状态不完整，未更新界面。');
   if (state.initialized) validateData(state.data);
   else if (state.data !== null) throw new ApiError('票根空间尚未准备完成。');
   return state;

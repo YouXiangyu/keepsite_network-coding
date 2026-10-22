@@ -203,3 +203,32 @@ test('an upload with a lost response is reconciled without uploading its bytes t
   expect(received.some((entry: any) => entry.path === '/api/uploads/' + uploads[0].body.uploadId)).toBeTruthy();
   expect(received.filter((entry: any) => entry.path === '/api/tickets' && entry.method === 'POST')).toHaveLength(1);
 });
+
+test('a processing request with a lost response reuses its operation and can be reconciled', async ({ page, request }) => {
+  await page.clock.install(); await page.goto('/tickets/item-1'); await hang(request, '/api/tickets/item-1/process', 'POST');
+  await waitForHeaders(page, '/api/tickets/item-1/process', () => page.getByRole('button', { name: '开始识别' }).click());
+  await page.clock.fastForward(30001); await expect(page.getByRole('alert')).toContainText('请求超时');
+  await page.getByRole('button', { name: '重试同一处理请求' }).click();
+  await expect(page.getByText('处理请求已确认，进度会自动更新。')).toBeVisible();
+  const posts = (await status(request)).requests.filter((entry: any) => entry.path.endsWith('/process') && entry.method === 'POST');
+  expect(posts).toHaveLength(2); expect(posts[1].body.operationId).toBe(posts[0].body.operationId);
+  const state = await (await request.get('/api/state')).json(); expect(state.data.tickets[0].version).toBe(2); expect(state.data.tickets[0].processing.status).toBe('queued');
+});
+test('same-account renewal interrupts processing safely and the durable receipt confirms it', async ({ page, request }) => {
+  await page.goto('/tickets/item-1'); await hang(request, '/api/tickets/item-1/process', 'POST');
+  await waitForHeaders(page, '/api/tickets/item-1/process', () => page.getByRole('button', { name: '开始识别' }).click());
+  await request.post('/__test/renew', { data: { user: 'a' } }); await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(page.getByRole('alert')).toContainText('处理请求已中断');
+  await page.getByRole('button', { name: '核对处理请求' }).click();
+  await expect(page.getByText('处理请求已核对，当前进度已更新。')).toBeVisible();
+  await expect(page.getByRole('button', { name: '处理中…' })).toBeDisabled();
+  const received = (await status(request)).requests; const posts = received.filter((entry: any) => entry.path.endsWith('/process') && entry.method === 'POST');
+  expect(posts).toHaveLength(1); expect(received.some((entry: any) => entry.path === '/api/operations/' + posts[0].body.operationId)).toBeTruthy();
+});
+test('logout during a stalled processing request cannot affect the replacement account', async ({ page, request }) => {
+  await page.goto('/tickets/item-1'); await hang(request, '/api/tickets/item-1/process', 'POST');
+  await waitForHeaders(page, '/api/tickets/item-1/process', () => page.getByRole('button', { name: '开始识别' }).click());
+  await page.getByRole('button', { name: '退出登录' }).click(); await page.getByLabel('邮箱地址', { exact: true }).fill('b@example.test'); await page.getByLabel('密码', { exact: true }).fill('ExamplePassword123!'); await page.getByRole('button', { name: '登录', exact: true }).click();
+  await request.post('/__test/release'); await expect(page.locator('.memoverse-shell')).toHaveAttribute('data-user-id', 'b');
+  await expect(page.getByRole('heading', { name: 'B 的电影票' })).toBeVisible(); await expect(page.getByText('等待处理', { exact: true })).toHaveCount(0);
+});

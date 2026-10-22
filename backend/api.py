@@ -85,6 +85,10 @@ def install_routes(app: FastAPI, store, shared_state):
     def delete(request: Request, identifier: str, body: Operation):
         return tickets.apply(store, current_user(request), identifier, "delete", body)
 
+    @app.post("/api/tickets/{identifier}/process")
+    def process(request: Request, identifier: str, body: Operation):
+        return tickets.apply(store, current_user(request), identifier, "process", body)
+
     @app.get("/api/backup")
     def backup(request: Request):
         archive = create_account_backup(store, current_user(request))

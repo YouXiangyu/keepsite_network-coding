@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { assertSessionEpoch, errorMessage, getState, sessionEpoch, type ServerState, type SignedInSession } from '../api';
 import type { AppData } from '../data';
+import { processingActive } from '../features/tickets/processing';
 
 export interface OperationHandlers<T> {
   onStart?: () => void;
@@ -29,6 +30,8 @@ export function useAccountWorkspace(session: SignedInSession, watchDetail: boole
   const revision = useRef({ serverId: '', value: -1, requestOrder: -1 });
   const requestOrder = useRef(0);
   const retryAction = useRef<(() => void) | null>(null);
+  const hasActiveProcessing = data.tickets.some(ticket => ticket.deletedAt === null && processingActive(ticket.processing.status));
+  const pollInterval = hasActiveProcessing ? 4000 : 10000;
 
   useEffect(() => {
     alive.current = true;
@@ -62,13 +65,13 @@ export function useAccountWorkspace(session: SignedInSession, watchDetail: boole
   }, [bootAttempt, session.csrfToken, acceptState]);
 
   useEffect(() => {
-    if (!ready || !watchDetail) return;
+    if (!ready || !watchDetail && !hasActiveProcessing) return;
     let live = true;
     let timer: ReturnType<typeof setTimeout>;
     let controller: AbortController | null = null;
     const poll = async () => {
       if (operationLock.current) {
-        timer = setTimeout(poll, 10000);
+        timer = setTimeout(poll, pollInterval);
         return;
       }
       controller = new AbortController();
@@ -82,17 +85,17 @@ export function useAccountWorkspace(session: SignedInSession, watchDetail: boole
         if (live && !operationLock.current && generation === operationGeneration.current && !cancelled(error)) setPollError(errorMessage(error));
       } finally {
         if (activePoll.current === controller) activePoll.current = null;
-        if (live) timer = setTimeout(poll, 10000);
+        if (live) timer = setTimeout(poll, pollInterval);
       }
     };
-    timer = setTimeout(poll, 10000);
+    timer = setTimeout(poll, pollInterval);
     return () => {
       live = false;
       clearTimeout(timer);
       controller?.abort();
       if (activePoll.current === controller) activePoll.current = null;
     };
-  }, [ready, watchDetail, session.csrfToken, acceptState]);
+  }, [ready, watchDetail, hasActiveProcessing, pollInterval, session.csrfToken, acceptState]);
 
   // A single lock covers business writes, upload-and-save.
   const runExclusive = useCallback(async <T,>(operation: () => Promise<T>, handlers: OperationHandlers<T> = {}) => {

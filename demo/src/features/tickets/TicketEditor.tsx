@@ -6,14 +6,16 @@ import type { RunMutation } from '../../app/useAccountWorkspace';
 import Link from '../../app/Link';
 import { useMedia } from '../../MediaProvider';
 import { verifyMediaBlob } from '../../mediaCache';
+import { sourceLabels } from './processing';
 
 export const fieldLabels: Record<FieldName, string> = { title: '片名', cinema: '影院', hall: '影厅', seat: '座位', showtime: '放映时间' };
-export default function TicketEditor({ item, busy, runMutation, onSaved }: {
-  item?: Ticket; busy: boolean; runMutation: RunMutation; onSaved: (id: string) => void;
+export default function TicketEditor({ item, busy, runMutation, onSaved, processingEnabled, processingUnavailableReason }: {
+  item?: Ticket; busy: boolean; runMutation: RunMutation; onSaved: (id: string) => void; processingEnabled: boolean; processingUnavailableReason: string | null;
 }) {
   const [id] = useState(() => item?.id ?? crypto.randomUUID());
   const [fields, setFields] = useState<TicketFields>(() => item?.fields ?? emptyFields());
   const baseline = useRef(item?.fields ?? emptyFields());
+  const baselineSources = useRef<Ticket['fieldSources']>(item?.fieldSources ?? { title: 'empty', cinema: 'empty', hall: 'empty', seat: 'empty', showtime: 'empty' });
   const touched = useRef(new Map<FieldName, number>());
   const editSequence = useRef(0);
   const submissions = useRef(new Map<string, { operationId: string; file: File | null; fieldEdits: Partial<Record<FieldName, number>>; applied: boolean }>());
@@ -33,6 +35,17 @@ export default function TicketEditor({ item, busy, runMutation, onSaved }: {
   const objectUrl = useRef('');
   const alive = useRef(true);
   const operation = useRef<{ fingerprint: string; id: string } | null>(null);
+  const currentFields = item?.fields ?? baseline.current;
+  const currentSources = item?.fieldSources ?? baselineSources.current;
+  const userChange = (key: FieldName) => touched.current.has(key) && (fields[key] !== currentFields[key] || currentSources[key] !== 'user');
+  useEffect(() => {
+    if (!item) return;
+    setFields(previous => {
+      const next = { ...previous };
+      for (const key of fieldNames) if (!touched.current.has(key)) next[key] = item.fields[key];
+      return fieldNames.some(key => next[key] !== previous[key]) ? next : previous;
+    });
+  }, [item?.fields]);
   const releasePreview = () => { if (objectUrl.current) URL.revokeObjectURL(objectUrl.current); objectUrl.current = ''; };
   useEffect(() => { alive.current = true; return () => { alive.current = false; releasePreview(); }; }, []);
   const select = (next?: File) => {
@@ -49,7 +62,7 @@ export default function TicketEditor({ item, busy, runMutation, onSaved }: {
     event.preventDefault();
     if (deleted) return;
     if (!editing && !file.current) { setError('请先选择一张电影票照片。'); return; }
-    const changes = Object.fromEntries(fieldNames.filter(key => !editing ? fields[key] !== '' : touched.current.has(key) && fields[key] !== baseline.current[key]).map(key => [key, fields[key]]));
+    const changes = Object.fromEntries(fieldNames.filter(key => !editing ? fields[key] !== '' || touched.current.has(key) : userChange(key)).map(key => [key, fields[key]]));
     const selected = file.current;
     if (editing && !selected && Object.keys(changes).length === 0) { setError('尚未修改电影信息或原票。'); return; }
     const scope = sessionEpoch();
@@ -142,6 +155,7 @@ export default function TicketEditor({ item, busy, runMutation, onSaved }: {
         const merged = { ...current.fields };
         for (const key of touched.current.keys()) merged[key] = fields[key];
         baseline.current = current.fields;
+        baselineSources.current = current.fieldSources;
         setFields(merged);
         if (!file.current) { setPreview(''); setPersistedMedia(current.media.original); setUploadStatus(''); }
         setEditing(true);
@@ -159,9 +173,10 @@ export default function TicketEditor({ item, busy, runMutation, onSaved }: {
         <p className="field-hint">{displayPreview ? '点击图片可以重新选择。' : ''}提交确认前仅为当前页面草稿，清除浏览器数据后无法恢复。</p>
         {uploadStatus && <p className="field-hint" role="status">{uploadStatus}</p>}
         {!preview && persistedMedia && <p className="field-hint" role="status">{originalImage.message}</p>}
-        <p className="status-note">OCR 与海报处理尚未启用。当前可以手动填写或留空。</p></div>
+        <p className="status-note">{processingEnabled ? '原票保存后会在服务端自动识别。手动填写的字段优先保留，也可暂时留空。' : processingUnavailableReason || '处理配置尚未就绪，当前可以手动填写或留空。'}</p></div>
       <div className="ticket-fields">{fieldNames.map(key => <label key={key}>{fieldLabels[key]} <small>选填</small>
         <input type={key === 'showtime' ? 'datetime-local' : 'text'} maxLength={key === 'title' ? 120 : 200} value={fields[key]} onChange={event => { touched.current.set(key, ++editSequence.current); setFields(previous => ({ ...previous, [key]: event.target.value })); }} />
+        {(item || touched.current.has(key)) && <span className="field-source">{userChange(key) ? '手动修改，尚未保存' : sourceLabels[currentSources[key]]}</span>}
       </label>)}
         {error && <p className="form-error" role="alert">{error}</p>}
         {uncertain && <button type="button" className="secondary-button" onClick={reconcile}>核对保存结果，保留草稿</button>}

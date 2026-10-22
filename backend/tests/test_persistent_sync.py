@@ -161,7 +161,7 @@ def test_account_snapshot_batches_media_queries(tmp_path, monkeypatch):
             return db
         monkeypatch.setattr(app.state.store, "connect", traced)
         assert len(client.get("/api/state").json()["data"]["tickets"]) == 10
-        assert len(selects) <= 8, "Query count should not grow per ticket"
+        assert len(selects) <= 10, "Query count should not grow per ticket"
 
 
 def test_storage_binding_is_rechecked_inside_initialization_transaction(tmp_path, monkeypatch):

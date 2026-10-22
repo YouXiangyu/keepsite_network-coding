@@ -21,7 +21,7 @@ Plan for Ubuntu 24.04:
   Host initialization requested: $INITIALIZE_HOST (apt/user/global logs only when 1).
   Prepare memoverse service user and $RELEASE Python 3.12 venv.
   Link release .cache to /opt/memoverse/shared/cache; prepare separate account data at /var/lib/memoverse-v3; preserve old /var/lib/memoverse and /var/lib/memoverse-v2.
-  Install pinned application dependencies; no template or inference model is required.
+  Install pinned application and CPU OCR dependencies. Models require a separate explicit preparation; this installer does not download them.
   Initial host setup writes log limits; no environment or authentication defaults are created.
   Do NOT change current symlink, start application, enable a public Nginx site,
   create credentials/TLS/swap, or modify DNS. Planned origin: https://$DOMAIN

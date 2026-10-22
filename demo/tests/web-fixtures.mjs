@@ -18,7 +18,7 @@ export const sampleItem = (id = 'item-1') => ({
 export const sampleData = () => ({ tickets: [sampleItem()] });
 export const serverState = (id = 'a') => ({
   initialized: true, serverId: 'server', userId: id, revision: 7, data: sampleData(),
-  capabilities: { processing: false, cloudStorage: true, deviceSync: false },
+  capabilities: { processing: false, processingUnavailableReason: '处理配置未就绪，请配置服务端识别。', cloudStorage: true, deviceSync: false },
 });
 
 export function imageFixture(seed) {
@@ -30,3 +30,9 @@ export function imageFixture(seed) {
   const hash = createHash('sha256').update(bytes).digest('hex');
   return { bytes, asset: { assetId: hash, sha256: hash, url: '/api/media/' + hash, mimeType: 'image/png', size: bytes.length, width: 4, height: 4, cloudStatus: 'saved' } };
 }
+
+export const posterSource = (title = 'Synthetic_movie_poster.png') => ({
+  provider: 'wikimedia_commons', sourcePage: 'https://commons.wikimedia.org/wiki/File:' + title,
+  sourceFile: 'File:' + title, licenseName: 'CC BY-SA 4.0', licenseUrl: 'https://creativecommons.org/licenses/by-sa/4.0/',
+  author: 'Synthetic test author', fetchedAt: 1792620000000,
+});

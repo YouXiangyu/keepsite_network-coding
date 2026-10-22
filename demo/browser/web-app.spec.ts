@@ -1,8 +1,8 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
-import { sampleItem, media, pngHash, otherHash, otherPng, imageFixture } from '../tests/web-fixtures.mjs';
+import { sampleItem, media, pngHash, otherHash, otherPng, imageFixture, posterSource } from '../tests/web-fixtures.mjs';
 const password = 'ExamplePassword123!';
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=', 'base64');
-async function mockApi(page: Page, options: { user?: string; configured?: boolean; google?: boolean; sessionGate?: Promise<void>; empty?: boolean; cloud?: boolean } = {}) {
+async function mockApi(page: Page, options: { user?: string; configured?: boolean; google?: boolean; sessionGate?: Promise<void>; empty?: boolean; cloud?: boolean; processing?: boolean } = {}) {
   const server = {
     user: options.user ?? '', configured: options.configured ?? true, google: options.google ?? false,
     requests: [] as { path: string; method: string; body: any; headers: Record<string, string> }[],
@@ -11,6 +11,7 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
     csrfToken: undefined as string | undefined, logoutUrl: undefined as string | undefined,
     appliedOperations: new Set<string>(),
     uploads: new Map<string, { uploadId: string; status: string; asset: ReturnType<typeof media> }>(),
+    processing: options.processing ?? false,
   };
   const currentData = (user = server.user) => {
     if (!server.data.has(user)) { const ticket = sampleItem(); ticket.fields.title = `${user.toUpperCase()} 的电影票`; ticket.media.original.cloudStatus = options.cloud === false ? 'not_configured' : 'saved'; server.data.set(user, { tickets: options.empty ? [] : [ticket] }); }
@@ -18,7 +19,7 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
   };
   const session = () => ({ authenticated: !!server.user, configured: server.configured, providers: { google: server.google, email: true },
     ...(server.user ? { user: { id: server.user, email: `${server.user}@example.test`, name: server.user }, csrfToken: server.csrfToken ?? `csrf-${server.user}` } : {}) });
-  const state = () => ({ initialized: true, serverId: 'web-server', userId: server.user, revision: server.revision, data: structuredClone(currentData()), capabilities: { processing: false, deviceSync: false, cloudStorage: options.cloud !== false } });
+  const state = () => ({ initialized: true, serverId: 'web-server', userId: server.user, revision: server.revision, data: structuredClone(currentData()), capabilities: { processing: server.processing, processingUnavailableReason: server.processing ? null : '处理配置未就绪，请配置服务端识别。', deviceSync: false, cloudStorage: options.cloud !== false } });
   const respond = (route: Route, value: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) });
   await page.addInitScript(() => { (window as any).__legacyReads = 0; const open = indexedDB.open.bind(indexedDB); indexedDB.open = ((name: string, version?: number) => { if (name === 'memoverse-media-cache-v1') return open(name, version); (window as any).__legacyReads += 1; throw new Error('Legacy data must not be read'); }) as typeof indexedDB.open; });
   await page.route('**/api/**', async route => {
@@ -36,12 +37,18 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
     if (method !== 'GET' && request.headers()['x-csrf-token'] !== (server.csrfToken ?? `csrf-${server.user}`)) return respond(route, { detail: 'CSRF' }, 403);
     if (path.startsWith('/api/operations/')) { const operationId = path.split('/')[3]; return respond(route, { operationId, applied: server.appliedOperations.has(`${server.user}/${operationId}`) }); }
     if (path.startsWith('/api/uploads/')) { const upload = server.uploads.get(`${server.user}/${path.split('/')[3]}`); return respond(route, upload ?? { detail: '未找到上传' }, upload ? 200 : 404); }
-    if (path.endsWith('/download')) return respond(route, { ...media(), transport: 'server', expiresAt: Date.now() + 60000 });
+    if (path.endsWith('/download')) { const hash = path.split('/')[3]; const assets = currentData().tickets.flatMap(ticket => [ticket.media.original, ticket.media.poster]).filter(Boolean); const asset = assets.find(asset => asset!.assetId === hash) ?? media(); return respond(route, { ...asset, transport: 'server', expiresAt: Date.now() + 60000 }); }
     if (path.startsWith('/api/media/')) return route.fulfill({ contentType: 'image/png', body: path.endsWith(otherHash) ? otherPng : png });
     if (path === '/api/media') { const uploadId = /name="uploadId"\r\n\r\n([^\r]+)/.exec(body)?.[1] ?? ''; const asset = media(); server.uploads.set(`${server.user}/${uploadId}`, { uploadId, status: 'stored', asset }); return respond(route, { ...asset, uploadId }); }
     const data = currentData();
-    if (path === '/api/tickets' && method === 'POST') { const ticket = sampleItem(body.id); ticket.fields = { title: '', cinema: '', hall: '', seat: '', showtime: '', ...body.fields }; ticket.media.original.cloudStatus = options.cloud === false ? 'not_configured' : 'saved'; data.tickets.push(ticket); }
-    else if (path.startsWith('/api/tickets/')) { const ticket = data.tickets.find(item => item.id === decodeURIComponent(path.split('/')[3])); if (!ticket) return respond(route, { detail: '不存在' }, 404); if (method === 'PATCH') Object.assign(ticket.fields, body.fields); else if (method === 'DELETE') ticket.deletedAt = Date.now(); else return respond(route, {}, 404); ticket.version++; }
+    if (server.appliedOperations.has(`${server.user}/${body?.operationId}`)) return respond(route, state());
+    if (path.endsWith('/process') && method === 'POST') {
+      if (!server.processing) return respond(route, { detail: '处理配置未就绪' }, 503);
+      const ticket = data.tickets.find(item => item.id === decodeURIComponent(path.split('/')[3]));
+      if (!ticket || ticket.deletedAt !== null) return respond(route, { detail: '票根不存在' }, 404);
+      ticket.processing = { status: 'queued', error: null }; ticket.version++;
+    } else if (path === '/api/tickets' && method === 'POST') { const ticket = sampleItem(body.id); ticket.fields = { title: '', cinema: '', hall: '', seat: '', showtime: '', ...body.fields }; ticket.media.original.cloudStatus = options.cloud === false ? 'not_configured' : 'saved'; if (server.processing && ticket.media.original.cloudStatus === 'saved') ticket.processing.status = 'queued'; data.tickets.push(ticket); }
+    else if (path.startsWith('/api/tickets/')) { const ticket = data.tickets.find(item => item.id === decodeURIComponent(path.split('/')[3])); if (!ticket) return respond(route, { detail: '不存在' }, 404); if (method === 'PATCH') { Object.assign(ticket.fields, body.fields); for (const key of Object.keys(body.fields ?? {})) ticket.fieldSources[key] = 'user'; if (body.originalAssetId || 'title' in (body.fields ?? {}) || 'showtime' in (body.fields ?? {})) { ticket.inputVersion++; if (server.processing) ticket.processing = { status: 'queued', error: null }; } } else if (method === 'DELETE') ticket.deletedAt = Date.now(); else return respond(route, {}, 404); ticket.version++; }
     else return respond(route, { detail: 'Not found' }, 404);
     if (body.originalAssetId) for (const [key, upload] of server.uploads) if (key.startsWith(server.user + '/') && upload.asset.assetId === body.originalAssetId) upload.status = 'attached';
     server.appliedOperations.add(`${server.user}/${body.operationId}`);
@@ -423,7 +430,7 @@ test('a large library fetches only near-viewport images with at most four concur
   expect(reads.get(images[0].asset.sha256)).toBe(1);
 });
 test('a collapsed original photo is not downloaded until it is opened', async ({ page }) => {
-  const api = await mockApi(page, { user: 'a' }); const poster = imageFixture(123); const ticket = sampleItem(); ticket.media.poster = poster.asset;
+  const api = await mockApi(page, { user: 'a' }); const poster = imageFixture(123); const ticket = sampleItem(); ticket.media.poster = { ...poster.asset, source: posterSource() };
   api.data.set('a', { tickets: [ticket] });
   await page.route('**/api/media/' + poster.asset.sha256 + '**', route => new URL(route.request().url()).pathname.endsWith('/download')
     ? route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...poster.asset, transport: 'server', expiresAt: Date.now() + 60000 }) })
@@ -447,4 +454,125 @@ test('a corrupt cached blob is removed even when cloud retrieval also fails', as
   await page.getByRole('link', { name: '票夹', exact: true }).click();
   await expect(page.locator('.media-availability').first()).toContainText('暂时无法连接服务');
   expect(await cacheEntries(page)).toEqual([]);
+});
+
+test('disabled processing reports configuration readiness while retaining manual editing', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' }); await page.goto('/tickets/item-1');
+  await expect(page.getByRole('region', { name: '自动处理' })).toContainText('处理配置未就绪');
+  await expect(page.getByRole('button', { name: '开始识别' })).toBeDisabled();
+  await page.getByRole('link', { name: '编辑票根' }).click();
+  await expect(page.getByText('处理配置未就绪，请配置服务端识别。', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('片名')).toBeEditable();
+  expect(api.requests.some(request => request.path.endsWith('/process'))).toBeFalsy();
+});
+test('active processing advances in the library and catches up after a failed state request', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a', processing: true }); const ticket = sampleItem(); ticket.processing.status = 'queued';
+  api.data.set('a', { tickets: [ticket] }); await page.clock.install(); await page.goto('/tickets');
+  await expect(page.getByText('等待处理', { exact: true })).toBeVisible();
+  await expect(page.locator('.media-availability')).toContainText('已校验');
+  await expect(page.getByText('处理完成', { exact: true })).toHaveCount(0);
+  ticket.processing.status = 'ocr'; ticket.version++; api.revision++;
+  await page.clock.fastForward(4001); await expect(page.getByText('正在识别票面', { exact: true })).toBeVisible();
+  const unavailable = (route: Route) => route.abort('failed'); await page.route('**/api/state', unavailable);
+  ticket.processing.status = 'poster'; ticket.version++; api.revision++;
+  await page.clock.fastForward(4001); await expect(page.getByRole('alert')).toContainText('暂时无法连接服务');
+  ticket.processing.status = 'no_match'; ticket.version++; api.revision++;
+  await page.unroute('**/api/state', unavailable); await page.clock.fastForward(4001);
+  await expect(page.getByText('未找到可靠海报', { exact: true })).toBeVisible();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
+test('OCR updates untouched fields while preserving a local correction and an explicit clearing', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a', processing: true }); const ticket = sampleItem();
+  ticket.fields = { title: '', cinema: '', hall: '', seat: '', showtime: '' };
+  ticket.fieldSources = { title: 'empty', cinema: 'empty', hall: 'empty', seat: 'empty', showtime: 'empty' };
+  ticket.processing.status = 'ocr'; api.data.set('a', { tickets: [ticket] });
+  await page.clock.install(); await page.goto('/tickets/item-1/edit'); await page.getByLabel('片名').fill('用户修正的片名');
+  ticket.fields = { title: '识别的片名', cinema: '识别的影院', hall: '3 号厅', seat: '5 排 6 座', showtime: '2026-10-22T19:30' };
+  ticket.fieldSources = { title: 'ocr', cinema: 'ocr', hall: 'ocr', seat: 'ocr', showtime: 'ocr' };
+  ticket.processing.status = 'poster'; ticket.version++; api.revision++;
+  await page.clock.fastForward(4001);
+  await expect(page.getByLabel('片名')).toHaveValue('用户修正的片名'); await expect(page.getByLabel('影院')).toHaveValue('识别的影院');
+  await page.getByLabel('座位').fill(''); await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '用户修正的片名' })).toBeVisible();
+  const update = api.requests.find(request => request.method === 'PATCH')!;
+  expect(update.body.fields).toEqual({ title: '用户修正的片名', seat: '' });
+  expect(ticket.fieldSources.title).toBe('user'); expect(ticket.fieldSources.seat).toBe('user');
+  ticket.processing.status = 'no_match'; ticket.fields.cinema = '后续识别的影院'; ticket.version++; api.revision++;
+  await page.clock.fastForward(4001);
+  await expect(page.getByRole('heading', { name: '用户修正的片名' })).toBeVisible();
+  await expect(page.getByRole('definition').filter({ hasText: '未填写' })).toContainText('手动填写');
+  await expect(page.getByRole('definition').filter({ hasText: '后续识别的影院' })).toContainText('识别结果');
+});
+test('a failed task can be retried and a later failure starts a fresh operation', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a', processing: true }); const ticket = sampleItem(); ticket.processing = { status: 'failed', error: '识别暂时失败，请重试。' }; api.data.set('a', { tickets: [ticket] });
+  await page.clock.install(); await page.goto('/tickets/item-1');
+  await expect(page.getByRole('alert')).toContainText('识别暂时失败');
+  await page.getByRole('button', { name: '重试处理', exact: true }).click(); await expect(page.getByRole('button', { name: '处理中…' })).toBeDisabled();
+  const first = api.requests.find(request => request.path.endsWith('/process'))!; expect(first.body.operationId).toBeTruthy(); expect(first.headers['x-csrf-token']).toBe('csrf-a');
+  ticket.processing = { status: 'failed', error: '海报保存失败，原票保留。' }; ticket.version++; api.revision++;
+  await page.clock.fastForward(4001); await page.getByRole('button', { name: '重试处理', exact: true }).click();
+  const requests = api.requests.filter(request => request.path.endsWith('/process')); expect(requests).toHaveLength(2); expect(requests[1].body.operationId).not.toBe(requests[0].body.operationId);
+});
+async function servePoster(page: Page, image: ReturnType<typeof imageFixture>) {
+  await page.route('**/api/media/' + image.asset.sha256 + '**', route => new URL(route.request().url()).pathname.endsWith('/download')
+    ? route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...image.asset, transport: 'server', expiresAt: Date.now() + 60000 }) })
+    : route.fulfill({ contentType: 'image/png', body: image.bytes }));
+}
+test('old poster stays through processing and no-match, then changes only with the published reference', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a', processing: true }); const oldPoster = imageFixture(201), nextPoster = imageFixture(202);
+  const ticket = sampleItem(); ticket.media.poster = { ...oldPoster.asset, source: posterSource('Old_poster.png') }; ticket.processing.status = 'queued'; api.data.set('a', { tickets: [ticket] });
+  await servePoster(page, oldPoster); await servePoster(page, nextPoster); await page.clock.install(); await page.goto('/tickets/item-1');
+  await expect(page.locator('.ticket-image img').first()).toBeVisible(); const oldUrl = await page.locator('.ticket-image img').first().getAttribute('src');
+  ticket.processing.status = 'poster'; ticket.version++; api.revision++; await page.clock.fastForward(4001);
+  await expect(page.getByText('正在查找海报', { exact: true })).toBeVisible(); await expect(page.locator('.ticket-image img').first()).toHaveAttribute('src', oldUrl!);
+  ticket.processing.status = 'no_match'; ticket.version++; api.revision++; await page.clock.fastForward(4001);
+  await expect(page.getByText('本次没有找到可靠海报，继续保留已有封面。')).toBeVisible();
+  await page.getByRole('button', { name: '重试处理', exact: true }).click();
+  ticket.media.poster = { ...nextPoster.asset, source: { ...posterSource('New_poster.png'), author: '合成作者 <b>纯文本</b>' } };
+  ticket.processing.status = 'ready'; ticket.version++; api.revision++; await page.clock.fastForward(4001);
+  await expect(page.getByText('处理完成', { exact: true })).toBeVisible();
+  await expect(page.locator('.ticket-image img').first()).not.toHaveAttribute('src', oldUrl!);
+  await expect(page.locator('.ticket-image img').first()).toHaveAttribute('src', /^blob:/);
+  await expect(page.getByRole('link', { name: 'Wikimedia Commons 来源页' })).toHaveAttribute('href', ticket.media.poster.source.sourcePage);
+  await expect(page.getByRole('link', { name: 'CC BY-SA 4.0' })).toHaveAttribute('href', 'https://creativecommons.org/licenses/by-sa/4.0/');
+  await expect(page.getByText('作者：合成作者 <b>纯文本</b>', { exact: true })).toBeVisible();
+  await expect(page.locator('.poster-attribution b')).toHaveCount(0);
+  await expect.poll(async () => (await cacheEntries(page)).map(entry => entry.sha256)).toEqual([nextPoster.asset.sha256]);
+});
+for (const width of [360, 390, 768, 1280, 1440]) {
+  test(`processing and poster attribution remain readable at ${width}px`, async ({ page }, info) => {
+    const api = await mockApi(page, { user: 'a', processing: true }); const poster = imageFixture(204), ticket = sampleItem();
+    ticket.media.poster = { ...poster.asset, source: posterSource() }; ticket.processing.status = 'poster'; ticket.fieldSources.title = 'ocr';
+    api.data.set('a', { tickets: [ticket] }); await servePoster(page, poster); await page.setViewportSize({ width, height: 1000 }); await page.goto('/tickets/item-1');
+    await expect(page.getByRole('region', { name: '自动处理' })).toContainText('正在查找海报');
+    await expect(page.getByRole('link', { name: 'CC BY-SA 4.0' })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+    await page.evaluate(() => window.scrollTo(0, 0));
+    if (width === 390 || width === 1440) await page.screenshot({ path: info.outputPath(`processing-${width}.png`), fullPage: true });
+  });
+}
+
+test('a manual value matching a concurrent OCR result still claims the user field source', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a', processing: true }); const ticket = sampleItem();
+  ticket.fields.title = ''; ticket.fieldSources.title = 'empty'; ticket.processing.status = 'ocr'; api.data.set('a', { tickets: [ticket] });
+  await page.clock.install(); await page.goto('/tickets/item-1/edit'); await page.getByLabel('片名').fill('用户手填 A');
+  ticket.fields.title = '用户手填 A'; ticket.fieldSources.title = 'ocr'; ticket.processing.status = 'poster'; ticket.version++; api.revision++;
+  await page.clock.fastForward(4001); await page.getByLabel('影院').fill('用户填写的影院');
+  await expect(page.getByLabel('片名')).toHaveValue('用户手填 A');
+  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '用户手填 A' })).toBeVisible();
+  const update = api.requests.find(request => request.method === 'PATCH')!;
+  expect(update.body.fields).toEqual({ title: '用户手填 A', cinema: '用户填写的影院' });
+  expect(ticket.fieldSources.title).toBe('user');
+  await expect(page.getByRole('definition').filter({ hasText: '用户手填 A' })).toContainText('手动填写');
+});
+
+test('explicitly clearing a new manual field preserves its user intent while untouched fields stay available to OCR', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a', empty: true, processing: true }); await page.goto('/tickets/new');
+  await page.getByLabel('选择原票照片').setInputFiles({ name: 'manual-empty.png', mimeType: 'image/png', buffer: png });
+  await page.getByLabel('片名').fill('临时手填'); await page.getByLabel('片名').fill('');
+  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '待补充片名' })).toBeVisible();
+  const created = api.requests.find(request => request.path === '/api/tickets' && request.method === 'POST')!;
+  expect(created.body.fields).toEqual({ title: '' });
 });

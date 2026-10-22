@@ -23,7 +23,7 @@ function account(user) {
   }
   return accounts.get(user);
 }
-const snapshot = user => ({ initialized: true, serverId: 'reliability', userId: user, ...account(user), capabilities: { processing: false, deviceSync: false, cloudStorage: true } });
+const snapshot = user => ({ initialized: true, serverId: 'reliability', userId: user, ...account(user), capabilities: { processing: true, processingUnavailableReason: null, deviceSync: false, cloudStorage: true } });
 const session = user => ({ authenticated: !!user, configured: true, providers: { email: true, google: false },
   ...(user ? { user: { id: user, email: `${user}@example.test`, name: user }, csrfToken: csrfTokens.get(user) ?? `csrf-${user}` } : {}) });
 
@@ -126,9 +126,14 @@ const server = createServer(async (request, response) => {
         if (createFingerprints.get(key) !== fingerprint) return respond(response, pathname, method, { detail: '操作标识已使用且内容不同。' }, 409);
         return respond(response, pathname, method, snapshot(user));
       }
-      if (pathname === '/api/tickets' && method === 'POST') {
+      if (pathname.endsWith('/process') && method === 'POST') {
+        const item = workspace.data.tickets.find(item => item.id === pathname.split('/')[3]);
+        if (!item || item.deletedAt !== null) return respond(response, pathname, method, { detail: '票根不存在。' }, 404);
+        item.processing = { status: 'queued', error: null }; item.version += 1;
+      } else if (pathname === '/api/tickets' && method === 'POST') {
         if (workspace.data.tickets.some(item => item.id === body.id)) return respond(response, pathname, method, { detail: '票根已创建，请核对后编辑。' }, 409);
         const ticket = sampleItem(body.id);
+        ticket.processing = { status: 'queued', error: null };
         ticket.fields = { title: '', cinema: '', hall: '', seat: '', showtime: '', ...body.fields };
         workspace.data.tickets.push(ticket);
       } else if (pathname.startsWith('/api/tickets/') && method === 'PATCH') {

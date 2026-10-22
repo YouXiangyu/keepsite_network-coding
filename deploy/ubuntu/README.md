@@ -1,6 +1,6 @@
 # Ubuntu / EC2 部署
 
-既有环境为东京 `t3.small`（2 GB）EC2，Nginx 提供 HTTPS。新版 M1 发布候选使用独立 `/var/lib/memoverse-v3`、Cognito 和私有 S3，单应用进程，不启动旧浮雕 worker。源码更新不代表已部署；部署、服务器启停均须用户明确要求。
+既有环境为东京 `t3.small`（2 GB）EC2，Nginx 提供 HTTPS。新版发布候选使用独立 `/var/lib/memoverse-v3`、Cognito 和私有 S3，单 API worker；配置就绪时另有受限的 OCR 子进程，不启动旧浮雕 worker。源码更新不代表已部署；部署、服务器启停均须用户明确要求。
 
 旧 `/var/lib/memoverse`、`/var/lib/memoverse-v2` 及其媒体保留，不自动升级或覆盖。正式迁移前先用一致快照和原票副本在隔离目录验证 `scripts/migrate-movie-tickets.py`；本地验证副本不能直接宣称已完成 S3 恢复。
 
@@ -13,6 +13,7 @@
 - Cognito 已配置邮箱验证、Google 提供方、授权码与令牌轮换；环境配置包含[后端列出的必需项](../../backend/README.md)。密钥只放受限文件，不输出或提交 Git。
 - 私有 S3 禁止公开访问，服务器通过实例角色获得临时凭据。角色策略见 `memoverse-s3-policy.json`：只允许目标桶 media/models 的 Get/Put，另允许该桶 ListBucket，使不存在对象的 HEAD 正确返回 404；没有对象删除、ACL、KMS 或其他桶权限。授权候选由 IAM Policy Autopilot 生成后按实际 SSE-S3 和前缀范围收紧，并经过 IAM 模拟验证。
 - 新账号从空票夹开始，不再需要初始化模板或 AnyImage 模型。旧模板和共享模型缓存仍保留用于历史回滚，不自动清理。
+- OCR 使用固定 CPU 依赖及 PP-OCRv6 tiny 文件。普通安装不下载模型；授权部署时先用发布目录的虚拟环境 Python 运行 `python -B scripts/prepare-ocr.py --destination <独立模型目录>` 查看计划，再显式加 `--execute` 准备、校验并确保服务用户只读可达。以 `MEMOVERSE_OCR_MODEL_DIR` 指向该目录，并配置可用 Redis 与私有 S3；缺少条件时界面应显示处理不可用，不能把部署成功等同于 OCR 已开启。模型目录可位于 `/opt/memoverse/shared/cache/ocr/ppocrv6-tiny`，不得覆盖旧模型目录。
 - `/var/lib/memoverse-v3` 属于 memoverse，0700；service 只对新数据目录开放写入。旧数据库、证书、DDNS 与认证回退资料保持完整。
 
 ## 准备与候选验证
@@ -58,7 +59,7 @@
 ## 验收与运维
 
 - 检查内部 health、HTTP→HTTPS、公开登录页、匿名 API/原图/备份拒绝；旧社交、模型、任务接口不存在。
-- 实测邮箱/Google 身份、两账号隔离、新账号空票夹、原票上传与有效引用、字段纠错、幂等重试、删除后的媒体拒绝与备份；模拟提供方测试不能代替真实 Google 同意和邮件收件。M1 不启动 OCR，后续里程碑按各自验收标准补充。
+- 实测邮箱/Google 身份、两账号隔离、新账号空票夹、原票上传与有效引用、字段纠错、幂等重试、删除后的媒体拒绝与备份；模拟提供方测试不能代替真实 Google 同意和邮件收件。启用 OCR 后还须验证异步进度、Redis 重启补投、纠错/删除竞态、海报来源及 S3 发布核对；本机合成样本不能替代主机资源和真实票据验收。
 - 验证 `/opt/memoverse/current` 实际提交、S3 对象完整性与私有性、原数据库仍保留；检查磁盘、内存和 OOM。
 - Nginx access 格式不含查询字符串，OAuth callback 的 access/error 日志单独关闭；Uvicorn 同样去除认证回调查询。应用日志不记录密码、验证码或令牌。
 - 应用依赖实例角色，不保存长期 AWS 访问密钥。按测试规模评估 S3 访问日志、CloudTrail 数据事件和 CloudWatch 指标的可观测性与额外费用，不默认启用与本轮无关的收费服务。

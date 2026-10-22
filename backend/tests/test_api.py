@@ -15,7 +15,7 @@ from test_object_storage import FakeS3Client
 
 
 def make_app(root, storage=None):
-    return create_app(root / "data", auth_provider=FakeAuthFactory(), run_recovery=False, shared_state=RedisSharedState(),
+    return create_app(root / "data", auth_provider=FakeAuthFactory(), run_recovery=False, run_processing=False, shared_state=RedisSharedState(),
                       object_store=storage or LocalObjectStore(root / "objects"))
 
 
@@ -67,7 +67,7 @@ def test_empty_accounts_are_atomic_and_never_clone_templates(workspace):
             "user_id": USERS["alice"]["id"], "email": "alice@example.test", "name": "Alice"}), range(8)))
     state = client.get("/api/state").json()
     assert state["data"] == {"tickets": []}
-    assert state["capabilities"] == {"processing": False, "cloudStorage": False, "deviceSync": False}
+    assert state["capabilities"] == {"processing": False, "processingUnavailableReason": "需要先配置私有云存储，才能运行电影票处理。", "cloudStorage": False, "deviceSync": False}
     assert not hasattr(app.state, "worker")
     with app.state.store.transaction() as db:
         assert db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1

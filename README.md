@@ -4,7 +4,7 @@
 
 ## 当前实现
 
-M1 将应用收窄为个人电影票，M2 补充上传核对、持久变更日志、Redis 热点快照和浏览器媒体缓存。当前提供新用户空票夹、原票上传、片名/影院/影厅/座位/放映时间编辑、详情及删除。Google/邮箱认证、服务端 HttpOnly 会话、CSRF 和账号隔离继续保留。
+M1 将应用收窄为个人电影票，M2 补充上传核对、持久变更日志、Redis 热点快照和浏览器媒体缓存，M3 加入可恢复的 OCR/海报处理与进度、重试和来源展示。当前提供新用户空票夹、原票上传、片名/影院/影厅/座位/放映时间编辑、详情及删除。Google/邮箱认证、服务端 HttpOnly 会话、CSRF 和账号隔离继续保留。
 
 新运行数据使用独立 SQLite schema 3；原票存储沿用私有 S3，显式本地开发存储会标为“未配置云存储”。只有已提交的有效票根引用才能读取图片，上传成功本身不等于票根保存成功。按字段修改使用稳定操作标识，删除保留墓碑，旧写入不能复活已删除记录。
 
@@ -12,7 +12,9 @@ M1 将应用收窄为个人电影票，M2 补充上传核对、持久变更日�
 
 浏览器仅按账号缓存图片，完整校验后标为可用；128 MiB 上限、按需加载和并发限制控制资源。缓存不可用或空间不足时仍可临时展示，清本机缓存不删除云端记录。默认使用受保护同源媒体接口；60 秒 S3 直读签名需显式启用并先验证桶 CORS。
 
-OCR/海报流水线、增量与 WebSocket、P2P/免费 TURN 和 Android 按后续里程碑实现，当前处理状态仍是“尚未处理”。测试与验收的具体完成情况见开发计划，不以文档描述代替验证。
+云存原票的处理意图在数据库持久登记，由 Redis Streams 投递；OCR 使用固定版本和哈希的 PP-OCRv6 tiny CPU 模型，模型须显式准备。计算在可终止的独立子进程中执行，不延迟原票保存响应。用户字段、输入版本与删除标记优先于异步结果；海报先核验云存，再切换引用。来源只接入 Commons，逐文件保存并展示许可；无可靠匹配保持原票或旧有效封面。
+
+缺少 S3、Redis 或固定模型时明确显示处理不可用。增量与 WebSocket、P2P 和 Android 按后续里程碑实现；免费 TURN 的额度边界未确认，保持关闭并标记强制中继未验收。测试与测量的具体范围见开发计划，合成票根和两部公版电影的海报验证不代表真实票据准确率或现代电影覆盖率。
 
 浮雕、分类标签、分享、社区及旧模板调用链已退出新版。历史实现与资料可从 Git 检查点 `d7945d8` 追溯；实际数据库、照片、模型缓存、S3 对象和回滚文件保持原样。
 
@@ -24,6 +26,7 @@ OCR/海报流水线、增量与 WebSocket、P2P/免费 TURN 和 Android 按后�
 | 票根、字段来源、操作幂等与墓碑 | `backend/contracts.py`、`store.py`、`services/tickets.py`、`state.py` | API、双账号、删除和重试测试 |
 | 图片校验、私有存储、有效引用授权 | `backend/media.py`、`object_storage.py`、`api.py` | 文件类型/大小/哈希、存储故障和媒体授权测试 |
 | 可恢复上传、持久变更、Redis 缓存 | `backend/media.py`、`store.py`、`shared_state.py`、`state.py` | 上传未知结果、事务原子性、缓存损坏/丢失与真实 Redis CI |
+| OCR/海报流水线 | `backend/processing.py`、`processing_repository.py`、`ocr.py`、`posters.py` | Streams 恢复、任务租约、纠错/删除竞态、海报发布故障、固定模型与合成测量 |
 | 响应式 Web | `demo/src/Prototype.tsx`、`app/`、`features/tickets/` | 运行时契约、单测、浏览器测试和生产构建 |
 | 本机媒体缓存 | `demo/src/mediaCache.ts`、`MediaProvider.tsx` | 账号隔离、全量清理后恢复、空间不足、完整性与按需加载 |
 | 账号备份、隔离恢复 | `backend/backups.py`、`scripts/restore-account-backup.py` | 资源限制、ZIP 安全、归属、墓碑和完整性验证 |
@@ -55,7 +58,7 @@ python -B -m pytest backend/tests scripts/tests -q
 python -B -m pytest deploy/ubuntu/tests -q
 ```
 
-在 `demo/` 运行 `npm run check:runtime`、`npm run test:unit`、`npm run build`、`npm run test:web` 和生产构建故障测试。测试使用隔离数据和测试身份，不替代真实 Google/邮箱、S3、Redis、OCR、TURN 或真机验收。
+在 `demo/` 运行 `npm run check:runtime`、`npm run test:unit`、`npm run build`、`npm run test:web` 和生产构建故障测试。测试使用隔离数据和测试身份；真实 Redis、固定 OCR 模型由专门测试验证，真实 Google/邮箱、S3、实际票据、TURN 和真机另行验收。
 
 GitHub PR 与 `codex/**` 分支推送运行 `Backend tests`、`Frontend tests` 和 `deployment-recovery`；后端 CI 使用隔离 Redis 服务执行真实客户端验证。合并前检查必须对应最新提交，独立代码审查也必须覆盖最新提交。开发交付到提交与 PR，部署、EC2 启停和合并另等用户明确要求，不自动执行。
 

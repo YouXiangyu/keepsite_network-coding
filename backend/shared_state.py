@@ -18,6 +18,7 @@ from redis.exceptions import RedisError
 from redis.retry import Retry
 
 from .contracts import FIELD_NAMES, Identifier, TicketFields
+from .posters import validate_source
 
 log = logging.getLogger(__name__)
 FORMAT_VERSION = 1
@@ -51,9 +52,12 @@ def _valid_snapshot(payload, user_id, server_id, revision):
             or not _integer(payload.get("revision")) or payload["revision"] != revision):
         return False
     capabilities, data = payload.get("capabilities"), payload.get("data")
-    if (not isinstance(capabilities, dict) or capabilities.get("processing") is not False
+    if (not isinstance(capabilities, dict) or type(capabilities.get("processing")) is not bool
             or capabilities.get("deviceSync") is not False
             or type(capabilities.get("cloudStorage")) is not bool
+            or "processingUnavailableReason" not in capabilities
+            or capabilities["processingUnavailableReason"] is not None and (
+                not isinstance(capabilities["processingUnavailableReason"], str) or len(capabilities["processingUnavailableReason"]) > 1000)
             or not isinstance(data, dict) or not isinstance(data.get("tickets"), list)):
         return False
     identities = set()
@@ -79,9 +83,14 @@ def _valid_snapshot(payload, user_id, server_id, revision):
                 return False
             media, processing = ticket.get("media"), ticket.get("processing")
             if (not isinstance(media, dict) or not _media(media.get("original"))
-                    or "poster" not in media or media["poster"] is not None and not _media(media["poster"])
-                    or not isinstance(processing, dict) or processing.get("status") != "not_started"
-                    or "error" not in processing or processing["error"] is not None):
+                    or "poster" not in media or media["poster"] is not None and (
+                        not _media(media["poster"]) or not validate_source(media["poster"].get("source")))
+                    or not isinstance(processing, dict) or processing.get("status") not in (
+                        "not_started", "queued", "ocr", "poster", "ready", "no_match", "failed")
+                    or "error" not in processing or processing["error"] is not None and (
+                        not isinstance(processing["error"], str) or len(processing["error"]) > 1000)
+                    or processing.get("status") == "ready" and (
+                        media["poster"] is None or media["poster"].get("cloudStatus") != "saved")):
                 return False
     except (ValidationError, TypeError, ValueError):
         return False
