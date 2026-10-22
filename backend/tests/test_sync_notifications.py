@@ -224,6 +224,10 @@ def test_real_redis_cross_hub_notifications_and_reconnect_calibration():
 
     async def run():
         shared_one, shared_two = RedisSharedState(url=url), RedisSharedState(url=url)
+        subscriber_name = "memoverse-sync-test-" + uuid.uuid4().hex
+        # Fresh pool, before any connections exist. A unique server-side name lets
+        # the test disconnect only its own PubSub socket without touching readers.
+        shared_two.client.connection_pool.connection_kwargs["client_name"] = subscriber_name
         store = HintStore()
         one = SyncNotificationHub(store, shared_one, HintAuth(), heartbeat_seconds=10)
         other_store = HintStore(store.server_id)
@@ -279,11 +283,32 @@ def test_real_redis_cross_hub_notifications_and_reconnect_calibration():
             # Subscription confirmation triggers immediate SQL calibration, not a ten-second wait.
             await eventually(lambda: alice.cursor == 12)
             assert bob.cursor == 0
-            # Disconnect only the second borrowed pool. Redis re-subscription must trigger
-            # an immediate SQL scan, before the ten-second periodic scan.
+            # Disconnect from the Redis server, as a network failure would. Calling
+            # pool.disconnect() here would close another thread's parser buffer and
+            # manufacture an unrelated cross-thread ValueError in redis-py cleanup.
+            clients = await asyncio.to_thread(shared_one.client.client_list, _type="pubsub")
+            owned = [client for client in clients if client["name"] == subscriber_name]
+            assert len(owned) == 1
+            old_connection_id = owned[0]["id"]
             other_store.commit("alice", 14, notify=False)
-            await asyncio.to_thread(shared_two.client.connection_pool.disconnect)
+            assert await asyncio.to_thread(shared_one.client.client_kill_filter, _id=old_connection_id) == 1
             await eventually(lambda: alice.cursor == 14, timeout=5)
+            await subscribed(2)
+            clients = await asyncio.to_thread(shared_one.client.client_list, _type="pubsub")
+            reconnected = [client for client in clients if client["name"] == subscriber_name]
+            assert len(reconnected) == 1 and reconnected[0]["id"] != old_connection_id
+            assert all(thread.is_alive() for thread in two._threads)
+            # Also prove ordinary cross-hub delivery, independently of SQL scans.
+            live_hint = threading.Event()
+            original_incoming = two._incoming
+            def observed_incoming(raw):
+                original_incoming(raw)
+                if json.loads(raw).get("cursor") == 16:
+                    live_hint.set()
+            two._incoming = observed_incoming
+            store.commit("alice", 16)
+            await eventually(lambda: live_hint.is_set() and alice.cursor == 16, timeout=3)
+            assert bob.cursor == 0
         finally:
             allow_subscribe.set()
             await one.stop()
