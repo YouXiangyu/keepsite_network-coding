@@ -659,15 +659,16 @@ async function servePoster(page: Page, image: ReturnType<typeof imageFixture>) {
 test('old poster stays through processing and no-match, then changes only with the published reference', async ({ page }) => {
   const api = await mockApi(page, { user: 'a', processing: true }); const oldPoster = imageFixture(201), nextPoster = imageFixture(202);
   const ticket = sampleItem(); ticket.media.poster = { ...oldPoster.asset, source: posterSource('Old_poster.png') }; ticket.processing.status = 'queued'; api.data.set('a', { tickets: [ticket] });
-  await servePoster(page, oldPoster); await servePoster(page, nextPoster); await page.clock.install(); await page.goto('/tickets/item-1');
+  // WebSocket pushes each update; keep real time for asynchronous IndexedDB work.
+  await servePoster(page, oldPoster); await servePoster(page, nextPoster); await page.goto('/tickets/item-1');
   await expect(page.locator('.ticket-image img').first()).toBeVisible(); const oldUrl = await page.locator('.ticket-image img').first().getAttribute('src');
-  ticket.processing.status = 'poster'; ticket.version++; api.revision++; await page.clock.fastForward(4001);
+  ticket.processing.status = 'poster'; ticket.version++; api.revision++;
   await expect(page.getByText('正在查找海报', { exact: true })).toBeVisible(); await expect(page.locator('.ticket-image img').first()).toHaveAttribute('src', oldUrl!);
-  ticket.processing.status = 'no_match'; ticket.version++; api.revision++; await page.clock.fastForward(4001);
+  ticket.processing.status = 'no_match'; ticket.version++; api.revision++;
   await expect(page.getByText('本次没有找到可靠海报，继续保留已有封面。')).toBeVisible();
   await page.getByRole('button', { name: '重试处理', exact: true }).click();
   ticket.media.poster = { ...nextPoster.asset, source: { ...posterSource('New_poster.png'), author: '合成作者 <b>纯文本</b>' } };
-  ticket.processing.status = 'ready'; ticket.version++; api.revision++; await page.clock.fastForward(4001);
+  ticket.processing.status = 'ready'; ticket.version++; api.revision++;
   await expect(page.getByText('处理完成', { exact: true })).toBeVisible();
   await expect(page.locator('.ticket-image img').first()).not.toHaveAttribute('src', oldUrl!);
   await expect(page.locator('.ticket-image img').first()).toHaveAttribute('src', /^blob:/);
