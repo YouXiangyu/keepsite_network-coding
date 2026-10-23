@@ -1,0 +1,78 @@
+{
+  "date": "2026-10-24",
+  "phase": "reference_visual_redesign",
+  "scope": "Responsive Web and native Android collection presentation; no production deployment or migration.",
+  "reference": "docs/UI_example/exec-b690fb0e-22b3-44a0-ac70-b991804798b7.png",
+  "referenceAssets": "Six user-authorized script crops used only in an isolated loopback visual fixture; images are not committed or put in real accounts.",
+  "fixture": "Synthetic BFF identity, fake Redis and in-memory mock object storage. Cloud saved status is simulated for visual success-state review, not real S3 acceptance.",
+  "changes": [
+    "true masonry without reordering Web DOM",
+    "native StaggeredGrid with stable search view",
+    "real title/cinema search and createdAt sorting",
+    "image/title/date hierarchy and compact navigation",
+    "normal cache hints collapsed while failures remain visible",
+    "failed cover refresh retry without metadata changes",
+    "small text contrast >=4.5 and search touch height >=44dp"
+  ],
+  "verification": {
+    "webUnitPassed": 88,
+    "webBrowserPassed": 56,
+    "webReferenceScreenshotIncluded": true,
+    "webBuildAndRuntimePassed": true,
+    "androidJvmPassed": 34,
+    "androidLintErrors": 0,
+    "androidLintWarnings": 13,
+    "physicalUiPassed": 5,
+    "physicalDeviceModel": "23090RA98C",
+    "physicalAndroid": 16,
+    "regressions": [
+      "failed HTTP image -> visible error -> explicit refresh -> new HTTP200 and drawable",
+      "same search View/query retained; ticket versions unchanged",
+      "text contrast on white and soft surfaces",
+      "six image ratios, masonry geometry, sorting, filtering, resize, no overlap",
+      "keyboard, rotation, foreground recovery and original Activity identity"
+    ]
+  },
+  "historicalAttempts": [
+    "phone locked attempt stopped and excluded",
+    "test media-control idle connection EOF fixed with Connection: close",
+    "A system autofill save/update prompt stole focus during test backgrounding. A new-Intent workaround also disturbed Scenario tracking and was removed. Final tests isolate autofill only in test MainActivity windows, unregister callbacks in finally, retain normal Scenario resume with Activity/task/Intent identity checks, and wait explicitly for legitimate portrait recreation after rotation."
+  ],
+  "review": "gpt-6.1-sol high implementation and independent reviewers; gpt-6-astra high resolved test lifecycle driver; final independent review passed. Confirmed P2 media retry and contrast repaired; no unresolved P1/P2 in this phase.",
+  "artifacts": [
+    {
+      "path": ".cache/visual-redesign-20261024/physical-ui.txt",
+      "bytes": 3745,
+      "sha256": "fd0acf8a809df8ec8c2ca27b9da9ce69669b1313a81adfa0e5ef22464d290a96"
+    },
+    {
+      "path": ".cache/visual-redesign-20261024/web-reference.png",
+      "bytes": 306748,
+      "sha256": "4712f5b9d584da82a2f2e11aa2ec0ef5ef2d7b96ae5ce648208f639233d58317"
+    },
+    {
+      "path": ".cache/visual-redesign-20261024/android-reference-phone.png",
+      "bytes": 2420386,
+      "sha256": "8a0d4fe7d3654a06372d2a8b4eacb7fb50bb65687f0e15c8d2e916052ace4bfe"
+    },
+    {
+      "path": ".cache/visual-redesign-20261024/memoverse-loopback.apk",
+      "bytes": 57385595,
+      "sha256": "007a409db6df44fe434367e8db79bf809b0c8a241a00fae9eace7501b16e677f"
+    },
+    {
+      "path": ".cache/visual-redesign-20261024/memoverse-tests.apk",
+      "bytes": 658175,
+      "sha256": "fed5d84e25f2d3026d810f1d9d03265ef7ad79762e89ca5dfeb9e2a4190db882"
+    },
+    {
+      "path": ".cache/visual-redesign-20261024/memoverse-https-debug.apk",
+      "bytes": 57385595,
+      "sha256": "e3c1e70d863b6b4b9dfac0c4080711533b3bcdafc28a52298449bb123e31d30c"
+    }
+  ],
+  "remaining": [
+    "user visual acceptance",
+    "broader M7 real cloud/second physical device/WAN acceptance remains as recorded in development plan"
+  ]
+}

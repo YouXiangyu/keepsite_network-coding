@@ -90,6 +90,8 @@ AAR 本身未包含 LICENSE/NOTICE，因此工程在 `app/src/main/assets/licens
 
 ## 验证状态
 
+2026-10-24 视觉第二轮：票夹采用真实错列、搜索/排序、紧凑片名日期和轻量底栏；显式刷新可重试失败图片且保留搜索，灰字对比度与触达区域已校验。34 JVM、Lint 0错误/13警告、最终同一真机5项UI通过，使用用户授权参考裁图的隔离账号验收。当前包位于 `.cache/visual-redesign-20261024/`；`memoverse-https-debug.apk` 为默认 HTTPS 开发签名包。详见 [视觉证据](../docs/evidence/visual-redesign-20261024.json)。UI测试需要向新媒体回归传入本轮 `runToken`；测试只隔离自身Activity的自动填充会话，不改变系统设置或生产行为。下方为此前检查点。
+
 2026-10-24 更新：本轮应用代码通过 34 JVM、Lint（0 错误、10 警告）、360dp/大字号/800dp 平板共 9 次模拟器 UI，以及模拟器和一台用户授权 Android 16 真机的 CRUD、账号隔离、真实 JNI/DataChannel 双向传图。Web 已修复完成确认提前关闭竞态。真机完整 UI 仪器测试最终 3/3 通过；测试启动期间临时采用后台 Activity 启动权限，并在 finally 释放，API 29 以下保留原路径。输入、旋转、重建及后台恢复断言未放宽，独立审查通过。详见 [本轮证据](../docs/evidence/mobile-delivery-20261024.json) 和开发计划；下述 2026-10-23 内容为历史检查点。
 
 默认 HTTPS 验收包位于 `.cache/mobile-delivery-20261024/memoverse-https-debug.apk`，开发签名，连接 `https://keepsite.space`；服务器尚未部署新版。已测 loopback 包和测试包在同目录。互通校验器可用 `--physical --serial <明确授权设备>`，以及 `--apk` / `--test-apk` 指定工作区内保存的 APK；仍核对安装制品 SHA、随机夹具 token 和前后源码哈希。先确认目标设备没有未知的同包用户数据，不使用卸载或 `pm clear` 掩盖冲突。

@@ -1,6 +1,6 @@
 # MemoVerse Web App Agent Guide
 
-Updated: 2026-10-22.
+Updated: 2026-10-24.
 
 ## Product and platform
 
@@ -28,7 +28,7 @@ Updated: 2026-10-22.
 - Store originals and posters durably in private S3. Browser files are reclaimable per-account caches; clearing them does not delete cloud records. Unsaved upload drafts do not have the same recovery guarantee. Do not introduce offline CRUD, local OCR or indefinite background transfers.
 - Use valid local cache, bounded P2P/optional TURN attempts, then authorized S3 retrieval. Trigger S3 fallback on missing peers, timeouts, stalled transfers or checksum failures. Cancel redundant transfers and report cloud errors or storage limits accurately.
 - User corrections and deletion take precedence over stale asynchronous results. Synchronization uses the specification's version, cursor and idempotency rules.
-- Use neutral backgrounds, readable labels, native inputs, visible focus, accessible status/error feedback and responsive image-led layouts. Do not copy obsolete visual references.
+- Use neutral backgrounds, readable labels, native inputs, visible focus, accessible status/error feedback and responsive image-led layouts. The user approved the movie-collection image in `docs/UI_example` as the mobile visual reference on 2026-10-24; use its visual hierarchy and masonry without restoring removed social/exploration features. Other obsolete references remain out of scope.
 - Use lightweight server-side CPU OCR and validate accuracy, process memory and latency. Do not introduce paid OCR/model APIs or a new provider by implication. Continue private S3 for media, with encryption, HTTPS and short-lived authorized access; preserve old user data during migration.
 - Cloud media survives browser cache eviction. Logout is not deletion; record deletion revokes future authorization and propagates tombstones, while object/version cleanup follows the documented policy. Existing signed URLs retain their own expiry.
 - The user deferred the always-available signaling/API hosting decision. Do not change EC2 shutdown policy or claim the application remains accessible while its required services are stopped.
