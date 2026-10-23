@@ -29,3 +29,11 @@ demo/qa/*.webp
 
 # Local build artifacts and backup copies
 backups/
+
+# Native Android local state, generated APKs, and signing material.
+android/.gradle/
+android/.kotlin/
+android/**/build/
+android/local.properties
+android/*.jks
+android/*.keystore

@@ -1,0 +1,164 @@
+{
+  "schemaVersion": 1,
+  "checkpointDate": "2026-10-23",
+  "testRunDate": "2026-10-22",
+  "status": "wip_not_fully_verified",
+  "branch": "codex/android-native-progress",
+  "scope": "Existing results from one owned API 36.1 emulator and an isolated loopback fixture; not physical-device or cloud acceptance.",
+  "testOrigin": "http://127.0.0.1:4180",
+  "build": {
+    "assembleDebug": "passed",
+    "assembleDebugAndroidTest": "passed",
+    "jvmTests": [
+      {
+        "name": "io.github.youxiangyu.memoverse.core.FileCacheTest",
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "io.github.youxiangyu.memoverse.core.SyncEngineTest",
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "io.github.youxiangyu.memoverse.peer.NativePeerTest",
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "io.github.youxiangyu.memoverse.peer.PeerWireTest",
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "name": "io.github.youxiangyu.memoverse.ui.PresentationTest",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    ],
+    "lint": {
+      "errors": 0,
+      "warnings": 10
+    }
+  },
+  "apks": {
+    "application": {
+      "sha256": "11c89616202eaafff786b6cb6864d99dfcdf2a55e16f4558f4316e541441cd44",
+      "bytes": 57384781
+    },
+    "instrumentation": {
+      "sha256": "900e052e819a015486900d7e630aeb5161deb5dfad7d26668ac92f0e724cbd23",
+      "bytes": 646207
+    }
+  },
+  "foregroundRecovery": {
+    "display": {
+      "widthPx": 1600,
+      "heightPx": 2560,
+      "densityDpi": 320,
+      "fontScale": 1.0
+    },
+    "criteria": "connected, ready and no error continuously for 500ms within 15s, without manual refresh",
+    "beforeFix": {
+      "phase": "library-foreground",
+      "recoveredWithoutRefresh": false,
+      "elapsedMs": 15009,
+      "connected": false,
+      "ready": true,
+      "error": "暂时无法读取服务数据，请重试。",
+      "observedErrors": [
+        "暂时无法读取服务数据，请重试。"
+      ],
+      "backgroundPauseMs": 6000,
+      "actualBackgroundPauseMs": 6000
+    },
+    "diagnosis": {
+      "method": "GET",
+      "routeClass": "session",
+      "exception": "IOException",
+      "cause": "EOFException",
+      "expectedEpoch": 1,
+      "currentEpoch": 1,
+      "cancelled": false
+    },
+    "afterFix": {
+      "phase": "library-foreground",
+      "recoveredWithoutRefresh": true,
+      "elapsedMs": 534,
+      "connected": true,
+      "ready": true,
+      "error": "",
+      "observedErrors": [],
+      "backgroundPauseMs": 6000,
+      "actualBackgroundPauseMs": 6001
+    },
+    "instrumentationTests": 1,
+    "instrumentationResult": "passed",
+    "interpretation": "The 534ms includes a required 500ms stability wait; it is not a latency benchmark."
+  },
+  "pending": [
+    "Complete UI matrix on the final application APK",
+    "Native CRUD instrumentation",
+    "Real JNI/DataChannel Android to Web and Web to Android interoperability",
+    "Default HTTPS acceptance APK",
+    "Two physical Android devices",
+    "Real Google/email/S3, actual ticket accuracy and WAN acceptance",
+    "TURN and 16KiB-device acceptance"
+  ],
+  "cleanup": {
+    "ownedEmulatorClosed": true,
+    "ownedFixtureClosed": true,
+    "ownedAdb5037Closed": true,
+    "displaySettingsRestored": true,
+    "cloudResourcesChanged": false
+  },
+  "sourceHashMethod": "SHA-256 of UTF-8 source after CRLF-to-LF normalization",
+  "sourceSha256": {
+    "android/app/src/androidTest/java/io/github/youxiangyu/memoverse/core/NativeInteropInstrumentedTest.kt": "cade87f5be48e9a46c33e7a7e69ca59cff329d48d0ee8719418da4b0354cb1b3",
+    "android/app/src/androidTest/java/io/github/youxiangyu/memoverse/ui/NativeUiInstrumentedTest.kt": "bd3da5481d818b367b30e639b19d87449ff663b386f963f849095d1ccba5c4a5",
+    "android/app/src/main/java/io/github/youxiangyu/memoverse/core/AppRepository.kt": "c7b51d4250865634277f76e148f4f860b7c26b17b265a7571df284f2d389af68",
+    "android/app/src/main/java/io/github/youxiangyu/memoverse/core/FileCache.kt": "822ea91f099af1566f0368c1f9b8e03c53c36f587bc5baa148ae867d46205384",
+    "android/app/src/main/java/io/github/youxiangyu/memoverse/core/HttpApi.kt": "4e39627d28740aa10fe831bb63516b9557d24dc0bb93322d34b664cf5df0dfec",
+    "android/app/src/main/java/io/github/youxiangyu/memoverse/core/Models.kt": "d2547e11998ef8a867fc3e9452e3b26670b2cff7fc300db27a9b851f0d93be83",
+    "android/app/src/main/java/io/github/youxiangyu/memoverse/core/SecretStore.kt": "76dc2f00d42a9da036e1c00569f8f61460663ab868b0d5d637913761ad935ecc",
+    "android/app/src/main/java/io/github/youxiangyu/memoverse/core/SyncEngine.kt": "3700fdcaf8e5ed7bbc832079ffc0649a5b1c866602ba91bb09fafa4409b72c2b",
+    "android/app/src/main/java/io/github/youxiangyu/memoverse/core/SyncEvents.kt": "eabaf9642bb5c7656c805563b094ed1ef2e2c857cf4dffab912a651e7e431981",
+    "android/app/src/main/java/io/github/youxiangyu/memoverse/core/Wire.kt": "3a3e9275cb517734232ed75e365d6fb1f3d99c3608aa308aec630eadb485bd43",
+    "android/app/src/main/java/io/github/youxiangyu/memoverse/MainActivity.kt": "76ec00c8c5e15efdb85b2f8f77f865df768c16cc1bb510299350a73ad9fd3f3d",
+    "android/app/src/main/java/io/github/youxiangyu/memoverse/peer/AndroidRtcFactory.kt": "c34289902aca9ae04abd97545d6b97acf6df643dc929cd3151b5b3d1104a8b16",
+    "android/app/src/main/java/io/github/youxiangyu/memoverse/peer/NativePeer.kt": "28b9e29313700a09f75b6cd32337a786fcec7ad241bf2b2973ae8a4e905e8341",
+    "android/app/src/main/java/io/github/youxiangyu/memoverse/peer/PeerJson.kt": "4edfd7c3bebb9782f8793101d2e9fc281f5f02f39265bd2d4e1948a64501d111",
+    "android/app/src/main/java/io/github/youxiangyu/memoverse/peer/PeerPorts.kt": "ff65511c44964f6e8115bdbd6761efe30cdc8a9b2acc458b20322bc2e6b72f8d",
+    "android/app/src/main/java/io/github/youxiangyu/memoverse/peer/PeerWire.kt": "4577a9367043cd6d10a0c72a0bd42fdbac7a2cc8ff31216af412213ff3e94a7c",
+    "android/app/src/main/java/io/github/youxiangyu/memoverse/peer/RtcPort.kt": "4b109a32ffbfc02ffb36970357612c1e4dd7fb7026c88155b5d3eeb0bebf9865",
+    "android/app/src/main/java/io/github/youxiangyu/memoverse/ui/MediaPresenter.kt": "337478ef9c1d69d506756233a8239339d58a6014d8fe81246ba55a8154ec8351",
+    "android/app/src/main/java/io/github/youxiangyu/memoverse/ui/Presentation.kt": "20fca9a844ab197a727dd3ebde542ff8df715692d4def2816a2279760f7fe9f5",
+    "android/app/src/main/java/io/github/youxiangyu/memoverse/ui/Widgets.kt": "cf93250df7865349d4f6ff11efb8d50bff44aaa882f11092aca76b803ebe031d",
+    "android/app/src/main/java/io/github/youxiangyu/memoverse/UiViewModel.kt": "62dda443566880fa8f9aa856a9caffec8671c25e409f1754f813c631e37750cf",
+    "android/app/src/test/java/io/github/youxiangyu/memoverse/core/FileCacheTest.kt": "8cc8293694e4b13b67bd72393fcea2c437e35cb8d1473daa1927ad268bfb6e42",
+    "android/app/src/test/java/io/github/youxiangyu/memoverse/core/SyncEngineTest.kt": "bc91d1c68d700602f21aa6b67f37b781534947ce43346f1a6cf3c0e1faeffb32",
+    "android/app/src/test/java/io/github/youxiangyu/memoverse/peer/NativePeerTest.kt": "efc29ad4edab8545a6da47f54ee1e53101d9942dad20a0178746f6a6e8adb8b2",
+    "android/app/src/test/java/io/github/youxiangyu/memoverse/peer/PeerWireTest.kt": "351415d767cb83703dbee3b05fd917353d5a61607ce487c9b9d14dc19c63aadb",
+    "android/app/src/test/java/io/github/youxiangyu/memoverse/ui/PresentationTest.kt": "75182f593ca447ed0ebe05d4879884170a28fc2263b8146c9f58aaf96f6a8faf",
+    "android/app/build.gradle.kts": "b668c9fe9d9a836c20b34df019e6f73fd7080b038dce3c195cfc42290628ecd5",
+    "android/build.gradle.kts": "7dad05607d82a39af70b97021c7acb52fb50c8c65dd6047e4b5f76db5d664edd",
+    "android/settings.gradle.kts": "36f1cf7d69bd0b9b2abceac7aa758df5f89176e485130cd923fa2cd68b601910",
+    "android/gradle/wrapper/gradle-wrapper.properties": "2cb0f9ddf992a26fc4947c91019136bff5e1ccfbf93bd905402b1abf69d15bc5",
+    "backend/auth.py": "557357cca5ec61a01feec54230c0d6ed8d1121446688f38019d6f7addda03e63",
+    "backend/native_auth.py": "d9c9d93b8c7914a38cb3796913a286891184b3e5f09330c5b5b8fa7bfe2c3f9f",
+    "backend/tests/native-server.py": "c9adb0ab4173205944697307912a94540b8763e28cc7f661c8eda18909092468",
+    "backend/tests/test_native_auth.py": "a83804ffa21962f472263cf277d4c280c89da5e8c4c5b7f07c3748fbda2eebe2",
+    "backend/tests/test_native_fixture.py": "5f5dbbe47e9377bee8f4963ed7a9a68d673cf3e49f4c6bc35f4dcccb3e9b770f",
+    "scripts/verify-android.mjs": "46342dc9e0bf92302c72357f36dd61828b2993d86f513885bd576110418108f0"
+  }
+}

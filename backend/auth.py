@@ -398,7 +398,7 @@ class AuthService:
 
     def check_write(self, request, session=None):
         self.require_config()
-        if request.headers.get('origin') != self.config.public_url or request.headers.get('x-memoverse-client') != 'web':
+        if request.headers.get('origin') != self.config.public_url or request.headers.get('x-memoverse-client') not in ('web', 'android'):
             raise AuthError(403, '请求来源验证失败。', 'invalid_origin')
         if session and not equal_secret(request.headers.get('x-csrf-token', ''), session['csrf']):
             raise AuthError(403, '页面验证已失效，请刷新后重试。', 'invalid_csrf')
@@ -418,19 +418,33 @@ class AuthService:
     def login(self, email, password):
         return self.create_session(self.provider().login(email, password))
 
-    def create_session(self, tokens, nonce=None):
+    def validate_login_tokens(self, tokens, nonce=None):
         self.require_config()
         if not isinstance(tokens, dict):
             raise AuthError(401, '认证服务未提供完整登录状态。', 'invalid_token')
         user, expiry = self.validator.pair(tokens, nonce)
         if not isinstance(tokens.get('refresh_token'), str) or not 1 <= len(tokens['refresh_token']) <= 65536:
             raise AuthError(401, '认证服务未提供完整登录状态。', 'invalid_token')
+        return user, expiry
+
+    def prepare_session(self, tokens, nonce=None):
+        """Validate outside SQL locks; a caller can atomically insert the prepared session."""
+        user, expiry = self.validate_login_tokens(tokens, nonce)
         sid, csrf, now = secrets.token_urlsafe(32), secrets.token_urlsafe(32), self.clock()
+        session = {'sid': sid, 'user': user, 'csrf': csrf, 'expires': now + SESSION_SECONDS}
+        values = (hashed(sid), json.dumps(user), self.encrypt(tokens), csrf, now, session['expires'], min(expiry - 30, now + 900))
+        return session, values
+
+    @staticmethod
+    def insert_session(db, values):
+        db.execute('DELETE FROM sessions WHERE expires<=?', (values[4],))
+        db.execute('INSERT INTO sessions(sid_hash,user_json,tokens,csrf,created,expires,refresh_at) VALUES (?,?,?,?,?,?,?)', values)
+
+    def create_session(self, tokens, nonce=None):
+        session, values = self.prepare_session(tokens, nonce)
         with self.db() as db:
-            db.execute('DELETE FROM sessions WHERE expires<=?', (now,))
-            db.execute('INSERT INTO sessions(sid_hash,user_json,tokens,csrf,created,expires,refresh_at) VALUES (?,?,?,?,?,?,?)',
-                       (hashed(sid), json.dumps(user), self.encrypt(tokens), csrf, now, now + SESSION_SECONDS, min(expiry - 30, now + 900)))
-        return {'sid': sid, 'user': user, 'csrf': csrf, 'expires': now + SESSION_SECONDS}
+            self.insert_session(db, values)
+        return session
 
     def invalidate(self, sid):
         if sid:
@@ -545,22 +559,31 @@ class AuthService:
                 pass  # Local invalidation is authoritative even during provider outages.
         return {'ok': True, **({'logoutUrl': self.config.domain + '/logout?' + urlencode({'client_id': self.config.client_id, 'logout_uri': self.config.public_url + '/'})} if self.config else {})}
 
-    def start_google(self):
+    def google_attempt(self, *, purpose='web', expires=None):
+        """Build one browser-bound OAuth attempt without opening a write transaction."""
         self.require_config()
         if not self.config.google_enabled:
             raise AuthError(503, 'Google 登录尚未配置完成。', 'provider_disabled')
         state, binding, nonce, verifier = [secrets.token_urlsafe(32) for _ in range(4)]
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('=')
-        payload = self.encrypt({'verifier': verifier, 'nonce': nonce})
-        with self.db() as db:
-            db.execute('DELETE FROM oauth WHERE expires<=?', (self.clock(),))
-            db.execute('INSERT INTO oauth VALUES (?,?,?,?)', (hashed(state), hashed(binding), payload, self.clock() + OAUTH_SECONDS))
+        if purpose not in ('web', 'android'):
+            raise ValueError('Unsupported OAuth purpose')
+        expiry = min(self.clock() + OAUTH_SECONDS, expires) if expires is not None else self.clock() + OAUTH_SECONDS
+        payload = self.encrypt({'verifier': verifier, 'nonce': nonce, **({'purpose': 'android'} if purpose == 'android' else {})})
         url = self.config.domain + '/oauth2/authorize?' + urlencode({'response_type': 'code', 'client_id': self.config.client_id,
             'redirect_uri': self.config.public_url + '/api/auth/callback', 'scope': 'openid email profile',
             'identity_provider': 'Google', 'state': state, 'nonce': nonce, 'code_challenge_method': 'S256', 'code_challenge': challenge})
-        return url, binding
+        return {'url': url, 'state': state, 'binding': binding, 'payload': payload, 'expires': expiry}
 
-    def callback(self, state, binding, code):
+    def start_google(self):
+        attempt = self.google_attempt()
+        with self.db() as db:
+            db.execute('DELETE FROM oauth WHERE expires<=?', (self.clock(),))
+            db.execute('INSERT INTO oauth VALUES (?,?,?,?)',
+                       (hashed(attempt['state']), hashed(attempt['binding']), attempt['payload'], attempt['expires']))
+        return attempt['url'], attempt['binding']
+
+    def consume_google_attempt(self, state, binding, *, purpose='web'):
         self.require_config()
         if not self.config.google_enabled or any(not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}', value) for value in (state, binding)):
             raise AuthError(400, '登录请求已过期或不属于此浏览器。', 'invalid_state')
@@ -570,12 +593,24 @@ class AuthService:
             if row is None or row['expires'] <= self.clock() or not equal_secret(row['binding_hash'], hashed(binding)):
                 db.rollback()
                 raise AuthError(400, '登录请求已过期或不属于此浏览器。', 'invalid_state')
+            payload = self.decrypt(row['payload'])
+            if (payload.get('purpose', 'web') != purpose
+                    or set(payload) != ({'verifier', 'nonce'} if purpose == 'web' else {'verifier', 'nonce', 'purpose'})
+                    or any(not isinstance(payload.get(key), str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}', payload[key]) for key in ('verifier', 'nonce'))):
+                db.rollback()
+                raise AuthError(400, '登录请求用途不一致。', 'invalid_state')
             db.execute('DELETE FROM oauth WHERE state_hash=?', (hashed(state),))
             db.commit()
+        return payload
+
+    def exchange_google_attempt(self, payload, code):
         if not isinstance(code, str) or not 1 <= len(code) <= 4096:
             raise AuthError(400, '登录未完成，请重新开始。', 'invalid_code')
-        payload = self.decrypt(row['payload'])
-        tokens = self.provider().exchange(code, payload['verifier'])
+        return self.provider().exchange(code, payload['verifier'])
+
+    def callback(self, state, binding, code):
+        payload = self.consume_google_attempt(state, binding)
+        tokens = self.exchange_google_attempt(payload, code)
         return self.create_session(tokens, payload['nonce'])
 
 
@@ -678,6 +713,9 @@ def install_auth(app: FastAPI, data_root: Path, on_authenticated=None, *, config
         service.cookie(response, service.cookie_name, session['sid'], session['expires'] - service.clock())
         return response
 
+    from .native_auth import install_native_auth
+    native = install_native_auth(app, service, login_response, failure)
+
     @app.post('/api/auth/login')
     async def login_route(request: Request):
         try:
@@ -765,9 +803,33 @@ def install_auth(app: FastAPI, data_root: Path, on_authenticated=None, *, config
 
     @app.get('/api/auth/callback')
     async def callback_route(request: Request):
+        state = request.query_params.get('state')
+        try:
+            native_state = await run_in_threadpool(native.owns_state, state)
+        except sqlite3.Error:
+            origin = service.config.public_url if service.config else ''
+            return RedirectResponse(origin + '/?auth_error=google_login_failed', status_code=303,
+                                    headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer'})
+        if native_state:
+            try:
+                service.limiter.check(request.client.host if request.client else '', 'callback')
+                if (len(request.query_params.getlist('state')) != 1 or len(request.query_params.getlist('code')) > 1
+                        or len(request.query_params.getlist('error')) > 1
+                        or 'code' in request.query_params and 'error' in request.query_params):
+                    raise AuthError(400, '登录交接参数格式不正确。', 'invalid_request')
+                url, clear_binding = await run_in_threadpool(native.complete_browser, state,
+                    request.cookies.get(native.cookie_name), request.query_params.get('code'), request.query_params.get('error'))
+                response = RedirectResponse(url, status_code=303,
+                    headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer'})
+                if clear_binding:
+                    service.clear_cookie(response, native.cookie_name)
+                return response
+            except (AuthError, sqlite3.Error):
+                return RedirectResponse(service.config.public_url + '/?auth_error=google_login_failed', status_code=303,
+                                        headers={'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer'})
         try:
             service.limiter.check(request.client.host if request.client else '', 'callback')
-            session = await run_in_threadpool(service.callback, request.query_params.get('state'), request.cookies.get(service.oauth_cookie), request.query_params.get('code'))
+            session = await run_in_threadpool(service.callback, state, request.cookies.get(service.oauth_cookie), request.query_params.get('code'))
             response = await login_response(session, request, redirect=True)
         except (AuthError, sqlite3.Error):
             # Never return provider details or the OAuth query to the browser.

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical">
+    <TextView android:id="@+id/brand" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:padding="20dp" android:text="@string/app_name" android:textSize="24sp" android:textStyle="bold"
+        android:textColor="@color/mv_ink" />
+    <LinearLayout android:id="@+id/navigation" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:paddingHorizontal="12dp" />
+    <TextView android:id="@+id/connection" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:paddingHorizontal="20dp" android:paddingVertical="8dp" android:textColor="@color/mv_muted" android:textSize="13sp" />
+    <TextView android:id="@+id/notice" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:paddingHorizontal="20dp" android:paddingVertical="8dp" android:accessibilityLiveRegion="polite" android:textSize="14sp" />
+    <ProgressBar android:id="@+id/progress" style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent" android:layout_height="3dp" android:indeterminate="true" />
+    <FrameLayout android:id="@+id/content" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
+</LinearLayout>

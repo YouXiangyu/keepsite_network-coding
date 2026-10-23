@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.MemoVerse" parent="Theme.MaterialComponents.Light.NoActionBar">
+        <item name="colorPrimary">@color/mv_primary</item>
+        <item name="colorPrimaryVariant">@color/mv_accent</item>
+        <item name="colorOnPrimary">@color/mv_background</item>
+        <item name="colorSecondary">@color/mv_accent</item>
+        <item name="android:colorBackground">@color/mv_background</item>
+        <item name="android:textColorPrimary">@color/mv_ink</item>
+        <item name="android:textColorSecondary">@color/mv_muted</item>
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>
