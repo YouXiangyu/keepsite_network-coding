@@ -334,11 +334,45 @@ test('returning to a browser tab rechecks a session ended elsewhere', async ({ p
 });
 
 
+test('mobile collection preserves image proportions, searches and keeps its bottom navigation reachable', async ({ page }, info) => {
+  const api = await mockApi(page, { user: 'a' });
+  const images = [imageFixture(29, 180, 270), imageFixture(50, 270, 180)];
+  api.data.set('a', { tickets: images.map((image, index) => ({ ...sampleItem(`visual-${index}`), fields: { ...sampleItem().fields, title: index ? '雨夜列车' : '海边来信' }, media: { original: image.asset, poster: null } })) });
+  for (const image of images) await page.route(`**/api/media/${image.asset.sha256}`, route => route.fulfill({ contentType: 'image/png', body: image.bytes }));
+  await page.setViewportSize({ width: 390, height: 844 }); await page.goto('/tickets');
+  await expect(page.locator('.ticket-card img')).toHaveCount(2);
+  const sizes = await page.locator('.ticket-card .ticket-image').evaluateAll(nodes => nodes.map(node => ({ width: node.clientWidth, height: node.clientHeight })));
+  expect(sizes[0].height / sizes[0].width).toBeCloseTo(1.5, 1);
+  expect(sizes[1].height / sizes[1].width).toBeCloseTo(2 / 3, 1);
+  await expect(page.getByRole('navigation', { name: '主导航' })).toHaveCSS('position', 'fixed');
+  await page.screenshot({ path: info.outputPath('mobile-collection.png'), fullPage: true });
+  await page.getByRole('searchbox').fill('雨夜');
+  await expect(page.locator('.ticket-card')).toHaveCount(1);
+  await page.getByRole('searchbox').fill('不存在的电影');
+  await expect(page.getByRole('heading', { name: '没有找到匹配的电影票' })).toBeVisible();
+  await page.getByRole('button', { name: '清除搜索' }).click();
+  await expect(page.locator('.ticket-card')).toHaveCount(2);
+  await page.getByRole('navigation').getByRole('link', { name: '上传电影票' }).click();
+  await expect(page.getByLabel('片名')).toBeVisible();
+  await page.getByRole('navigation').getByRole('link', { name: '票夹', exact: true }).click();
+  await expect(page.locator('.ticket-card')).toHaveCount(2);
+  await page.setViewportSize({ width: 390, height: 450 });
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  const lastBottom = await page.locator('.ticket-card').evaluateAll(nodes => Math.max(...nodes.map(node => node.getBoundingClientRect().bottom)));
+  const navTop = (await page.getByRole('navigation').boundingBox())!.y;
+  expect(lastBottom).toBeLessThanOrEqual(navTop);
+  await page.getByRole('navigation').getByRole('link', { name: '上传电影票' }).click();
+  await page.getByRole('button', { name: '保存票根', exact: true }).scrollIntoViewIfNeeded();
+  const saveBox = (await page.getByRole('button', { name: '保存票根', exact: true }).boundingBox())!;
+  expect(saveBox.y + saveBox.height).toBeLessThanOrEqual((await page.getByRole('navigation').boundingBox())!.y);
+});
+
 for (const width of [360, 390, 768, 1280, 1440]) {
   test(`ticket library and native editor fit ${width}px`, async ({ page }, info) => {
     await mockApi(page, { user: 'a' }); await page.setViewportSize({ width, height: 900 }); await page.goto('/tickets');
     await expect(page.getByRole('heading', { name: '我的票夹', exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+    if (width >= 768) await expect(page.getByRole('navigation', { name: '主导航' })).not.toHaveCSS('position', 'fixed');
     await page.screenshot({ path: info.outputPath(`tickets-${width}.png`), fullPage: true });
     await page.getByRole('link', { name: '上传电影票', exact: true }).click();
     await expect(page.getByLabel('片名')).toBeVisible();
@@ -474,6 +508,10 @@ test('equal hashes remain isolated across accounts and clearing B keeps A cache'
 test('quota exhaustion still displays the verified cloud image without claiming it is cached', async ({ page }) => {
   await mockApi(page, { user: 'a' });
   await page.addInitScript(() => { IDBObjectStore.prototype.put = function() { throw new DOMException('test quota', 'QuotaExceededError'); }; });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/tickets');
+  await expect(page.locator('.media-availability')).toContainText('本机缓存空间不足');
+  await expect(page.locator('.media-availability')).toBeVisible();
   await page.goto('/tickets/item-1');
   await expect(page.locator('.ticket-image img')).toBeVisible();
   await expect(page.locator('.media-availability')).toContainText('本机缓存空间不足');

@@ -3,6 +3,12 @@
 .app-header nav { display: flex; gap: 12px; }
 .app-header nav a { min-height: 44px; display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 8px; color: var(--muted); }
 .app-header nav a[aria-current] { color: var(--ink); background: var(--soft); font-weight: 600; }
+.app-header nav .mobile-upload { display: none; }
+.collection-search { display: flex; align-items: center; gap: 12px; max-width: 620px; padding: 0 18px; margin-bottom: 20px; background: #f4f4f5; border-radius: 28px; color: var(--muted); }
+.collection-search input { width: 100%; min-width: 0; min-height: 48px; border: 0; background: transparent; color: var(--ink); font-size: 16px; }
+.collection-search:focus-within { outline: 2px solid #58695d; outline-offset: 3px; }
+.collection-search input:focus-visible { outline: none; }
+.ticket-card .ticket-cloud-warning { color: #92551e; }
 .account-actions { margin-left: auto; display: flex; align-items: center; gap: 12px; min-width: 0; }
 .account-actions span { max-width: 220px; overflow: hidden; text-overflow: ellipsis; font-size: 14px; color: var(--muted); }
 .workspace { max-width: 1320px; margin: auto; padding: 52px 32px 80px; }
@@ -73,3 +79,34 @@ h1 { font-size: clamp(28px, 4vw, 40px); font-weight: 600; line-height: 1.25; let
 .poster-attribution p { margin: 6px 0 0; }
 .poster-attribution a { text-decoration: underline; text-underline-offset: 3px; }
 .field-source { display: block; font-size: 12px; font-weight: 400; color: var(--muted); margin-top: 5px; }
+
+@media (max-width: 760px) {
+  .app-header { min-height: 64px; padding: 10px 20px; border: 0; flex-wrap: nowrap; }
+  .app-header .brand { font-size: 18px; }
+  .app-header .brand-mark { width: 32px; height: 32px; border-radius: 10px; }
+  .app-header nav { position: fixed; inset: auto 0 0; z-index: 30; width: 100%; padding: 8px 16px calc(8px + env(safe-area-inset-bottom)); gap: 12px; border-top: 1px solid #ececee; border-radius: 24px 24px 0 0; background: #fffffff5; box-shadow: 0 -8px 28px #20212406; }
+  .app-header nav a { min-width: 0; min-height: 58px; padding: 6px 4px; flex-direction: column; gap: 5px; font-size: 12px; border-radius: 14px; }
+  .app-header nav a[aria-current] { background: #f4f4f5; }
+  .app-header nav .mobile-upload { display: flex; }
+  .app-header nav .mobile-upload svg { background: #ededf0; border-radius: 50%; padding: 7px; width: 40px; height: 40px; margin-top: -9px; }
+  .workspace { padding: 16px 18px calc(112px + env(safe-area-inset-bottom)); }
+  .collection-heading { margin-bottom: 22px; }
+  .collection-heading h1 { margin: 0; font-size: 34px; font-weight: 700; letter-spacing: -.8px; }
+  .collection-heading .eyebrow, .collection-heading p, .collection-upload { display: none; }
+  .collection-search { margin-bottom: 8px; }
+  .collection-summary { border: 0; padding: 8px 0 14px; }
+  .collection-summary .text-button { text-decoration: none; color: var(--muted); padding-right: 0; }
+  .ticket-grid { align-items: start; gap: 24px 14px; }
+  .ticket-card { border: 0; border-radius: 0; overflow: visible; }
+  .ticket-card > a { display: block; border-radius: 8px; }
+  .ticket-card .ticket-image { aspect-ratio: var(--media-ratio, 4 / 5); min-height: 80px; max-height: 420px; border-radius: 9px; }
+  .ticket-card .ticket-image img { border-radius: 9px; }
+  .ticket-card-copy { padding: 9px 0 0; }
+  .ticket-card h2 { margin: 0 0 4px; font-size: 17px; font-weight: 550; line-height: 1.4; }
+  .ticket-card p { font-size: 12px; line-height: 1.5; margin-bottom: 4px; }
+  .ticket-card .ticket-cinema { display: none; }
+  .ticket-card .media-availability { padding: 6px 0 0; background: none; overflow-wrap: anywhere; }
+  .ticket-card [data-media-status='cached'] .media-availability { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); padding: 0; }
+  .ticket-card .status-pill { margin-top: 3px; font-size: 11px; padding: 3px 6px; }
+  .ticket-card .status-pill[data-state='ready'] { display: none; }
+}
