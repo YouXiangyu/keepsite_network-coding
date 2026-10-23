@@ -63,7 +63,7 @@ export default function ProcessingStatus({ ticket, capabilities, busy, runMutati
     <h2>自动处理</h2>
     <p className={`processing-state ${active ? 'is-processing' : ''}`} role="status">{processingLabels[ticket.processing.status]}</p>
     {active && <ol className="processing-steps" aria-label="处理阶段">{['排队', '识别票面', '检索海报'].map((label, index) => <li key={label} aria-current={index === currentStep ? 'step' : undefined} data-complete={index < currentStep}>{label}</li>)}</ol>}
-    <p>{processingDescription(ticket.processing.status, !!ticket.media.poster)}</p>
+    <p>{processingDescription(ticket.processing.status)}</p>
     {ticket.processing.error && <p className="processing-error" role={ticket.processing.status === 'failed' ? 'alert' : 'status'}>{ticket.processing.error}</p>}
     {!enabled && <p className="processing-unavailable">{!capabilities?.processing ? capabilities?.processingUnavailableReason || '处理配置尚未就绪，当前可手动填写。' : '原票尚未保存到云端，暂不能开始自动处理。'}</p>}
     {notice && <p className={failed ? 'form-error' : 'processing-notice'} role={failed ? 'alert' : 'status'}>{notice}</p>}
