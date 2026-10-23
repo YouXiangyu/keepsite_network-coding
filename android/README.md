@@ -90,6 +90,10 @@ AAR 本身未包含 LICENSE/NOTICE，因此工程在 `app/src/main/assets/licens
 
 ## 验证状态
 
+2026-10-24 更新：本轮应用代码通过 34 JVM、Lint（0 错误、10 警告）、360dp/大字号/800dp 平板共 9 次模拟器 UI，以及模拟器和一台用户授权 Android 16 真机的 CRUD、账号隔离、真实 JNI/DataChannel 双向传图。Web 已修复完成确认提前关闭竞态。真机完整 UI 仪器测试最终 3/3 通过；测试启动期间临时采用后台 Activity 启动权限，并在 finally 释放，API 29 以下保留原路径。输入、旋转、重建及后台恢复断言未放宽，独立审查通过。详见 [本轮证据](../docs/evidence/mobile-delivery-20261024.json) 和开发计划；下述 2026-10-23 内容为历史检查点。
+
+默认 HTTPS 验收包位于 `.cache/mobile-delivery-20261024/memoverse-https-debug.apk`，开发签名，连接 `https://keepsite.space`；服务器尚未部署新版。已测 loopback 包和测试包在同目录。互通校验器可用 `--physical --serial <明确授权设备>`，以及 `--apk` / `--test-apk` 指定工作区内保存的 APK；仍核对安装制品 SHA、随机夹具 token 和前后源码哈希。先确认目标设备没有未知的同包用户数据，不使用卸载或 `pm clear` 掩盖冲突。
+
 2026-10-23 保存为 `codex/android-native-progress` 的 **M7 WIP 检查点**，不属于已验收版本。最近一轮 `assembleDebug`、`assembleDebugAndroidTest`、**34 项 JVM 测试**通过；`lintDebug` 为 0 错误、10 警告。已有 APK 是仅供本机夹具使用的 4180 构建，尚未生成供用户验收的默认 HTTPS 包。
 
 平板返回前台曾因复用已被服务器关闭的闲置连接而失败。修正后，JSON 和媒体 GET 在既有超时内允许 OkHttp 恢复连接，写请求保持不自动重试；WS 回调保留原始代次和连接归属。原失败场景在实际后台停留 6001ms 后自动恢复，严格断言通过且未手动刷新；534ms 的记录包含连续 500ms 的健康状态等待，不作为网络性能测量。最新 APK 的完整 UI 矩阵、真实 Android↔Web 双向传图和原生 CRUD 仪器联调仍未完成。检查点证据与下一步见 [开发计划](../docs/开发计划.md) 和 [有限验证记录](../docs/evidence/android-m7-checkpoint-20261023.json)。
