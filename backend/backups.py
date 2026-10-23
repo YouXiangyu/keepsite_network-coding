@@ -1,14 +1,11 @@
 """Validated schema-3 account backup and isolated local restoration."""
 from contextlib import closing
-import ctypes
-import errno
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import stat
-import sys
 import tempfile
 import uuid
 import zipfile
@@ -16,6 +13,7 @@ import zipfile
 from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
 
+from . import filesystem
 from .contracts import FIELD_NAMES, Identifier, TicketFields
 from .media import image_info, MAX_IMAGE_BYTES
 from .object_storage import LocalObjectStore, StorageError
@@ -223,29 +221,6 @@ def _insert(db, name, records):
         db.execute(f"INSERT INTO {name} ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})", tuple(row[key] for key in columns))
 
 
-def _publish_restore(source: Path, destination: Path):
-    """Atomically expose the whole marked tree, never replace a competing destination."""
-    if any(parent.is_symlink() or (hasattr(parent, "is_junction") and parent.is_junction()) for parent in destination.parents):
-        raise OSError(errno.ELOOP, "Destination ancestors must not contain links", str(destination))
-    if os.name == "nt":
-        # Windows rename fails if any destination entry already exists.
-        os.rename(source, destination)
-        return
-    if sys.platform != "linux":
-        raise OSError(errno.ENOTSUP, "Atomic non-replacing restore publication is unavailable", str(destination))
-    # POSIX rename alone can replace another caller's empty directory. Do not
-    # fall back to a check-then-rename race on unsupported kernels/filesystems.
-    library = ctypes.CDLL(None, use_errno=True)
-    rename = getattr(library, "renameat2", None)
-    if rename is None:
-        raise OSError(errno.ENOTSUP, "renameat2 is required for restore publication", str(destination))
-    rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
-    rename.restype = ctypes.c_int
-    if rename(-100, os.fsencode(source), -100, os.fsencode(destination), 1) != 0:  # AT_FDCWD, RENAME_NOREPLACE
-        error = ctypes.get_errno()
-        raise OSError(error, os.strerror(error), str(destination))
-
-
 def restore_account_backup(archive: Path, destination: Path, *, user_id: str):
     if not destination.is_absolute() or os.path.lexists(destination) or not destination.parent.is_dir():
         raise BackupError("Destination must be a new absolute directory with an existing parent")
@@ -313,7 +288,7 @@ def restore_account_backup(archive: Path, destination: Path, *, user_id: str):
                 output.write("Restoration did not finish. Do not run this directory.\n")
                 output.flush()
                 os.fsync(output.fileno())
-            _publish_restore(root, destination)
+            filesystem.publish_directory_noreplace(root, destination)
             (destination / "RESTORE_INCOMPLETE").unlink()
         return {"verified": True, "userId": user_id, "destination": str(destination),
                 "tickets": len(manifest["tickets"]), "files": len(live_assets)}

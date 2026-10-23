@@ -125,6 +125,7 @@ def verified_originals(snapshot, media_root: Path):
 
 
 def migrate(source: Path, media_root: Path, destination: Path):
+    from backend import filesystem
     from backend.object_storage import LocalObjectStore
     from backend.store import Store, encode, now_ms
 
@@ -191,7 +192,7 @@ def migrate(source: Path, media_root: Path, destination: Path):
             raise MigrationError("Destination appeared during migration; it was not changed.")
         if staging.resolve().parent != destination.parent.resolve():
             raise MigrationError("Staging directory escaped the intended destination parent.")
-        os.rename(staging, destination)
+        filesystem.publish_directory_noreplace(staging, destination)
         published = True
         (destination / "RESTORE_INCOMPLETE").unlink()
         return report

@@ -9,7 +9,7 @@ import zipfile
 import pytest
 from fastapi.testclient import TestClient
 
-from backend import backups
+from backend import backups, filesystem
 from backend.backups import BackupError, create_account_backup, restore_account_backup
 from backend.app import create_app
 from backend.object_storage import LocalObjectStore, ObjectReader
@@ -207,7 +207,7 @@ def test_interrupted_publication_never_exposes_a_partial_destination(exported, t
         assert (source / "memoverse.sqlite3").is_file()
         assert (source / "objects/media").is_dir()
         raise OSError("injected publication failure")
-    monkeypatch.setattr(backups, "_publish_restore", fail)
+    monkeypatch.setattr(filesystem, "publish_directory_noreplace", fail)
     with pytest.raises(OSError, match="injected"):
         restore_account_backup(archive, destination, user_id=USERS["alice"]["id"])
     assert not os.path.lexists(destination)
@@ -217,7 +217,7 @@ def test_interrupted_publication_never_exposes_a_partial_destination(exported, t
 def test_interruption_after_atomic_publication_keeps_guarded_destination(exported, tmp_path, monkeypatch):
     _, archive, _, _ = exported
     destination = tmp_path / "interrupted"
-    publish = backups._publish_restore
+    publish = filesystem.publish_directory_noreplace
     def interrupt(source, target):
         assert not target.exists()
         publish(source, target)
@@ -225,7 +225,7 @@ def test_interruption_after_atomic_publication_keeps_guarded_destination(exporte
         assert (target / "RESTORE_INCOMPLETE").is_file()
         assert (target / "memoverse.sqlite3").is_file()
         raise KeyboardInterrupt("injected post-publication interruption")
-    monkeypatch.setattr(backups, "_publish_restore", interrupt)
+    monkeypatch.setattr(filesystem, "publish_directory_noreplace", interrupt)
     with pytest.raises(KeyboardInterrupt, match="injected"):
         restore_account_backup(archive, destination, user_id=USERS["alice"]["id"])
     assert (destination / "RESTORE_INCOMPLETE").exists()
@@ -257,7 +257,7 @@ def test_destination_appearing_at_publication_is_never_replaced(exported, tmp_pa
     _, archive, _, _ = exported
     destination = tmp_path / "competing-owner"
     sentinel = b"another owner's data"
-    publish = backups._publish_restore
+    publish = filesystem.publish_directory_noreplace
     identity = []
     def race(source, target):
         if kind in {"empty-directory", "directory"}:
@@ -270,7 +270,7 @@ def test_destination_appearing_at_publication_is_never_replaced(exported, tmp_pa
             except OSError as error: pytest.skip(f"Creating a test symlink is not permitted: {error}")
         identity.append(target.lstat().st_ino)
         publish(source, target)
-    monkeypatch.setattr(backups, "_publish_restore", race)
+    monkeypatch.setattr(filesystem, "publish_directory_noreplace", race)
     with pytest.raises(OSError):
         restore_account_backup(archive, destination, user_id=USERS["alice"]["id"])
     assert os.path.lexists(destination) and destination.lstat().st_ino == identity[0]
