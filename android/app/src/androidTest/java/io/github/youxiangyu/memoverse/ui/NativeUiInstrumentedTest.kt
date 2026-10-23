@@ -48,7 +48,15 @@ class NativeUiInstrumentedTest {
         backgroundPauseMs = if (pauseArgument == null) 0 else requireNotNull(pauseArgument.toLongOrNull()) { "backgroundPauseMs must be an integer" }
         require(backgroundPauseMs in 0..10_000) { "backgroundPauseMs must be between 0 and 10000" }
         rotate(UiAutomation.ROTATION_FREEZE_0)
-        scenario = ActivityScenario.launch(MainActivity::class.java)
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        // Some physical devices abort the instrumented background launch before
+        // onCreate, leaving startActivitySync waiting. Borrow only this permission
+        // for launch; all application interactions run under the normal identity.
+        if (Build.VERSION.SDK_INT >= 29) {
+            automation.adoptShellPermissionIdentity("android.permission.START_ACTIVITIES_FROM_BACKGROUND")
+        }
+        try { scenario = ActivityScenario.launch(MainActivity::class.java) }
+        finally { if (Build.VERSION.SDK_INT >= 29) automation.dropShellPermissionIdentity() }
         scenario.onActivity { controller = ViewModelProvider(it)[UiViewModel::class.java].controller }
         awaitWindow()
         await { controller.snapshot().session != null }
@@ -190,7 +198,9 @@ class NativeUiInstrumentedTest {
         onView(withContentDescription("${title}封面")).perform(click())
         onView(withText("编辑电影票")).perform(scrollTo(), click())
         await { controller.snapshot().draft?.ticketId == ticket.id }
-        onView(withHint("电影名称")).perform(scrollTo(), clearText(), typeText("UI-typing-12345"))
+        // OEM Chinese IMEs may compose ASCII hardware key events. Set the prefix
+        // deterministically, then exercise successive user edits with digit keys.
+        onView(withHint("电影名称")).perform(scrollTo(), replaceText("UI-typing-"), click(), typeText("12345"))
             .check(matches(withText("UI-typing-12345")))
         awaitKeyboard()
         onView(withHint("电影名称")).check(matches(isCompletelyDisplayed()))
