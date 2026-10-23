@@ -1,69 +1,98 @@
-"""Build account snapshots and the shared HTTP state response."""
-import copy
+"""Consistent account snapshot capture and reusable ticket representations."""
 import json
-
-from .jobs import engine_status
-from .store import Store, StoreError
-
-
-def _decorate_content(store: Store, db, user_id: str, original):
-    item = copy.deepcopy(original)
-    for key in ("customImage", "modelUrl", "modelCamera", "generationJobId", "generationError"):
-        item.pop(key, None)
-    if item.get("assetId"):
-        store.asset(db, user_id, item["assetId"])
-        item["customImage"] = f"/api/media/{item['assetId']}"
-    if item.get("modelId"):
-        model = store.model(db, user_id, item["modelId"])
-        if model["asset_id"] != item.get("assetId"):
-            raise StoreError(409, "模型与图片引用不一致。")
-        item["generation"] = "ready"
-        item["modelUrl"] = f"/api/models/{model['id']}/model.glb"
-        item["modelCamera"] = json.loads(model["camera"])
-    return item
+import hashlib
+from .object_storage import S3ObjectStore
+from .store import StoreError, encode
 
 
-def _present_item(store: Store, db, user_id: str, row):
-    item = json.loads(row["payload"])
-    item.update(version=row["version"], assetId=row["asset_id"], generation="queued")
-    item.pop("modelId", None)
-    if row["model_id"]:
-        item["modelId"] = row["model_id"]
-    item = _decorate_content(store, db, user_id, item)
-    if row["job_id"]:
-        job = store.job(db, user_id, row["job_id"])
-        item["generation"] = job["status"]
-        item["generationJobId"] = job["id"]
-        if job["error"]:
-            item["generationError"] = job["error"]
-        if job["status"] != "ready":
-            item.pop("modelUrl", None)
-            item.pop("modelCamera", None)
-    return item
+def capabilities(store):
+    return {"processing": store.processing_enabled, "processingUnavailableReason": store.processing_unavailable_reason,
+            "cloudStorage": isinstance(store.storage, S3ObjectStore), "deviceSync": True}
 
 
-def account_state(store: Store, db, user_id: str):
+def media_ref(store, db, user_id, identifier, assets=None):
+    asset = assets[identifier] if assets is not None else store.asset(db, user_id, identifier)
+    return {"assetId": asset["id"], "sha256": asset["id"], "mimeType": asset["mime"],
+            "size": asset["size"], "width": asset["width"], "height": asset["height"],
+            "url": f"/api/media/{asset['id']}",
+            "cloudStatus": "saved" if isinstance(store.storage, S3ObjectStore) else "not_configured"}
+
+
+def present_ticket(store, db, user_id, row, assets=None, processing=None, sources=None):
+    if processing is None:
+        job = db.execute("""SELECT j.* FROM ticket_processing p JOIN processing_jobs j ON p.job_id=j.id
+            WHERE p.user_id=? AND p.ticket_id=? AND j.input_version=? AND j.original_asset_id=?""",
+                         (user_id, row["id"], row["input_version"], row["original_asset_id"])).fetchone()
+    else:
+        job = processing.get(row["id"])
+    status = job["status"] if job and job["status"] in {"queued", "ocr", "poster", "ready", "no_match", "failed"} else "not_started"
+    poster = media_ref(store, db, user_id, row["poster_asset_id"], assets) if row["poster_asset_id"] else None
+    if poster:
+        source = (sources.get(row["id"]) if sources is not None else db.execute(
+            "SELECT * FROM poster_sources WHERE user_id=? AND ticket_id=?", (user_id, row["id"])).fetchone())
+        if source and source["asset_id"] == row["poster_asset_id"]:
+            poster["source"] = json.loads(source["source"])
+    return {"id": row["id"], "fields": json.loads(row["fields"]),
+            "fieldSources": json.loads(row["field_sources"]), "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"], "version": row["version"], "inputVersion": row["input_version"],
+            "deletedAt": row["deleted_at"], "operationId": row["operation_id"],
+            "media": {"original": media_ref(store, db, user_id, row["original_asset_id"], assets),
+                      "poster": poster},
+            "processing": {"status": status, "error": job["error"] if job and status != "not_started" else None}}
+
+
+def account_state(store, db, user_id, *, maximum_tickets=None, maximum_bytes=None):
     user = store.require_user(db, user_id)
     server = db.execute("SELECT value FROM meta WHERE key='server_id'").fetchone()[0]
-    collections = [_present_item(store, db, user_id, row) for row in db.execute("SELECT * FROM collections WHERE user_id=? ORDER BY rowid", (user_id,))]
-    shares = []
-    for row in db.execute("SELECT payload FROM shares WHERE user_id=? ORDER BY rowid", (user_id,)):
-        share = json.loads(row[0])
-        share["item"] = _decorate_content(store, db, user_id, share["item"])
-        shares.append(share)
-    community = [_decorate_content(store, db, user_id, json.loads(row[0])) for row in db.execute("SELECT payload FROM community WHERE user_id=? ORDER BY rowid", (user_id,))]
-    profile = db.execute("SELECT payload FROM profiles WHERE user_id=?", (user_id,)).fetchone()
-    return {"initialized": True, "serverId": server, "userId": user_id, "revision": user["revision"], "data": {
-        "collections": collections, "shares": shares, "community": community,
-        "profile": json.loads(profile[0]),
-        "likedCommunityIds": [row[0] for row in db.execute("SELECT id FROM likes WHERE user_id=? ORDER BY rowid", (user_id,))],
-    }}
+    current_capabilities = capabilities(store)
+    size = len(encode(current_capabilities).encode()) + 1024
+    tickets = []
+    rows = db.execute("SELECT * FROM tickets WHERE user_id=? AND deleted_at IS NULL ORDER BY created_at,id", (user_id,))
+    while batch := rows.fetchmany(200):
+        identifiers = [row["id"] for row in batch]
+        media_ids = sorted({row[name] for row in batch for name in ("original_asset_id", "poster_asset_id") if row[name]})
+        ticket_marks, media_marks = ",".join("?" for _ in identifiers), ",".join("?" for _ in media_ids)
+        assets = {row["id"]: row for row in db.execute(
+            f"SELECT a.* FROM assets a JOIN asset_grants g ON g.asset_id=a.id WHERE g.user_id=? AND a.id IN ({media_marks})",
+            (user_id, *media_ids))}
+        processing = {row["ticket_id"]: row for row in db.execute(f"""SELECT j.* FROM ticket_processing p
+            JOIN processing_jobs j ON j.id=p.job_id JOIN tickets t ON t.user_id=p.user_id AND t.id=p.ticket_id
+            WHERE p.user_id=? AND p.ticket_id IN ({ticket_marks}) AND j.input_version=t.input_version
+            AND j.original_asset_id=t.original_asset_id""", (user_id, *identifiers))}
+        sources = {row["ticket_id"]: row for row in db.execute(
+            f"SELECT * FROM poster_sources WHERE user_id=? AND ticket_id IN ({ticket_marks})", (user_id, *identifiers))}
+        for row in batch:
+            ticket = present_ticket(store, db, user_id, row, assets, processing, sources)
+            size += len(encode(ticket).encode()) + 1
+            if maximum_bytes is not None and size > maximum_bytes:
+                raise StoreError(413, "票夹超过同步快照字节容量，未截断任何记录。")
+            if maximum_tickets is not None and len(tickets) >= maximum_tickets:
+                raise StoreError(413, "票夹超过同步快照容量，未截断任何记录。")
+            tickets.append(ticket)
+    return {"initialized": True, "serverId": server, "userId": user_id, "revision": user["revision"],
+            "data": {"tickets": tickets}, "capabilities": current_capabilities}
 
 
-def state_response(store: Store, worker, db, user_id: str, *, changed=False):
-    if changed:
-        store.bump(db, user_id)
-    response = account_state(store, db, user_id)
-    response["generationEngine"] = engine_status()
-    response["generationRecovery"] = worker.recovery_for(user_id)
-    return response
+def cached_account_state(store, shared_state, user_id, *, maximum_tickets=None, maximum_bytes=None):
+    # Redis must run after each SQL transaction has released its connection.
+    with store.transaction() as db:
+        user = store.require_user(db, user_id)
+        revision = user["revision"]
+        server_id = db.execute("SELECT value FROM meta WHERE key='server_id'").fetchone()[0]
+        if maximum_tickets is not None and db.execute("SELECT COUNT(*) FROM tickets WHERE user_id=? AND deleted_at IS NULL", (user_id,)).fetchone()[0] > maximum_tickets:
+            raise StoreError(413, "票夹超过同步快照容量，未截断任何记录。")
+    configuration = json.dumps(capabilities(store), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    identity = store.storage.cache_identity + ":capabilities:" + hashlib.sha256(configuration.encode()).hexdigest()
+    cached = shared_state.get_snapshot(user_id, server_id, revision, identity)
+    if cached is not None:
+        if maximum_tickets is not None and len(cached["data"]["tickets"]) > maximum_tickets:
+            raise StoreError(413, "票夹超过同步快照容量，未截断任何记录。")
+        if maximum_bytes is not None and len(encode(cached).encode()) > maximum_bytes:
+            raise StoreError(413, "票夹超过同步快照字节容量，未截断任何记录。")
+        return cached
+    with store.transaction() as db:
+        if maximum_tickets is not None and db.execute("SELECT COUNT(*) FROM tickets WHERE user_id=? AND deleted_at IS NULL", (user_id,)).fetchone()[0] > maximum_tickets:
+            raise StoreError(413, "票夹超过同步快照容量，未截断任何记录。")
+        result = account_state(store, db, user_id, maximum_tickets=maximum_tickets, maximum_bytes=maximum_bytes)
+    shared_state.put_snapshot(user_id, result["serverId"], result["revision"], identity, result)
+    return result

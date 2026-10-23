@@ -1,54 +1,31 @@
-"""Schema-2 account API tests; all data and authentication are test-owned."""
-from __future__ import annotations
-
+"""Schema-3 ticket contracts, authorization, persistence and failure boundaries."""
 from concurrent.futures import ThreadPoolExecutor
-import hashlib
-import io
-import json
 import sqlite3
 import uuid
-import zipfile
 
 import pytest
 from fastapi.testclient import TestClient
 
 from backend.app import create_app
 from backend import accounts
-from backend.object_storage import LocalObjectStore, StorageError
-from account_fixtures import FakeAuthFactory, ORIGIN, USERS, WRITE_HEADERS, image_bytes, signed_in, template_fixture
+from backend.object_storage import LocalObjectStore, S3ObjectStore, StorageError
+from backend.shared_state import RedisSharedState
+from account_fixtures import account_snapshot
+from account_fixtures import FakeAuthFactory, ORIGIN, USERS, WRITE_HEADERS, image_bytes, signed_in
+from test_object_storage import FakeS3Client
 
 
-def state(response):
-    assert response.status_code in (200, 201), response.text
-    result = response.json()
-    assert result["initialized"] is True
-    assert result["userId"] in {user["id"] for user in USERS.values()}
-    assert isinstance(result["revision"], int)
-    return result
-
-
-def error(response, code):
-    assert response.status_code == code, response.text
-    assert isinstance(response.json().get("detail"), str)
-
-
-def build_app(root, *, storage=None):
-    template = root / "template"
-    if not template.exists():
-        template_fixture(template)
-    auth = FakeAuthFactory()
-    app = create_app(data_dir=root / "workspace", run_worker=False, auth_provider=auth,
-                     object_store=storage or LocalObjectStore(root / "objects"), template_dir=template)
-    return app, auth
+def make_app(root, storage=None):
+    return create_app(root / "data", auth_provider=FakeAuthFactory(), run_recovery=False, run_processing=False, shared_state=RedisSharedState(),
+                      object_store=storage or LocalObjectStore(root / "objects"))
 
 
 @pytest.fixture
 def workspace(tmp_path):
-    app, auth = build_app(tmp_path)
+    app = make_app(tmp_path)
     with TestClient(app, base_url=ORIGIN) as client:
         signed_in(client)
-        state(client.get("/api/state"))
-        yield client, app, auth
+        yield client, app
 
 
 @pytest.fixture
@@ -56,354 +33,358 @@ def client(workspace):
     return workspace[0]
 
 
-def upload(client, content=None, mime="image/png"):
-    content = image_bytes() if content is None else content
-    response = client.post("/api/media", headers=WRITE_HEADERS, files={"file": ("photo.png", content, mime)})
+def upload(client, color="red", upload_id=None):
+    response = client.post("/api/media", headers=WRITE_HEADERS,
+                           data={"uploadId": upload_id or str(uuid.uuid4())},
+                           files={"file": ("ticket.png", image_bytes(color), "image/png")})
     assert response.status_code == 200, response.text
+    assert "cloudStatus" not in response.json()
     return response.json()
 
 
-def create_payload(asset_id, title="我的照片", identifier=None):
-    return {"id": identifier or str(uuid.uuid4()), "title": title, "category": "daily", "tags": ["日常"],
-            "note": "保留原图", "date": "2026-10-18", "art": "cafe", "assetId": asset_id}
+def create(client, identifier="ticket-1", asset=None, fields=None):
+    asset = asset or upload(client)
+    payload = {"id": identifier, "operationId": "create-" + identifier,
+               "originalAssetId": asset["assetId"], "fields": fields or {}}
+    response = client.post("/api/tickets", headers=WRITE_HEADERS, json=payload)
+    return applied(client, response), payload
 
 
-def create_collection(client, payload=None):
-    payload = payload or create_payload(upload(client)["assetId"])
-    result = state(client.post("/api/collections", headers=WRITE_HEADERS, json=payload))
-    return get_item(result, payload["id"])
+def applied(client, response):
+    assert response.status_code == 200, response.text
+    receipt = response.json()
+    assert set(receipt) == {"serverId", "operationId", "committedCursor"}
+    assert isinstance(receipt["operationId"], str) and type(receipt["committedCursor"]) is int
+    snapshot = account_snapshot(client)
+    assert snapshot["serverId"] == receipt["serverId"]
+    assert snapshot["cursor"] >= receipt["committedCursor"]
+    return snapshot
 
 
-def edit_payload(item, **changes):
-    return {**{key: item[key] for key in ("version", "title", "category", "tags", "note", "date", "art")}, **changes}
+def patch(client, fields, operation="update-1", identifier="ticket-1"):
+    return client.patch("/api/tickets/" + identifier, headers=WRITE_HEADERS,
+                        json={"operationId": operation, "fields": fields})
 
 
-def get_item(result, identifier):
-    return next(item for item in result["data"]["collections"] if item["id"] == identifier)
+def delete(client, identifier="ticket-1", operation="delete-1"):
+    return client.request("DELETE", "/api/tickets/" + identifier, headers=WRITE_HEADERS,
+                          json={"operationId": operation})
 
 
-def test_public_health_exposes_no_engine_or_workspace(workspace):
-    client, _, _ = workspace
-    client.cookies.clear()
+def test_empty_accounts_are_atomic_and_never_clone_templates(workspace):
+    client, app = workspace
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda _: accounts.ensure_account(app.state.store, **{
+            "user_id": USERS["alice"]["id"], "email": "alice@example.test", "name": "Alice"}), range(8)))
+    state = account_snapshot(client)
+    assert state["tickets"] == []
+    assert state["capabilities"] == {"processing": False, "processingUnavailableReason": "需要先配置私有云存储，才能运行电影票处理。", "cloudStorage": False, "deviceSync": True}
+    assert not hasattr(app.state, "worker")
+    with app.state.store.transaction() as db:
+        assert db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1
+        assert db.execute("SELECT COUNT(*) FROM assets").fetchone()[0] == 0
+    signed_in(client, "bob")
+    assert account_snapshot(client)["tickets"] == []
+
+
+@pytest.mark.parametrize("method,path", [("GET", "/api/sync/snapshot"), ("POST", "/api/tickets"),
+    ("PATCH", "/api/tickets/x"), ("DELETE", "/api/tickets/x"), ("POST", "/api/media"),
+    ("GET", "/api/media/" + "a" * 64), ("GET", "/api/backup"), ("GET", "/api/operations/create-ticket-1")])
+def test_business_requires_session(workspace, method, path):
+    client, app = workspace
+    app.state.auth.revoke("alice")
+    assert client.request(method, path).status_code == 401
     assert client.get("/api/health").json() == {"status": "ok"}
 
 
-@pytest.mark.parametrize("method,path", [
-    ("GET", "/api/state"), ("GET", "/api/media/known"), ("GET", "/api/models/known/model.glb"),
-    ("GET", "/api/jobs/known"), ("GET", "/api/backup"), ("POST", "/api/media"),
-    ("POST", "/api/collections"), ("PATCH", "/api/collections/known"), ("DELETE", "/api/collections/known"),
-    ("POST", "/api/collections/known/retry-generation"), ("PATCH", "/api/profile"),
-    ("POST", "/api/shares/read-all"), ("POST", "/api/shares/share-1/read"),
-    ("POST", "/api/shares/share-1/collect"), ("POST", "/api/community/community-1/view"),
-    ("POST", "/api/community/community-1/collect"), ("PUT", "/api/community/community-1/like"),
-])
-def test_every_business_route_requires_session(workspace, method, path):
-    client, _, _ = workspace
-    client.cookies.clear()
-    error(client.request(method, path, headers=WRITE_HEADERS), 401)
+@pytest.mark.parametrize("method,path", [("POST", "/api/collections"), ("PATCH", "/api/profile"),
+    ("GET", "/api/models/x/model.glb"), ("GET", "/api/jobs/x"), ("POST", "/api/shares/x/collect"),
+    ("PUT", "/api/community/x/like"), ("POST", "/api/bootstrap"), ("GET", "/api/state")])
+def test_retired_routes_are_removed(client, method, path):
+    assert client.request(method, path, headers=WRITE_HEADERS, json={}).status_code == 404
 
 
-def test_old_bootstrap_route_is_removed(client):
-    assert client.post("/api/bootstrap", headers=WRITE_HEADERS, json={}).status_code == 404
+def test_movie_contract_sources_and_actual_local_storage_status(client):
+    state, _ = create(client, fields={"title": "电影", "showtime": "2026-10-22T18:30", "seat": ""})
+    ticket = state["tickets"][0]
+    assert ticket["fields"] == {"title": "电影", "cinema": "", "hall": "", "seat": "", "showtime": "2026-10-22T18:30"}
+    assert ticket["fieldSources"] == {"title": "user", "cinema": "empty", "hall": "empty", "seat": "user", "showtime": "user"}
+    assert ticket["processing"] == {"status": "not_started", "error": None}
+    assert ticket["media"]["poster"] is None
+    assert ticket["media"]["original"]["cloudStatus"] == "not_configured"
+    assert ticket["createdAt"] == ticket["updatedAt"] and ticket["version"] == ticket["inputVersion"] == 1
+    assert ticket["deletedAt"] is None
+    assert set(ticket) == {"id", "fields", "fieldSources", "createdAt", "updatedAt", "version", "inputVersion", "deletedAt", "operationId", "media", "processing"}
 
 
-def test_initial_accounts_have_independent_records_and_shared_immutable_files(workspace):
-    client, app, _ = workspace
-    alice = state(client.get("/api/state"))
-    assert alice["data"]["profile"]["name"] == "Alice"
-    item = alice["data"]["collections"][0]
-    assert item["generation"] == "ready" and "generationJobId" not in item
-    assert client.get(item["customImage"]).status_code == 200
-    assert client.get(item["modelUrl"]).status_code == 200
-    state(client.patch("/api/collections/initial-collection", headers=WRITE_HEADERS, json=edit_payload(item, title="Alice修改")))
-    state(client.post("/api/shares/read-all", headers=WRITE_HEADERS))
-    state(client.put("/api/community/community-1/like", headers=WRITE_HEADERS, json={"liked": True}))
-    signed_in(client, "bob")
-    bob = state(client.get("/api/state"))
-    assert bob["data"]["profile"]["name"] == "Bob"
-    assert bob["data"]["collections"][0]["title"] == "初始收藏"
-    assert bob["data"]["shares"][0]["unread"] is True
-    assert bob["data"]["likedCommunityIds"] == []
-    assert bob["data"]["collections"][0]["modelUrl"] == item["modelUrl"]
-    with app.state.store.transaction() as db:
-        assert db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 2
-        assert db.execute("SELECT COUNT(*) FROM assets").fetchone()[0] == 1
-        assert db.execute("SELECT COUNT(*) FROM models").fetchone()[0] == 1
-        assert db.execute("SELECT COUNT(*) FROM collections").fetchone()[0] == 2
-        assert db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
-
-
-def test_concurrent_initialization_is_atomic_and_repeated_login_preserves_edits(workspace):
-    client, app, _ = workspace
-    bob = USERS["bob"]
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        list(pool.map(lambda _: accounts.ensure_account(app.state.store, bob["id"], bob["email"], bob["name"]), range(8)))
-    signed_in(client, "bob")
-    state(client.patch("/api/profile", headers=WRITE_HEADERS, json={"name": "修改后的Bob", "bio": "保留"}))
-    assert state(client.get("/api/state"))["data"]["profile"]["name"] == "修改后的Bob"
-    with app.state.store.transaction() as db:
-        assert db.execute("SELECT COUNT(*) FROM collections WHERE user_id=?", (bob["id"],)).fetchone()[0] == 1
-
-
-def test_private_ids_cannot_be_read_attached_edited_or_deleted_by_another_user(workspace):
-    client, _, _ = workspace
-    original = image_bytes("purple")
-    asset = upload(client, original)
-    item = create_collection(client, create_payload(asset["assetId"], title="Alice私有记录"))
-    signed_in(client, "bob")
-    state(client.get("/api/state"))
-    error(client.get(item["customImage"]), 404)
-    error(client.get(f"/api/jobs/{item['generationJobId']}"), 404)
-    error(client.post("/api/collections", headers=WRITE_HEADERS, json=create_payload(asset["assetId"])), 404)
-    error(client.patch(f"/api/collections/{item['id']}", headers=WRITE_HEADERS, json=edit_payload(item)), 404)
-    error(client.request("DELETE", f"/api/collections/{item['id']}", headers=WRITE_HEADERS, json={"version": item["version"]}), 404)
-    error(client.post(f"/api/collections/{item['id']}/retry-generation", headers=WRITE_HEADERS), 404)
-    signed_in(client, "alice")
-    assert get_item(state(client.get("/api/state")), item["id"])["title"] == "Alice私有记录"
-    assert client.get(item["customImage"]).content == original
-
-
-def test_logout_revokes_old_media_model_and_api_urls(workspace):
-    client, _, auth = workspace
-    item = state(client.get("/api/state"))["data"]["collections"][0]
-    auth.revoke("alice")
-    for path in ("/api/state", item["customImage"], item["modelUrl"], "/api/backup"):
-        error(client.get(path), 401)
-
-
-def test_account_ids_from_request_body_cannot_override_cookie_owner(client):
+@pytest.mark.parametrize("fields", [{"category": "movie"}, {"title": None}, {"title": "x" * 121},
+    {"showtime": "2026-10-22"}, {"showtime": "2026-10-22T18:30Z"}, {"showtime": "2026-02-30T18:30"},
+    {"showtime": "2026-1-22T18:30"}, {"showtime": 123}, {"cinema": "x" * 201}])
+def test_invalid_fields_are_rejected_without_mutation(workspace, fields):
+    client, app = workspace
     asset = upload(client)
-    error(client.post("/api/collections", headers=WRITE_HEADERS, json={**create_payload(asset["assetId"]), "userId": "user-bob"}), 422)
-
-
-def test_create_same_client_id_is_scoped_to_each_account(workspace):
-    client, _, _ = workspace
-    a = create_collection(client, create_payload(upload(client)["assetId"], "Alice", "same-id"))
-    signed_in(client, "bob")
-    b = create_collection(client, create_payload(upload(client, image_bytes("green"))["assetId"], "Bob", "same-id"))
-    assert b["title"] == "Bob" and a["assetId"] != b["assetId"]
-    signed_in(client, "alice")
-    assert get_item(state(client.get("/api/state")), "same-id")["title"] == "Alice"
-
-
-def test_create_is_idempotent_and_versions_protect_updates(client):
-    body = create_payload(upload(client)["assetId"])
-    first = state(client.post("/api/collections", headers=WRITE_HEADERS, json=body))
-    repeat = state(client.post("/api/collections", headers=WRITE_HEADERS, json=body))
-    assert repeat["revision"] == first["revision"]
-    error(client.post("/api/collections", headers=WRITE_HEADERS, json={**body, "title": "冲突"}), 409)
-    item = get_item(first, body["id"])
-    updated = state(client.patch(f"/api/collections/{item['id']}", headers=WRITE_HEADERS, json=edit_payload(item, title="新标题")))
-    assert get_item(updated, item["id"])["generationJobId"] == item["generationJobId"]
-    error(client.patch(f"/api/collections/{item['id']}", headers=WRITE_HEADERS, json=edit_payload(item)), 409)
-    error(client.request("DELETE", f"/api/collections/{item['id']}", headers=WRITE_HEADERS, json={"version": item["version"]}), 409)
-
-
-def test_template_deletion_does_not_damage_other_accounts_or_shared_objects(workspace):
-    client, _, _ = workspace
-    item = state(client.get("/api/state"))["data"]["collections"][0]
-    signed_in(client, "bob")
-    state(client.get("/api/state"))
-    signed_in(client, "alice")
-    deleted = state(client.request("DELETE", "/api/collections/initial-collection", headers=WRITE_HEADERS, json={"version": item["version"]}))
-    assert deleted["data"]["collections"] == []
-    signed_in(client, "bob")
-    assert len(state(client.get("/api/state"))["data"]["collections"]) == 1
-    assert client.get(item["modelUrl"]).status_code == 200
-    assert client.get(item["customImage"]).status_code == 200
-
-
-def test_shared_copy_reuses_ready_model_without_rerunning_generation(workspace):
-    client, app, _ = workspace
-    first = state(client.post("/api/shares/share-1/collect", headers=WRITE_HEADERS))
-    repeated = state(client.post("/api/shares/share-1/collect", headers=WRITE_HEADERS))
-    assert len(first["data"]["collections"]) == len(repeated["data"]["collections"]) == 2
-    copied = get_item(repeated, "shared-collection")
-    assert copied["generation"] == "ready" and "generationJobId" not in copied
+    response = client.post("/api/tickets", headers=WRITE_HEADERS,
+        json={"id": "invalid", "operationId": "invalid-op", "originalAssetId": asset["assetId"], "fields": fields})
+    assert response.status_code == 422
     with app.state.store.transaction() as db:
-        assert db.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM tickets").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM operations").fetchone()[0] == 0
 
 
-def test_community_media_and_interactions_are_account_scoped(workspace):
-    client, _, _ = workspace
-    item = state(client.get("/api/state"))["data"]["community"][0]
-    assert item["generation"] == "ready" and client.get(item["modelUrl"]).status_code == 200
-    for _ in range(2):
-        value = state(client.put("/api/community/community-1/like", headers=WRITE_HEADERS, json={"liked": True}))
-    assert value["data"]["community"][0]["likes"] == 4
-    for _ in range(2):
-        value = state(client.post("/api/community/community-1/collect", headers=WRITE_HEADERS))
-    assert value["data"]["community"][0]["saves"] == 3
-    assert get_item(value, "community-community-1")["generation"] == "ready"
+def test_unreferenced_upload_cannot_be_read_and_shared_active_reference_survives_delete(client):
+    asset = upload(client)
+    assert client.get(asset["url"]).status_code == 404
+    create(client, "one", asset)
+    assert client.get(asset["url"]).content == image_bytes()
+    create(client, "two", asset)
+    assert delete(client, "one").status_code == 200
+    assert client.get(asset["url"]).status_code == 200
+    assert delete(client, "two", "delete-2").status_code == 200
+    assert client.get(asset["url"]).status_code == 404
+
+
+def test_two_accounts_cannot_read_attach_edit_delete_or_replay_each_others_data(client):
+    a, payload = create(client, fields={"title": "Private"})
+    original = a["tickets"][0]["media"]["original"]
     signed_in(client, "bob")
-    value = state(client.get("/api/state"))
-    assert value["data"]["community"][0]["likes"] == 3
-    assert value["data"]["community"][0]["saves"] == 2
+    assert account_snapshot(client)["tickets"] == []
+    assert client.get(original["url"]).status_code == 404
+    assert client.post("/api/tickets", headers=WRITE_HEADERS, json=payload).status_code == 404
+    assert patch(client, {"title": "stolen"}).status_code == 404
+    assert delete(client).status_code == 404
+    b, _ = create(client, fields={"title": "Bob"})
+    assert b["tickets"][0]["fields"]["title"] == "Bob"
+    signed_in(client, "alice")
+    assert account_snapshot(client)["tickets"][0]["fields"]["title"] == "Private"
 
 
-@pytest.mark.parametrize("raw,mime,status_code", [(b"not-image", "image/png", 422), (b"<svg/>", "image/svg+xml", 422), (b"x" * (12 * 1024 * 1024 + 1), "image/png", 413)], ids=["non-image", "svg", "oversized"])
-def test_invalid_uploads_create_no_asset_grant(workspace, raw, mime, status_code):
-    client, app, _ = workspace
-    before = state(client.get("/api/state"))
-    error(client.post("/api/media", headers=WRITE_HEADERS, files={"file": ("bad", raw, mime)}), status_code)
-    assert state(client.get("/api/state"))["revision"] == before["revision"]
+def test_create_replay_and_changed_payload_conflict(client):
+    state, payload = create(client)
+    replay = client.post("/api/tickets", headers=WRITE_HEADERS, json=payload)
+    assert replay.json() == {"serverId": state["serverId"], "operationId": payload["operationId"], "committedCursor": state["cursor"]}
+    assert applied(client, replay) == state
+    different = {**payload, "fields": {"title": "other"}}
+    assert client.post("/api/tickets", headers=WRITE_HEADERS, json=different).status_code == 409
+    assert patch(client, {"title": "other"}, payload["operationId"]).status_code == 409
+
+
+def test_partial_updates_merge_and_replays_do_not_overwrite_later_values(client):
+    create(client, fields={"title": "Old", "hall": "1"})
+    first = applied(client, patch(client, {"title": "New"}))
+    second = applied(client, patch(client, {"seat": "A1"}, "update-2"))
+    third = applied(client, patch(client, {"title": "Newest"}, "update-3"))
+    assert third["tickets"][0]["fields"] == {"title": "Newest", "cinema": "", "hall": "1", "seat": "A1", "showtime": ""}
+    assert applied(client, patch(client, {"title": "New"})) == third
+    assert patch(client, {"title": "Different"}).status_code == 409
+    assert first["tickets"][0]["inputVersion"] == second["tickets"][0]["inputVersion"] == 2
+    assert third["tickets"][0]["inputVersion"] == 3
+    assert third["tickets"][0]["version"] == 4
+
+
+def test_deleted_id_remains_tombstoned_and_old_requests_cannot_revive_it(workspace):
+    client, app = workspace
+    state, payload = create(client)
+    url = state["tickets"][0]["media"]["original"]["url"]
+    patch(client, {"title": "Updated"})
+    deleted = applied(client, delete(client))
+    assert deleted["tickets"] == []
+    assert client.get(url).status_code == 404
+    assert applied(client, delete(client)) == deleted
+    assert applied(client, client.post("/api/tickets", headers=WRITE_HEADERS, json=payload)) == deleted
+    assert applied(client, patch(client, {"title": "Updated"})) == deleted
+    assert patch(client, {"title": "revive"}, "late-update").status_code == 404
+    assert client.post("/api/tickets", headers=WRITE_HEADERS, json={**payload, "operationId": "recreate"}).status_code == 409
     with app.state.store.transaction() as db:
-        assert db.execute("SELECT COUNT(*) FROM assets").fetchone()[0] == 1
+        row = db.execute("SELECT * FROM tickets").fetchone()
+        assert row["deleted_at"] is not None
+        assert row["version"] == 3
+        assert db.execute("SELECT COUNT(*) FROM operations").fetchone()[0] == 3
 
 
-def test_uploaded_bytes_hash_and_reopen_persistence(tmp_path):
-    app, _ = build_app(tmp_path)
-    original = image_bytes("purple", format="JPEG")
-    with TestClient(app, base_url=ORIGIN) as first:
-        signed_in(first)
-        media = upload(first, original, "image/jpeg")
-        assert media["sha256"] == hashlib.sha256(original).hexdigest()
-        item = create_collection(first, create_payload(media["assetId"]))
-        saved = state(first.patch("/api/profile", headers=WRITE_HEADERS, json={"name": "持久昵称", "bio": "保留"}))
-    reopened, _ = build_app(tmp_path)
-    with TestClient(reopened, base_url=ORIGIN) as second:
-        signed_in(second)
-        value = state(second.get("/api/state"))
-        assert value["serverId"] == saved["serverId"]
-        assert value["data"]["profile"]["name"] == "持久昵称"
-        assert get_item(value, item["id"])["assetId"] == media["assetId"]
-        assert second.get(f"/api/media/{media['assetId']}").content == original
+def test_original_change_revokes_old_reference_and_advances_input(client):
+    state, _ = create(client)
+    original = state["tickets"][0]["media"]["original"]
+    next_asset = upload(client, "blue")
+    response = client.patch("/api/tickets/ticket-1", headers=WRITE_HEADERS,
+                            json={"operationId": "change-photo", "originalAssetId": next_asset["assetId"]})
+    assert response.status_code == 200
+    assert applied(client, response)["tickets"][0]["inputVersion"] == 2
+    assert client.get(original["url"]).status_code == 404
+    assert client.get(next_asset["url"]).status_code == 200
 
 
-def test_storage_upload_failure_is_visible_and_not_committed(workspace, monkeypatch):
-    client, app, _ = workspace
+def test_operation_and_data_commit_are_atomic(workspace, monkeypatch):
+    client, app = workspace
+    asset = upload(client)
     def fail(*args):
-        raise StorageError("simulated object outage")
-    monkeypatch.setattr(app.state.store.storage, "put_bytes", fail)
-    error(client.post("/api/media", headers=WRITE_HEADERS, files={"file": ("photo.png", image_bytes("purple"), "image/png")}), 503)
+        raise RuntimeError("injected transaction failure")
+    monkeypatch.setattr(app.state.store, "bump", fail)
+    with pytest.raises(RuntimeError, match="injected"):
+        create(client, asset=asset)
     with app.state.store.transaction() as db:
-        assert db.execute("SELECT COUNT(*) FROM assets").fetchone()[0] == 1
+        assert db.execute("SELECT COUNT(*) FROM tickets").fetchone()[0] == 0
+        assert db.execute("SELECT COUNT(*) FROM operations").fetchone()[0] == 0
 
 
-def test_upload_object_io_does_not_hold_sql_write_transaction(workspace, monkeypatch):
-    client, app, _ = workspace
+def test_persistence_and_replay_after_reopening(tmp_path):
+    app = make_app(tmp_path)
+    with TestClient(app, base_url=ORIGIN) as client:
+        signed_in(client)
+        state, payload = create(client)
+    second = make_app(tmp_path)
+    with TestClient(second, base_url=ORIGIN) as client:
+        signed_in(client)
+        assert applied(client, client.post("/api/tickets", headers=WRITE_HEADERS, json=payload)) == state
+        assert client.get(state["tickets"][0]["media"]["original"]["url"]).content == image_bytes()
+
+
+@pytest.mark.parametrize("raw,status", [(b"", 422), (b"not-image", 422), (b"x" * (12 * 1024 * 1024 + 1), 413)], ids=["empty", "invalid", "oversized"])
+def test_invalid_uploads_create_no_grants(workspace, raw, status):
+    client, app = workspace
+    response = client.post("/api/media", headers=WRITE_HEADERS, data={"uploadId": "invalid"}, files={"file": ("image.png", raw, "image/png")})
+    assert response.status_code == status
+    with app.state.store.transaction() as db:
+        assert db.execute("SELECT COUNT(*) FROM asset_grants").fetchone()[0] == 0
+
+
+def test_storage_upload_failure_is_visible_without_committed_grant(workspace, monkeypatch):
+    client, app = workspace
+    def fail(*args):
+        raise StorageError("private details")
+    monkeypatch.setattr(app.state.store.storage, "put_bytes", fail)
+    response = client.post("/api/media", headers=WRITE_HEADERS, data={"uploadId": "failure"}, files={"file": ("a.png", image_bytes(), "image/png")})
+    assert response.status_code == 503 and "private details" not in response.text
+    with app.state.store.transaction() as db:
+        assert db.execute("SELECT COUNT(*) FROM assets").fetchone()[0] == 0
+
+
+def test_upload_io_never_holds_database_write_lock(workspace, monkeypatch):
+    client, app = workspace
     original = app.state.store.storage.put_bytes
-    def inspect(*args):
-        with app.state.store.transaction(True):
+    def checked(*args):
+        with app.state.store.transaction(True, timeout=0.01):
             pass
         return original(*args)
-    monkeypatch.setattr(app.state.store.storage, "put_bytes", inspect)
+    monkeypatch.setattr(app.state.store.storage, "put_bytes", checked)
     upload(client)
 
 
-def test_backup_contains_own_community_files_but_no_other_user_data(workspace):
-    client, app, _ = workspace
-    private_a = image_bytes("red")
-    a = create_collection(client, create_payload(upload(client, private_a)["assetId"], "Alice-only"))
-    signed_in(client, "bob")
-    b = create_collection(client, create_payload(upload(client, image_bytes("green"))["assetId"], "Bob-secret"))
-    signed_in(client, "alice")
-    response = client.get("/api/backup")
-    assert response.status_code == 200, response.text
-    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
-        manifest = json.loads(archive.read("manifest.json"))
-        assert manifest["userId"] == "user-alice"
-        assert "Bob-secret" not in json.dumps(manifest)
-        assert all(b["assetId"] not in name for name in archive.namelist())
-        assert any(archive.read(name) == private_a for name in archive.namelist() if name.startswith("media/"))
-        assert manifest["data"]["community"][0]["modelUrl"] in archive.namelist()
-        assert any(row["id"] == a["id"] and row["input_revision"] == 1 for row in manifest["collections"])
-        assert not any("reference/" in name or name.endswith(".sqlite3") for name in archive.namelist())
-    assert list((app.state.store.root / "exports").iterdir()) == []
+def test_s3_only_claims_saved_after_reference_commit(tmp_path):
+    storage = S3ObjectStore("test", "ap-northeast-1", client=FakeS3Client())
+    app = make_app(tmp_path, storage)
+    with TestClient(app, base_url=ORIGIN) as client:
+        signed_in(client)
+        asset = upload(client)
+        assert client.get(asset["url"]).status_code == 404
+        state, _ = create(client, asset=asset)
+        assert state["capabilities"]["cloudStorage"] is True
+        assert state["tickets"][0]["media"]["original"]["cloudStatus"] == "saved"
+        assert client.get(asset["url"]).content == image_bytes()
 
 
-def test_csrf_and_foreign_origin_do_not_mutate(client):
-    before = state(client.get("/api/state"))
-    error(client.patch("/api/profile", json={"name": "bad", "bio": ""}), 403)
-    error(client.patch("/api/profile", headers={**WRITE_HEADERS, "Origin": "https://evil.test"}, json={"name": "bad", "bio": ""}), 403)
-    assert state(client.get("/api/state"))["data"] == before["data"]
+def test_csrf_and_account_body_injection_do_not_mutate(client):
+    asset = upload(client)
+    payload = {"id": "x", "operationId": "x", "originalAssetId": asset["assetId"]}
+    assert client.post("/api/tickets", json=payload).status_code == 403
+    assert client.post("/api/tickets", headers={**WRITE_HEADERS, "Origin": "https://evil.test"}, json=payload).status_code == 403
+    assert client.post("/api/tickets", headers=WRITE_HEADERS, json={**payload, "userId": "user-bob"}).status_code == 422
+    assert account_snapshot(client)["tickets"] == []
 
 
-def test_legacy_schema_refusal_preserves_database_and_directory(tmp_path):
-    root = tmp_path / "old"
+@pytest.mark.parametrize("version", ["1", "2", "unknown"])
+def test_legacy_schema_is_refused_before_any_directory_write(tmp_path, version):
+    root = tmp_path / "legacy"
     root.mkdir()
-    database = root / "memoverse.sqlite3"
-    with sqlite3.connect(database) as db:
-        db.execute("PRAGMA journal_mode=WAL")
+    path = root / "memoverse.sqlite3"
+    with sqlite3.connect(path) as db:
         db.execute("CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT)")
-        db.execute("INSERT INTO meta VALUES ('schema_version','1')")
-    db.close()
-    before = database.read_bytes()
+        db.execute("INSERT INTO meta VALUES('schema_version',?)", (version,))
+    before = path.read_bytes()
     with pytest.raises(RuntimeError, match="Legacy schema"):
-        create_app(data_dir=root, run_worker=False, auth_provider=FakeAuthFactory())
-    assert database.read_bytes() == before
-    assert [path.name for path in root.iterdir()] == ["memoverse.sqlite3"]
+        create_app(root, object_store=object())
+    assert path.read_bytes() == before
+    assert set(root.iterdir()) == {path}
 
 
-def test_template_tampering_fails_before_creating_account_database(tmp_path):
-    template = tmp_path / "template"
-    manifest = template_fixture(template)
-    (template / manifest["assets"][0]["path"]).write_bytes(b"corrupt")
-    with pytest.raises(ValueError, match="checksum"):
-        create_app(data_dir=tmp_path / "new", run_worker=False, auth_provider=FakeAuthFactory(),
-                   object_store=LocalObjectStore(tmp_path / "objects"), template_dir=template)
-    assert not (tmp_path / "new/memoverse.sqlite3").exists()
-
-
-@pytest.mark.parametrize("with_database", [False, True])
-def test_incomplete_restoration_is_rejected_before_startup_writes(tmp_path, with_database):
+def test_incomplete_restore_cannot_start(tmp_path):
     root = tmp_path / "incomplete"
     root.mkdir()
-    if with_database:
-        with sqlite3.connect(root / "memoverse.sqlite3") as db:
-            db.execute("CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT)")
-            db.execute("INSERT INTO meta VALUES ('schema_version','2')")
-    (root / "RESTORE_INCOMPLETE").write_text("interrupted publication")
-    before = {path.name: path.read_bytes() for path in root.iterdir()}
-    with pytest.raises(RuntimeError, match="Incomplete account restoration"):
-        create_app(data_dir=root, run_worker=False, auth_provider=FakeAuthFactory())
-    assert {path.name: path.read_bytes() for path in root.iterdir()} == before
+    (root / "RESTORE_INCOMPLETE").write_text("pending")
+    with pytest.raises(RuntimeError, match="Incomplete"):
+        create_app(root, object_store=object())
+    assert not (root / "memoverse.sqlite3").exists()
 
 
-def test_existing_account_without_template_survives_but_new_account_is_rejected(workspace):
-    from backend.store import StoreError
-    client, app, _ = workspace
-    before = state(client.get("/api/state"))
-    app.state.store.template = None
-    accounts.ensure_account(app.state.store, "user-alice", "alice@example.test", "Alice")
-    with pytest.raises(StoreError) as failure:
-        accounts.ensure_account(app.state.store, "user-bob", "bob@example.test", "Bob")
-    assert failure.value.status_code == 503
-    assert state(client.get("/api/state"))["data"] == before["data"]
-    with app.state.store.transaction() as db:
-        assert not db.execute("SELECT 1 FROM users WHERE id='user-bob'").fetchone()
+def test_deleted_media_requires_a_fresh_upload_before_new_reference(client):
+    state, payload = create(client)
+    delete(client)
+    new_payload = {**payload, "id": "different-id", "operationId": "different-op"}
+    assert client.post("/api/tickets", headers=WRITE_HEADERS, json=new_payload).status_code == 404
+    upload(client)
+    result = client.post("/api/tickets", headers=WRITE_HEADERS, json=new_payload)
+    assert result.status_code == 200
+    assert applied(client, result)["tickets"][0]["id"] == "different-id"
 
 
-def test_backup_validation_failure_returns_safe_actionable_error(workspace, monkeypatch):
-    from backend import api
-    from backend.backups import BackupError
-    client, _, _ = workspace
-    before = state(client.get("/api/state"))
-
-    def fail(*args):
-        raise BackupError("fixture internal archive detail")
-
-    monkeypatch.setattr(api, "create_account_backup", fail)
-    response = client.get("/api/backup")
-    assert response.status_code == 503
-    assert "记录仍保留" in response.json()["detail"]
-    assert "fixture" not in response.text
-    assert state(client.get("/api/state"))["data"] == before["data"]
+def test_pending_upload_receipt_is_not_consumed_on_failed_creation(workspace, monkeypatch):
+    client, app = workspace
+    asset = upload(client)
+    original = app.state.store.bump
+    monkeypatch.setattr(app.state.store, "bump", lambda *args: (_ for _ in ()).throw(RuntimeError("commit failure")))
+    with pytest.raises(RuntimeError, match="commit failure"):
+        create(client, asset=asset)
+    monkeypatch.setattr(app.state.store, "bump", original)
+    assert create(client, asset=asset)[0]["tickets"]
 
 
-def test_failed_account_clone_rolls_back_all_user_records(workspace, monkeypatch):
-    _, app, _ = workspace
-    original = app.state.store.register_model
-    def fail(*args):
-        raise RuntimeError("fixture initialization failure")
-    monkeypatch.setattr(app.state.store, "register_model", fail)
-    with pytest.raises(RuntimeError, match="initialization"):
-        accounts.ensure_account(app.state.store, "user-bob", "bob@example.test", "Bob")
-    with app.state.store.transaction() as db:
-        for table in ("users", "profiles", "collections", "asset_grants", "model_grants", "shares", "community"):
-            column = "id" if table == "users" else "user_id"
-            assert db.execute(f"SELECT COUNT(*) FROM {table} WHERE {column}=?", ("user-bob",)).fetchone()[0] == 0
-    monkeypatch.setattr(app.state.store, "register_model", original)
-    accounts.ensure_account(app.state.store, "user-bob", "bob@example.test", "Bob")
-    with app.state.store.transaction() as db:
-        assert db.execute("SELECT COUNT(*) FROM collections WHERE user_id='user-bob'").fetchone()[0] == 1
+def test_existing_poster_stays_valid_until_new_publication(workspace):
+    client, app = workspace
+    create(client)
+    poster = upload(client, "blue")
+    with app.state.store.transaction(True) as db:
+        db.execute("UPDATE tickets SET poster_asset_id=? WHERE user_id=? AND id=?", (poster["assetId"], USERS["alice"]["id"], "ticket-1"))
+    edited = applied(client, patch(client, {"title": "Corrected title"}))["tickets"][0]
+    assert edited["media"]["poster"]["assetId"] == poster["assetId"]
+    assert client.get(poster["url"]).status_code == 200
+
+
+def test_operation_status_is_account_scoped_and_survives_later_photo_changes(client):
+    server_id = account_snapshot(client)["serverId"]
+    assert client.get("/api/operations/create-ticket-1").json() == {
+        "serverId": server_id, "operationId": "create-ticket-1", "applied": False, "committedCursor": None}
+    _, payload = create(client)
+    applied = {"serverId": server_id, "operationId": payload["operationId"], "applied": True, "committedCursor": 1}
+    assert client.get("/api/operations/" + payload["operationId"]).json() == applied
+    replacement = upload(client, "blue")
+    response = client.patch("/api/tickets/ticket-1", headers=WRITE_HEADERS,
+                            json={"operationId": "later-photo", "originalAssetId": replacement["assetId"]})
+    assert response.status_code == 200
+    assert client.get("/api/operations/" + payload["operationId"]).json() == {**applied, "committedCursor": 2}
+    delete(client)
+    assert client.get("/api/operations/" + payload["operationId"]).json() == {**applied, "committedCursor": 3}
+    signed_in(client, "bob")
+    assert client.get("/api/operations/" + payload["operationId"]).json() == {
+        "serverId": server_id, "operationId": payload["operationId"], "applied": False, "committedCursor": None}
+    assert client.get("/api/operations/missing-operation").json() == {
+        "serverId": server_id, "operationId": "missing-operation", "applied": False, "committedCursor": None}
+
+
+@pytest.mark.parametrize("identifier", ["invalid.id", "x" * 121, "bad%20id"])
+def test_operation_status_validates_identifier(client, identifier):
+    assert client.get("/api/operations/" + identifier).status_code == 422
+
+
+def test_operation_status_reads_persistent_fact_without_mutating_state(tmp_path):
+    app = make_app(tmp_path)
+    with TestClient(app, base_url=ORIGIN) as client:
+        signed_in(client)
+        state, payload = create(client)
+    reopened = make_app(tmp_path)
+    with TestClient(reopened, base_url=ORIGIN) as client:
+        signed_in(client)
+        assert client.get("/api/operations/" + payload["operationId"]).json() == {
+            "serverId": state["serverId"], "operationId": payload["operationId"], "applied": True, "committedCursor": state["cursor"]}
+        assert client.get("/api/operations/missing").json()["applied"] is False
+        assert account_snapshot(client) == state
+        with reopened.state.store.transaction() as db:
+            assert db.execute("SELECT COUNT(*) FROM operations").fetchone()[0] == 1

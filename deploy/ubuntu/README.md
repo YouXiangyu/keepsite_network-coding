@@ -1,6 +1,8 @@
 # Ubuntu / EC2 部署
 
-项目运行于东京的既有 `t3.small`（2 GB）EC2，应用单进程、单生成 worker，Nginx 提供 HTTPS。账号版使用新的 `/var/lib/memoverse-v2`、Cognito 和私有 S3。旧 `/var/lib/memoverse` 保留，绝不能把旧 schema 1 目录交给新版本自动升级。
+既有环境为东京 `t3.small`（2 GB）EC2，Nginx 提供 HTTPS。新版发布候选使用独立 `/var/lib/memoverse-v3`、Cognito 和私有 S3，单 API worker；配置就绪时另有受限的 OCR 子进程，不启动旧浮雕 worker。源码更新不代表已部署；部署、服务器启停均须用户明确要求。
+
+旧 `/var/lib/memoverse`、`/var/lib/memoverse-v2` 及其媒体保留，不自动升级或覆盖。正式迁移前先用一致快照和原票副本在隔离目录验证 `scripts/migrate-movie-tickets.py`；本地验证副本不能直接宣称已完成 S3 恢复。
 
 实时实例、域名、角色、用户池与配置位置见[项目运行信息](../../.agents/skills/memoverse-delivery/references/project-context.md)。操作前用 AWS MCP 查询明确实例 ID；启动后重新查询动态公网 IP，核对 DDNS 和 SSH 主机身份，不使用历史 IP。
 
@@ -10,8 +12,9 @@
 - EC2 running 且状态检查通过，严格 SSH host key 验证可用。动态地址使用稳定 `-HostKeyAlias memoverse-i-0e9ba9bc6f4b1c019`。
 - Cognito 已配置邮箱验证、Google 提供方、授权码与令牌轮换；环境配置包含[后端列出的必需项](../../backend/README.md)。密钥只放受限文件，不输出或提交 Git。
 - 私有 S3 禁止公开访问，服务器通过实例角色获得临时凭据。角色策略见 `memoverse-s3-policy.json`：只允许目标桶 media/models 的 Get/Put，另允许该桶 ListBucket，使不存在对象的 HEAD 正确返回 404；没有对象删除、ACL、KMS 或其他桶权限。授权候选由 IAM Policy Autopilot 生成后按实际 SSE-S3 和前缀范围收紧，并经过 IAM 模拟验证。
-- `/opt/memoverse/shared/initial-template-v1` 是已核验、不可变的账号初始化模板。目录 root:memoverse 0750、文件 0640。分发只含 manifest 及引用媒体/模型，不能夹带审计快照 `source.sqlite3`。
-- `/var/lib/memoverse-v2` 属于 memoverse，0700；service 的写路径只包括新数据目录和共享模型缓存。旧数据库、证书、DDNS 与认证回退资料保持完整。
+- 新账号从空票夹开始，不再需要初始化模板或 AnyImage 模型。旧模板和共享模型缓存仍保留用于历史回滚，不自动清理。
+- OCR 使用固定 CPU 依赖及 PP-OCRv6 tiny 文件。普通安装不下载模型；授权部署时先用发布目录的虚拟环境 Python 运行 `python -B scripts/prepare-ocr.py --destination <独立模型目录>` 查看计划，再显式加 `--execute` 准备、校验并确保服务用户只读可达。以 `MEMOVERSE_OCR_MODEL_DIR` 指向该目录，并配置可用 Redis 与私有 S3；缺少条件时界面应显示处理不可用，不能把部署成功等同于 OCR 已开启。模型目录可位于 `/opt/memoverse/shared/cache/ocr/ppocrv6-tiny`，不得覆盖旧模型目录。
+- `/var/lib/memoverse-v3` 属于 memoverse，0700；service 只对新数据目录开放写入。旧数据库、证书、DDNS 与认证回退资料保持完整。
 
 ## 准备与候选验证
 
@@ -28,11 +31,9 @@
 
 服务器准备和激活共用 `/opt/memoverse/activation-backups/.lock` 的真实 `flock`，准备锁覆盖解包、校验与依赖安装。先解包到同卷唯一临时目录，全部校验成功并写入制品身份后才原子改名为最终 release；中断解包不会留下半成品占用正式路径。venv 在最终路径安装，避免解释器绝对路径随目录移动失效；安装失败不写 prepared 标记，下次核验同一制品后重新安装。未知或冲突的正式目录始终保留并拒绝覆盖。
 
-新环境放 `/etc/memoverse.env.next`（root 0600 或 root:memoverse 0640），新站点放 `/etc/nginx/sites-available/memoverse.next`（root 0644）。候选文件必须是实际普通文件。环境中的 `MEMOVERSE_DATA_DIR` 必须为新目录，`MEMOVERSE_STORAGE=s3`，身份与模板配置必须齐全；不要从 shell 执行环境文件，也不要在命令行传密钥。
+新环境放 `/etc/memoverse.env.next`（root 0600 或 root:memoverse 0640），新站点放 `/etc/nginx/sites-available/memoverse.next`（root 0644）。候选文件必须是实际普通文件。环境中的 `MEMOVERSE_DATA_DIR` 必须为 `/var/lib/memoverse-v3`，`MEMOVERSE_STORAGE=s3`，身份配置必须齐全；不要从 shell 执行环境文件，也不要在命令行传密钥。旧模板和 `ANYIMAGE_PYTHON` 配置不再用于新版应用。
 
-环境中的 `ANYIMAGE_PYTHON` 可省略，让生成任务使用当前进程解释器；如指定，必须对应新 release 的 venv。不能让候选版本调用旧 current 的解释器。
-
-重大配置迁移先在服务器 `127.0.0.1` 的独立端口启动候选服务，使用相同新环境和实例角色检查真实对象读取、账号初始化、匿名拒绝与登录流程。候选检查不改域名入口，结束后停止候选服务；同一数据目录不要同时运行多个生成 worker。
+重大配置迁移先在服务器 `127.0.0.1` 的独立端口启动候选服务，使用相同新环境和实例角色检查真实对象读取、空账号初始化、匿名拒绝与登录流程。候选检查不改域名入口，结束后停止候选服务。
 
 ## 正式切换
 
@@ -57,8 +58,8 @@
 
 ## 验收与运维
 
-- 检查内部 health、HTTP→HTTPS、公开登录页、匿名 API/原图/模型/备份拒绝。
-- 实测邮箱/Google 身份、两账号隔离、模板首次初始化、上传生成、编辑复用、删除与导出；模拟提供方测试不能代替真实 Google 同意和邮件收件。
+- 检查内部 health、HTTP→HTTPS、公开登录页、匿名 API/原图/备份拒绝；旧社交、模型、任务接口不存在。
+- 实测邮箱/Google 身份、两账号隔离、新账号空票夹、原票上传与有效引用、字段纠错、幂等重试、删除后的媒体拒绝与备份；模拟提供方测试不能代替真实 Google 同意和邮件收件。启用 OCR 后还须验证异步进度、Redis 重启补投、纠错/删除竞态、海报来源及 S3 发布核对；本机合成样本不能替代主机资源和真实票据验收。
 - 验证 `/opt/memoverse/current` 实际提交、S3 对象完整性与私有性、原数据库仍保留；检查磁盘、内存和 OOM。
 - Nginx access 格式不含查询字符串，OAuth callback 的 access/error 日志单独关闭；Uvicorn 同样去除认证回调查询。应用日志不记录密码、验证码或令牌。
 - 应用依赖实例角色，不保存长期 AWS 访问密钥。按测试规模评估 S3 访问日志、CloudTrail 数据事件和 CloudWatch 指标的可观测性与额外费用，不默认启用与本轮无关的收费服务。

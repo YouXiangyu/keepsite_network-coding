@@ -1,87 +1,76 @@
-# MemoVerse · Web 收藏与浮雕应用
+# MemoVerse · 个人电影票整理与多端同步
 
-用一张照片保存一件收藏，整理分类、标签和笔记，并通过 CPU 深度推理生成可交互的浮雕模型。本轮先完成响应式 Web App；Android APK 后续独立开发，网页不再套手机模拟器。
+当前需求以[产品规格](docs/项目定义与决策主文档.md)为准，按[开发计划](docs/开发计划.md)的 M1—M7 顺序实施。先完成电脑、手机、平板共用的响应式 Web，再开发独立 Kotlin Android 客户端。
 
 ## 当前实现
 
-- 桌面侧栏与响应式收藏布局，手机浏览器原生表单、滚动和导航。
-- Google 一键登录、邮箱密码注册、邮箱验证码和密码找回；未登录不能使用业务功能。
-- 服务端会话、CSRF 与账号数据隔离；退出和换号时取消旧请求，不串用用户状态。
-- FastAPI + SQLite schema 2 保存业务数据，私有 AWS S3 保存原图、GLB 与相关产物。
-- 新账户首次获得独立的初始收藏；当前模板包含 17 收藏、4 分享、6 社区内容，共 18 张图片和 18 个真实模型。后续登录不重置修改。
-- 原图上传、编辑删除、搜索、资料与本人完整 ZIP 导出。
-- 固定 AnyImage MoGe2 ONNX CPU 推理，加项目浮雕网格与 GLB 导出；Three.js 查看器总偏转上限 40°。
+M1 将应用收窄为个人电影票，M2 补充上传核对、持久变更日志、Redis 热点快照和浏览器媒体缓存，M3 加入可恢复的 OCR/海报处理与进度、重试和来源展示，M4 接入一致分页快照、游标增量和 WebSocket 变化提示，M5 实现本人在线页面间的受限媒体传输和服务器回退。当前提供新用户空票夹、原票上传、片名/影院/影厅/座位/放映时间编辑、详情及删除。Google/邮箱认证、服务端 HttpOnly 会话、CSRF 和账号隔离继续保留。
 
-探索和分享中的初始人物、推荐及互动数仍是测试内容。模型是带真实深度与纹理的浮雕，不是完整背面重建或 Blender Bake Mesh。OCR、Android 离线存储与原生近场分享另行开发。真实 Google 授权和邮件收件是否完成，以部署验收记录为准，不能由模拟接口测试代替。
+新运行数据使用独立 SQLite schema 3；原票存储沿用私有 S3，显式本地开发存储会标为“未配置云存储”。只有已提交的有效票根引用才能读取图片，上传成功本身不等于票根保存成功。按字段修改使用稳定操作标识，删除保留墓碑，旧写入不能复活已删除记录。
 
-## 技术栈与目录
+上传在对象存储 I/O 前持久登记意图；响应丢失或数据库提交失败时可按稳定上传标识核对。S3 用服务端 SHA-256 校验和确认对象，数据库绑定存储域，避免切桶后错报保存成功。Redis 缓存可以丢失，已确认记录与变更日志仍在数据库。
 
-| 目录 | 内容 |
-| --- | --- |
-| `demo/` | React、TypeScript、Vite、Three.js Web 前端 |
-| `backend/` | FastAPI、Cognito 会话、账号 SQLite、对象存储与串行生成任务 |
-| `scripts/` | 模型/模板准备、验证、构建发布与运维迁移 |
-| `deploy/ubuntu/` | EC2 安装、systemd、Nginx、角色权限和安全切换 |
-| `docs/` | 产品决定、设计参考、API 与验收证据 |
+浏览器仅按账号缓存图片，完整校验后标为可用；128 MiB 上限、按需加载和并发限制控制资源。缓存不可用或空间不足时仍可临时展示，清本机缓存不删除云端记录。默认使用受保护同源媒体接口；60 秒 S3 直读签名需显式启用并先验证桶 CORS。
 
-## 职责边界与修改入口
+云存原票的处理意图在数据库持久登记，由 Redis Streams 投递；OCR 使用固定版本和哈希的 PP-OCRv6 tiny CPU 模型，模型须显式准备。计算在可终止的独立子进程中执行，不延迟原票保存响应。用户字段、输入版本与删除标记优先于异步结果；海报先核验云存，再切换引用。来源只接入 Commons，逐文件保存并展示许可；处理进行中保留当前封面，正常处理进入无匹配或失败终态时回退原票封面。
 
-当前采用单体应用内的模块拆分：模块各自承担明确职责，仍共享统一鉴权、请求通道与事务规则。格式整理只改变代码外观；职责拆分应保留业务行为；恢复能力的改进则需要单独的故障验证，不能以文件变小代替验收。
+首次同步分批获取同一游标的完整快照，再补拉其后的持久变更；新增、纠错、删除和处理结果均走增量。WebSocket 的状态同步消息只发水位提示，同一连接另承载设备登记与 P2P 信令；丢通知或重连后仍按 SQL 游标校准。写操作回执返回同步空间 `serverId` 与确认游标，客户端补齐同一空间的全部变化才确认保存；过期游标重取快照，期间保留页面数据与编辑草稿。旧生产 `/api/state` 接口已移除。
 
-| 想修改什么 | 从哪里开始 | 验证入口 |
+缺少 S3、Redis 或固定模型时明确显示处理不可用。图片按有效本机缓存、本人在线页面 P2P、授权云端恢复的顺序获取；P2P 有并发、授权、超时和一次续传边界。免费 TURN 的额度边界未确认，保持关闭并标记强制中继未验收；Android 按 M7 实施。测试与测量的具体范围见开发计划，合成票根和两部公版电影的海报验证不代表真实票据准确率或现代电影覆盖率。
+
+浮雕、分类标签、分享、社区及旧模板调用链已退出新版。历史实现与资料可从 Git 检查点 `d7945d8` 追溯；实际数据库、照片、模型缓存、S3 对象和回滚文件保持原样。
+
+## 代码入口
+
+| 范围 | 实现 | 验证 |
 | --- | --- | --- |
-| 登录、会话、账号隔离 | `backend/auth.py`、`demo/src/AuthGate.tsx`、`demo/src/api.ts` | `backend/tests/test_auth_integration.py`、`demo/tests/api.test.mjs`、Web 账户切换测试 |
-| 收藏增删改、版本冲突 | `backend/services/collections.py`、`backend/contracts.py`；前端见[责任地图](demo/README.md#代码责任地图) | `backend/tests/test_api.py`、`demo/browser/web-app.spec.ts` |
-| 生成任务调度、生成流水线、结果发布 | [后端责任地图](backend/README.md#生成业务责任地图) | `backend/tests/test_jobs.py` |
-| 原图与模型存储、授权读取 | `backend/object_storage.py`、`backend/store.py`、`backend/api.py` | 后端对象存储与账号隔离测试 |
-| 页面路由、探索、朋友分享、展示组件 | [前端责任地图](demo/README.md#代码责任地图) | `npm run check:runtime`、`npm run test:unit`、`npm run test:web`、`npm run build`（在 `demo` 执行） |
-| 浮雕展示、加载失败与正文超时 | `demo/src/features/relief/`、`demo/src/ReliefViewer.tsx`、`demo/src/api.ts` | `demo/reliability/failures.spec.ts`、角度与 API 测试 |
-| 账户初始化、状态与资料 | `backend/accounts.py`、`backend/state.py`、`backend/services/profiles.py` | 后端账户测试；前端 `useAccountWorkspace.ts` 相关 Web 回归 |
-| 分享、社区互动 | `backend/services/social.py`、`demo/src/features/shares/`、`demo/src/features/explore/` | API 与 Web 分享/探索回归 |
-| 账户备份与隔离恢复 | `backend/backups.py`、`scripts/restore-account-backup.py` | `backend/tests/test_backup_restore.py`、真实生成闭环测试 |
-| 制品准备、发布激活与回滚 | `scripts/deploy-ubuntu.ps1`、`deploy/ubuntu/prepare-release.py`、`deploy/ubuntu/activate.sh` | `deploy/ubuntu/tests/test_deployment.py`；真实服务器另行验收 |
+| 身份、会话、CSRF | `backend/auth.py`、`demo/src/AuthGate.tsx`、`demo/src/api.ts` | 身份单测、真实 BFF 组合测试、Web 换号和迟到响应测试 |
+| 票根、字段来源、操作幂等与墓碑 | `backend/contracts.py`、`store.py`、`services/tickets.py`、`state.py` | API、双账号、删除和重试测试 |
+| 图片校验、私有存储、有效引用授权 | `backend/media.py`、`object_storage.py`、`api.py` | 文件类型/大小/哈希、存储故障和媒体授权测试 |
+| 可恢复上传、持久变更、Redis 缓存 | `backend/media.py`、`store.py`、`shared_state.py`、`state.py` | 上传未知结果、事务原子性、缓存损坏/丢失与真实 Redis CI |
+| OCR/海报流水线 | `backend/processing.py`、`processing_repository.py`、`ocr.py`、`posters.py` | Streams 恢复、任务租约、纠错/删除竞态、海报发布故障、固定模型与合成测量 |
+| 分页、持久增量与通知 | `backend/sync_http.py`、`sync_notifications.py`、`sync_socket.py`、`demo/src/app/accountSync.ts` | 快照一致性、游标边界、写入确认、断线补拉、会话撤销及真实 WebSocket/Redis |
+| 响应式 Web | `demo/src/Prototype.tsx`、`app/`、`features/tickets/` | 运行时契约、单测、浏览器测试和生产构建 |
+| 本机媒体缓存 | `demo/src/mediaCache.ts`、`MediaProvider.tsx` | 账号隔离、全量清理后恢复、空间不足、完整性与按需加载 |
+| 本人设备传输 | `backend/peer_service.py`、`peer_registry.py`、`demo/src/media/` | 授权信令、实际 DataChannel、校验与续传、服务器回退和资源回收 |
+| 综合测量 | `scripts/benchmark-browser.mjs`、`scripts/benchmark-processing.py` | 300 条元数据的浏览器矩阵、完整任务采样与真实隔离 OCR 流水线；环境和限制见报告 |
+| 账号备份、隔离恢复 | `backend/backups.py`、`scripts/restore-account-backup.py` | 资源限制、ZIP 安全、归属、墓碑和完整性验证 |
+| 旧数据迁移 | `scripts/migrate-movie-tickets.py` | `scripts/tests/test_ticket_migration.py` |
+| 制品发布和回滚 | `scripts/deploy-ubuntu.ps1`、`deploy/ubuntu/` | 隔离发布恢复测试 |
 
-修改前先沿对应入口追踪调用和测试。公共规则只保留一个实现：前端网络请求集中于 `api.ts`，业务写操作共用账户级协调入口；后端网络与推理不占 SQLite 写事务，最终发布保留账户、任务、输入版本和原图校验。生产目前只支持一个应用进程与一个生成 worker，模块拆分不意味着可以直接增加 worker 数量。
+前端网络请求集中在会话作用域内的 `api.ts`，业务写入通过账户级协调入口；后端对象存储 I/O 不占数据库写事务。模块配置和运行命令见[后端说明](backend/README.md)与[前端说明](demo/README.md)。
 
-## 解耦与恢复验证
+## 旧数据迁移与保护
 
-账户协调、收藏编辑、后台生成、业务服务、HTTP 适配、备份恢复与部署事务已经分开。`app.py` 负责装配，`api.py` 负责请求/响应，`services/` 负责业务事务，`store.py` 负责数据库与授权存取；前端账户 hook 统一管理状态与操作锁，业务组件接收所需数据和动作。
+新程序不在启动时升级旧库，也不把旧全局数据归给首次登录者。已有 `backend/data`、`backend/data-v2` 和服务器旧目录保留；M1 使用 `backend/data-v3`，正式服务器候选目录为 `/var/lib/memoverse-v3`。
 
-F01—F07 的实现、验收映射、复现命令及边界集中在[可靠性与解耦验收](docs/可靠性与解耦验收.md)。本分支提供有界结果发布重试、任务级取消、浮雕加载隔离、完整正文超时、发布互斥和信号恢复，并验证真实 CPU 生成、隔离备份恢复及两个账户的资源隔离。
+迁移工具默认只读清单：
 
-代码审查、测试通过与 PR 合并不等于已部署。生产运行状态仍以部署验收记录和现场查询为准；CI 不启动 EC2，也不变更自动关机规则。
+```powershell
+python scripts/migrate-movie-tickets.py --source-snapshot D:/isolated/source-schema2.sqlite3
+```
 
-## 服务器与运行
+只有明确指定 `--execute --source-media <本地原图副本目录> --destination <全新隔离目录>` 才创建新库。输入须为一致的离线 schema 2 快照；存在 WAL/回滚日志时拒绝。工具核对归属、原图类型、尺寸与 SHA-256，保留完整旧数据库和迁移报告，不联网、不修改源库、不删除源文件。
 
-正式应用运行于 AWS 东京既有 EC2 `t3.small`（2 GB），Nginx 提供 [keepsite.space](https://keepsite.space) 的 HTTPS。Cognito 管理身份，S3 管理私有文件；Google Cloud 项目只用于 Google 登录配置，不承载应用或对象存储。前端在开发机打包后部署静态文件，正式环境不依赖开发机开机。
+只导入旧 `category=movie` 记录及可核实原票；标题标为迁移来源，旧收藏日期不推断为放映时间，其余电影字段留空待纠错。非电影、社交与模型元数据保留在旧数据库副本中。实际云数据迁移、旧对象和 S3 历史版本回收仍须明确方案及授权；隔离本地副本不代表已经恢复到 S3。
 
-代码按 Git 提交部署到独立目录。新账号数据位于 `/var/lib/memoverse-v2`，旧 `/var/lib/memoverse` 保留；初始化模板经独立校验，不能自动把旧全局工作区归给首个注册人。环境和站点配置变化会与代码一起受控切换，失败时恢复实际旧配置与访问控制。
+## 验证与交付
 
-- [运行信息与实例定位](.agents/skills/memoverse-delivery/references/project-context.md)
-- [Ubuntu 发布与回滚](deploy/ubuntu/README.md)
-- [EC2 部署验收](docs/EC2部署验收.md)
-- [后端配置](backend/README.md) · [前端说明](demo/README.md) · [API 约定](docs/local-api-contract.md)
+在根目录运行后端与迁移/基准测试：
 
-每次开机通过 Cloudflare DDNS 更新动态 IP，正常停机撤回记录。部署前按需启动，用户验收后按要求停止；停止 EC2 仍保留磁盘和 S3 数据费用。当前状态必须现场查询，不从历史 IP 或日志推断。
+```powershell
+python -B -m pytest backend/tests scripts/tests -q
+python -B -m pytest deploy/ubuntu/tests -q
+```
 
-## 开发与验证
+在 `demo/` 运行 `npm run check:runtime`、`npm run test:unit`、`npm run build`、`npm run test:web` 和生产构建故障测试。测试使用隔离数据和测试身份；真实 Redis、固定 OCR 模型由专门测试验证，真实 Google/邮箱、S3、实际票据、TURN 和真机另行验收。
 
-本机开发需先按后端说明配置身份服务、模板和显式存储模式，然后使用 `scripts/start-local.ps1`；本机 origin 必须匹配配置，不能直接复用生产环境文件。旧 IndexedDB 保留，不再自动迁移。
+GitHub PR 与 `codex/**` 分支推送运行 `Backend tests`、`Frontend tests` 和 `deployment-recovery`；后端 CI 使用隔离 Redis 服务执行真实客户端验证。合并前检查必须对应最新提交，独立代码审查也必须覆盖最新提交。开发交付到提交与 PR，部署、EC2 启停和合并另等用户明确要求，不自动执行。
 
-阶段检查涵盖后端身份/账户/对象存储与组合测试，Web 请求和运行约束、响应式浏览器交互、生产构建、初始化模板完整性以及配置切换/回滚控制流。真实服务器再验收访问控制、数据隔离、S3 文件、上传生成和 HTTPS 行为。
+## 部署信息
 
-### PR 持续集成
+既有环境为 AWS 东京 EC2、Cognito、私有 S3 和 [keepsite.space](https://keepsite.space)。定位信息见[项目运行信息](.agents/skills/memoverse-delivery/references/project-context.md)；当前状态必须现场查询。新版代码或 PR 不代表已部署。发布与回滚说明见 [Ubuntu 部署](deploy/ubuntu/README.md)。
 
-每次 PR 更新及推送到 `main`，GitHub Actions 自动执行以下检查；更新同一 PR 时，旧的应用检查会被取消，避免重复占用运行资源。
+每次 EC2 开机 58 分钟后自动发起正常关机，本次开发不改变该规则。停机仍保留磁盘与 S3 数据费用；数据持久存在不代表服务停止时还能登录或获取下载授权。
 
-| 检查 | 内容 |
-| --- | --- |
-| `Backend tests` | Python 3.13 安装固定测试依赖，运行完整 `backend/tests` 与容量基线脚本自测，覆盖接口、身份与账户隔离、对象存储、任务取消/恢复、观测和备份恢复 |
-| `Frontend tests` | Node 24 + `npm ci`，执行单元测试、Web 契约检查、TypeScript/生产构建、Chromium Web 交互及生产构建 HTTP 故障测试 |
-| `deployment-recovery` | Ubuntu 上运行发布恢复测试，包括真实文件锁、进程信号和版本竞争；系统服务使用隔离夹具 |
-
-应用检查失败时保留 JUnit 报告和已有的浏览器失败 trace，保留期 7 天。后端和浏览器测试使用测试身份及隔离数据，不需要生产密钥，不访问真实 Cognito/S3。普通 CI 不下载模型权重，缺少本地 ONNX 模型的会话检查和显式开启的真实 CPU 推理测试会报告跳过；真实推理、Google/邮件与生产云服务验收仍单独执行。
-
-## 数据与第三方组件
-
-Git 不包含原数据库、新账号数据库、用户照片、生成模型、模型权重、依赖环境或凭据。会话密钥和 Google OAuth 密钥只保存在受限配置中。第三方来源与许可见 [THIRD_PARTY.md](THIRD_PARTY.md)。
+[可靠性验收](docs/可靠性与解耦验收.md)和[EC2 验收](docs/EC2部署验收.md)是各自历史版本的证据，不能替代新版验收。Git 不包含数据库、用户照片、凭据、模型或构建缓存；第三方组件说明见 [THIRD_PARTY.md](THIRD_PARTY.md)。

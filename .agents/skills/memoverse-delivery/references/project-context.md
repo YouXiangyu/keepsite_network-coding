@@ -1,6 +1,8 @@
 # 项目运行信息
 
-核验基准：2026-10-18，北京时间。以下是定位信息，不能替代操作前的实时查询。
+云资源核验基准：2026-10-18，北京时间；Git 状态、文档结构与本机开发进度更新于 2026-10-22，本次未重新核验云资源。以下是定位信息，不能替代操作前的实时查询。
+
+2026-10-22 产品存储方向为：私有 S3 长期保存电影票原图与海报，浏览器缓存、P2P 加速、S3 兜底恢复；先 Web 后 Android，服务端 OCR 使用轻量 CPU 模型。源码分支 `codex/movie-ticket-web` 已完成 M1—M5，M5 最新 `0a2a873` 的三项 CI 均通过；M6 设备页与缓存清理恢复、本机 300 条记录的 540 个主读取任务、20 张合成票据的真实 OCR 流水线测量及独立审查已完成，本地后端 451 项、前端 80 单测/53 Web/13 故障恢复/7 双浏览器通过。完整数据与准确边界见开发计划及 docs/evidence，M6 新提交 CI 待核验，M7 Kotlin Android 随后实施。本机测试使用合成数据、fakeredis 与本机/内存对象存储，不证明真实 S3、TURN、Cognito、跨网络或物理设备验收；免费 TURN 保持关闭。这些本机改动均未发布到 EC2。下列 S3 位置仅是后续操作的定位信息；旧模型、用户数据和回滚文件不得因文档删改直接清理。信令与相关服务如何在 EC2 非常驻时可用，按用户要求留待后续决定；本次不改 58 分钟定时器，不启动、部署或调整云资源。
 
 ## 位置与入口
 
@@ -10,6 +12,7 @@
 | 本机根目录 | `D:\100-code\110-Project\network-coding` |
 | GitHub 私人仓库 | `https://github.com/YouXiangyu/network-coding` |
 | 默认分支 | `main` |
+| 改版前 Git 核验（2026-10-21） | GitHub `main` 为 `eb486c9`；当前工作分支 `docs/spec-and-dev-plan` 的改版前检查点 `d7945d8` 已推送并读回核对。检查点无源码改动；之后的文档提交以 Git 日志为准 |
 | 本机技能入口 | `C:\Users\游翔宇\.codex\skills\memoverse-delivery`，链接到项目 `.agents/skills/memoverse-delivery` |
 | 网站 | `https://keepsite.space` |
 | AWS 服务 / 区域 | 普通按需 EC2 / 东京 `ap-northeast-1` |
@@ -17,7 +20,7 @@
 | 规格 | `t3.small`：x86_64、2 vCPU、2 GB RAM；CPU credits 为 standard，避免 surplus credit 费用 |
 | 系统与磁盘 | Canonical Ubuntu 24.04；10 GB 加密 gp3 根卷 `vol-0bb6aa01805d28c75`，旧 20 GB 卷已删除 |
 | 最近运行状态 | 2026-10-18 19:46（北京时间）AWS 确认 `stopped`；19:40 用户确认 Google 登录和邮箱收件后，完成 QA 清理，19:45 正常提前停机；操作前仍须实时查询 |
-| 最近应用运行提交 | `2e74f23408afb26410c45b6c86515cd7964c3f13`，current 与当时 MainPID 1451 的 cwd 均核验一致；PR #2 尚待用户授权合并，main 仍为 `e0c5085`。主机自动关机配置仍为 `622486b`（58 分钟） |
+| 最近应用运行提交 | `2e74f23408afb26410c45b6c86515cd7964c3f13`，current 与当时 MainPID 1451 的 cwd 均核验一致。后续 PR #2 已于 2026-10-19 02:57 合并，`main` 为 `eb486c9`；此为 Git 状态，不代表重新发布或实例实时状态。主机自动关机配置仍为 `622486b`（58 分钟） |
 | 公网 IPv4 | 当前无公网 IP；本次 19:27 开机使用 `54.150.236.186`，停机后已释放；`43.207.114.190`、`18.181.150.249`、`13.230.191.15` 均为历史地址，每次启动必须重新查询 |
 | Launch template / 新建默认版本 | `lt-016bca8507ac81480` / `2`，根盘默认 10 GB |
 | 安全组 / SSH key pair | `sg-0f472ac3891c65681` / `memoverse-ec2-20261017` |
@@ -38,8 +41,9 @@
 
 | 用途 | 路径 |
 | --- | --- |
-| 本机旧业务数据 | `backend/data`，保留不覆盖；新账号版本使用下行 schema 2 目录 |
-| 新账号业务目录 | 本机 `backend/data-v2`、服务器 `/var/lib/memoverse-v2`；旧 schema 1 目录保留，禁止新版本自动覆盖 |
+| 本机旧业务数据 | `backend/data`、`backend/data-v2` 保留不覆盖；不能直接作为 schema 3 运行目录 |
+| 电影票代码默认目录 / 发布候选 | 本机 `backend/data-v3`、服务器候选 `/var/lib/memoverse-v3`，schema 3；本轮尚未部署或迁移真实数据，不能据此推断服务器已有该目录 |
+| 最近已部署的账号目录 | `/var/lib/memoverse-v2`，对应下文历史发布；旧 schema 1 目录继续保留 |
 | 初始化模板 | 本机 `.cache/initial-template-v1`，服务器 `/opt/memoverse/shared/initial-template-v1`；18 张图、18 个模型，17 收藏、4 分享、6 社区内容 |
 | 本机网页 / API | `http://127.0.0.1:4173` / `http://127.0.0.1:8000` |
 | SSH 私钥 / 已知主机 | `.cache/server/ssh/id_rsa` / `.cache/server/ssh/known_hosts` |
@@ -49,12 +53,12 @@
 | Google OAuth 凭据 | 本机 `.cache/server/google-oauth.json`，仅本机用户可读；已安全配置到 Cognito，临时 S3 传输副本已按版本删除并核验为空 |
 | 新鉴权环境候选 | 本机 `.cache/server/account.env.next`、服务器 `/etc/memoverse.env.next`；含会话加密密钥，不输出或纳入 Git |
 | DDNS 服务 / 程序 / 状态 | `memoverse-ddns.service` / `/opt/memoverse/admin/sync-cloudflare-dns.py` / `/var/lib/memoverse-ddns/state.json` |
-| 本机模型与推理依赖 | `.cache/models`、`.cache/anyimage`、`.cache/anyimage-deps` |
+| 本机模型与推理依赖 | 当前 CPU OCR 固定模型为 `.cache/ocr-models/ppocrv6-tiny`，依赖在 `backend/.venv`；旧 `.cache/models`、`.cache/anyimage`、`.cache/anyimage-deps` 保留 |
 | 部署入口 | `scripts/deploy-ubuntu.ps1`，`Server` 必填，默认计划模式，`-Execute` 执行；`-PrepareOnly` 只准备，`-EnvironmentPath /etc/memoverse.env.next` 与 `-NginxPath /etc/nginx/sites-available/memoverse.next` 指定候选配置；新机另加 `-InitializeHost` |
 | 一次性数据迁移 | `scripts/package-server-data.py`，SQLite backup API + 文件 SHA-256 清单 |
-| Linux 安装 / 模型准备 | `deploy/ubuntu/install.sh` / `scripts/setup-anyimage.sh` |
+| Linux 安装 / 模型准备 | `deploy/ubuntu/install.sh` / `scripts/prepare-ocr.py`（默认只显示计划）；不再运行旧 AnyImage 准备链 |
 | 发布目录 / 当前链接 | `/opt/memoverse/releases/<完整commit>` / `/opt/memoverse/current` |
-| 服务器持久数据 | 新账号 `/var/lib/memoverse-v2`；旧 `/var/lib/memoverse` 保留 |
+| 服务器持久数据（最近已部署版本） | `/var/lib/memoverse-v2`；旧 `/var/lib/memoverse` 保留。源码的 v3 发布候选尚未启用 |
 | 服务器共享模型缓存 | `/opt/memoverse/shared/cache` |
 | 应用环境 | `/etc/memoverse.env` |
 | 应用服务 | `memoverse.service`，单 Uvicorn worker，`127.0.0.1:8000` |
@@ -76,6 +80,7 @@ HTTPS 由源站 Nginx 使用 Let's Encrypt 证书提供，`certbot.timer` 续期
 
 ## 启停与计费决策
 
+- 2026-10-20 起，部署、启动或停止实例只在用户明确要求时执行；开发代理完成测试、提交与 PR 后停止，不自行发布或开机。
 - 用户已明确删除 Lightsail 并改用 EC2，选择新建 `t3.small`。2026-10-18 进一步将自动关机从一小时改为每次开机 58 分钟，留出约两分钟正常关机缓冲，但不保证严格在 60 分钟内进入 stopped。用户验收或明确要求时可提前停机；等待验收、继续部署或生成均不能自行延长，延长或取消须取得用户对本次变更的明确授权。
 - 定时从系统启动计时，应用重启或发布不重置；系统重新开机重新计时。到点发起关机，服务退出及 AWS 状态转换还需短暂时间。每次开机核验 timer enabled 和剩余时间，维护命令见 `deploy/ubuntu/README.md`；不要在 uptime 超过 58 分钟后无意重新启用 timer，届时会立即触发。
 - 发布前始终查询上述明确 instance ID 的状态和当次公网 IP；启动后等待状态检查及 DDNS 就绪。停机后确认 `stopped` 与 DNS 关机清理结果。不要用历史状态或 IP 驱动操作。
@@ -88,13 +93,15 @@ HTTPS 由源站 Nginx 使用 Let's Encrypt 证书提供，`certbot.timer` 续期
 
 ## 现有约束与文档
 
-- 2026-10-18 合并流程核验：`main` 已包含 PR #1 的解耦、可靠性修复及前后端 CI。PR 和 main push 自动运行 `Backend tests`、`Frontend tests` 与 `deployment-recovery`。Codex 仓库自动代码审查已设置为“所有 PR”“每次推送时”；这不自动批准或合并 PR。
+- 2026-10-21 GitHub API 核验：可靠性 PR #1 与观测能力 PR #2 已合并；“增加本地浮雕调参实验台及跨平台实验 CI”（PR #3，head `0594620`）仍开放。该 head 的五项 CI 均成功，Codex 审查已完成但汇总仍标记存在未解决意见。浮雕已退出新范围；本轮未合并或关闭该 PR，不能沿用它的检查结果验收新方案。
+
+- 2026-10-18 合并流程核验：`main` 已包含 PR #1 的解耦、可靠性修复及前后端 CI。当时 PR 和 main push 自动运行 `Backend tests`、`Frontend tests` 与 `deployment-recovery`；2026-10-22 的 M2 同时将分支触发扩至 `codex/**`，`f1e2039` 的三项检查均成功。Codex 仓库自动代码审查已设置为“所有 PR”“每次推送时”；这不自动批准或合并 PR。
 - 同日读取 GitHub 设置：当前私有仓库没有 classic branch protection 或 ruleset；两类设置页面均提示当前套餐不会强制执行私有仓库保护规则。未创建无效规则，未改变仓库可见性或账户套餐。因此当前是代理遵循的合并检查流程，不能宣称平台已强制拦截；后续套餐或配置变化须重新核验。
 - 根 `AGENTS.md` 与 `demo/AGENTS.md`：一般工作规则、响应式 Web 运行契约和账号隔离要求。
-- `docs/项目定义与决策主文档.md`：产品决策。
+- `docs/项目定义与决策主文档.md`：当前电影票产品规格；`docs/开发计划.md`：实施工作包与验收顺序。旧产品文档、原始研究、五张设计图及旧 API 说明已按用户授权清理，通过改版前 Git 检查点 `d7945d8` 追溯。
 - `deploy/ubuntu/README.md`：安装、发布与恢复流程。
-- `docs/Lightsail部署验收.md`：旧环境历史证据与退役说明，不能用于定位当前实例。
-- `docs/EC2部署验收.md`：当前环境验收与 DDNS 验证范围。
+- Lightsail 退役证据保存在上述 Git 检查点；该环境已退役，不能用于定位当前实例。
+- `docs/EC2部署验收.md` 与 `docs/可靠性与解耦验收.md`：保留旧实现的运行/测试证据与历史时点，不证明本次新功能已经实现或上线。
 - 通用 Ubuntu 发布脚本会核验制品哈希与准备状态后复用同一 commit；未知目录或内容冲突停止，不自动删除。激活失败后依旧要核对回滚输出与真实运行状态，不能将尝试回滚等同成功。
 - 当前没有统一 formatter。遵循现有风格，不放宽 Web 运行契约或扩散到无关代码。
 - 2026-10-18 最新阶段已发布运行观测版本，19:40 用户明确确认 Google 登录和邮箱收件后完成精确 QA 清理，19:46 核验 stopped。58 分钟 timer 全程未改或延长；本轮未新增业务数据备份。历史阶段的 22 + 6 项、9 个模板合成测试目录以及 7 个认证/后端测试目录删除被自动审批拒绝，未绕过；该历史待清理记录不等于本轮 QA 未清理，清单集中在 `docs/EC2部署验收.md`。保留业务数据、模型、模板、正式凭据、当前准确发布制品、配置回滚元数据和验收证据。文档更新无需再次发布应用。

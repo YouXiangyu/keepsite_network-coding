@@ -1,39 +1,43 @@
-from __future__ import annotations
-
+"""Schema 3 movie tickets; application startup never upgrades legacy data."""
 import json
 import sqlite3
 import time
 import uuid
+import logging
+import threading
 from contextlib import closing, contextmanager
 from pathlib import Path
 
-from .template import InitialTemplate, canonical
 from .object_storage import ObjectStore
+
+CHANGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+CHANGE_WINDOW = 10_000
+log = logging.getLogger(__name__)
+
+
+class TrackedConnection(sqlite3.Connection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.changed_owners = {}
 
 
 class StoreError(Exception):
-    def __init__(self, status_code: int, message: str):
+    def __init__(self, status_code, message):
         super().__init__(message)
         self.status_code, self.message = status_code, message
 
 
 def encode(value):
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True, allow_nan=False)
 
 
-def now_ms() -> int:
+def now_ms():
     return time.time_ns() // 1_000_000
 
 
-def require_schema2_root(root: Path):
-    """Inspect base-file identity without creating WAL/SHM or inferring ownership.
-
-    An unknown database whose identity exists only in a WAL fails closed. Once
-    the base file is confirmed as schema 2, normal owned connections may recover
-    that database's WAL. No checkpoint is performed on an unrecognized source.
-    """
+def require_schema3_root(root: Path):
     if (root / "RESTORE_INCOMPLETE").exists():
-        raise RuntimeError("Incomplete account restoration: do not start this data directory.")
+        raise RuntimeError("Incomplete restoration: do not start this data directory.")
     database = root / "memoverse.sqlite3"
     if not database.exists():
         return
@@ -41,16 +45,28 @@ def require_schema2_root(root: Path):
         with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro&immutable=1", uri=True)) as db:
             row = db.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
     except sqlite3.Error as error:
-        raise RuntimeError("Unknown/legacy database: choose a new schema-2 data directory. Original data was not changed.") from error
-    if not row or row[0] != "2":
-        raise RuntimeError("Legacy schema detected: choose a new schema-2 data directory. Original data was not changed.")
+        raise RuntimeError("Unknown/legacy database: use a new schema-3 directory. Original data was not changed.") from error
+    if not row or row[0] != "3":
+        raise RuntimeError("Legacy schema: migrate to a new schema-3 directory. Original data was not changed.")
 
 
 class Store:
-    def __init__(self, root: Path, *, storage: ObjectStore, template: InitialTemplate | None):
-        require_schema2_root(root)
-        self.root = root.resolve()
-        self.storage, self.template = storage, template
+    def __init__(self, root: Path, *, storage: ObjectStore):
+        require_schema3_root(root)
+        existing = root / "memoverse.sqlite3"
+        if existing.exists():
+            with closing(sqlite3.connect(existing.resolve().as_uri() + "?mode=ro", uri=True)) as db:
+                binding = db.execute("SELECT value FROM meta WHERE key='storage_binding'").fetchone()
+                if binding and binding[0] != storage.storage_binding:
+                    raise RuntimeError("Storage binding changed: use an explicitly verified isolated restore or migration.")
+                if not binding and db.execute("SELECT COUNT(*) FROM assets").fetchone()[0]:
+                    raise RuntimeError("Storage binding is unknown for existing media: use an explicitly verified isolated restore.")
+        self.root, self.storage = root.resolve(), storage
+        self.processing_enabled = False
+        self.processing_unavailable_reason = "电影票处理服务尚未配置。"
+        self.processing_wake = lambda: None
+        self._change_subscribers = set()
+        self._change_lock = threading.Lock()
         for folder in (self.root, self.root / "tmp", self.root / "exports"):
             folder.mkdir(parents=True, exist_ok=True)
         self.database = self.root / "memoverse.sqlite3"
@@ -60,68 +76,98 @@ class Store:
                 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS users (
                     id TEXT PRIMARY KEY, email TEXT NOT NULL, name TEXT NOT NULL,
-                    revision INTEGER NOT NULL DEFAULT 0, template_version TEXT NOT NULL,
-                    created_at INTEGER NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS profiles (
-                    user_id TEXT PRIMARY KEY REFERENCES users(id), payload TEXT NOT NULL
+                    revision INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS assets (
                     id TEXT PRIMARY KEY, object_key TEXT NOT NULL UNIQUE, mime TEXT NOT NULL,
                     size INTEGER NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL,
                     created_at INTEGER NOT NULL
                 );
-                CREATE TABLE IF NOT EXISTS models (
-                    id TEXT PRIMARY KEY, asset_id TEXT NOT NULL REFERENCES assets(id),
-                    model_key TEXT NOT NULL UNIQUE, files TEXT NOT NULL, camera TEXT NOT NULL,
-                    metadata TEXT NOT NULL, created_at INTEGER NOT NULL
-                );
                 CREATE TABLE IF NOT EXISTS asset_grants (
                     user_id TEXT NOT NULL REFERENCES users(id), asset_id TEXT NOT NULL REFERENCES assets(id),
-                    PRIMARY KEY(user_id, asset_id)
+                    PRIMARY KEY(user_id,asset_id)
                 );
-                CREATE TABLE IF NOT EXISTS model_grants (
-                    user_id TEXT NOT NULL REFERENCES users(id), model_id TEXT NOT NULL REFERENCES models(id),
-                    PRIMARY KEY(user_id, model_id)
+                CREATE TABLE IF NOT EXISTS upload_receipts (
+                    user_id TEXT NOT NULL, asset_id TEXT NOT NULL,
+                    PRIMARY KEY(user_id,asset_id),
+                    FOREIGN KEY(user_id,asset_id) REFERENCES asset_grants(user_id,asset_id)
                 );
-                CREATE TABLE IF NOT EXISTS collections (
-                    user_id TEXT NOT NULL REFERENCES users(id), id TEXT NOT NULL, payload TEXT NOT NULL,
-                    asset_id TEXT NOT NULL, model_id TEXT, version INTEGER NOT NULL DEFAULT 1,
-                    input_revision INTEGER NOT NULL DEFAULT 1, job_id TEXT, create_fingerprint TEXT,
+                CREATE TABLE IF NOT EXISTS tickets (
+                    user_id TEXT NOT NULL REFERENCES users(id), id TEXT NOT NULL,
+                    fields TEXT NOT NULL, field_sources TEXT NOT NULL,
+                    original_asset_id TEXT NOT NULL, poster_asset_id TEXT,
+                    version INTEGER NOT NULL DEFAULT 1, input_version INTEGER NOT NULL DEFAULT 1,
+                    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, deleted_at INTEGER,
+                    operation_id TEXT NOT NULL,
                     PRIMARY KEY(user_id,id),
-                    FOREIGN KEY(user_id,asset_id) REFERENCES asset_grants(user_id,asset_id),
-                    FOREIGN KEY(user_id,model_id) REFERENCES model_grants(user_id,model_id)
+                    FOREIGN KEY(user_id,original_asset_id) REFERENCES asset_grants(user_id,asset_id),
+                    FOREIGN KEY(user_id,poster_asset_id) REFERENCES asset_grants(user_id,asset_id)
                 );
-                CREATE TABLE IF NOT EXISTS shares (
-                    user_id TEXT NOT NULL REFERENCES users(id), id TEXT NOT NULL, payload TEXT NOT NULL,
+                CREATE TABLE IF NOT EXISTS operations (
+                    user_id TEXT NOT NULL REFERENCES users(id), id TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL, created_at INTEGER NOT NULL,
                     PRIMARY KEY(user_id,id)
                 );
-                CREATE TABLE IF NOT EXISTS community (
-                    user_id TEXT NOT NULL REFERENCES users(id), id TEXT NOT NULL, payload TEXT NOT NULL,
+                CREATE TABLE IF NOT EXISTS sync_baselines (
+                    user_id TEXT PRIMARY KEY REFERENCES users(id), cursor INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS ticket_changes (
+                    user_id TEXT NOT NULL REFERENCES users(id), cursor INTEGER NOT NULL,
+                    ticket_id TEXT NOT NULL, payload TEXT NOT NULL, created_at INTEGER NOT NULL,
+                    PRIMARY KEY(user_id,cursor)
+                );
+                CREATE INDEX IF NOT EXISTS ticket_changes_age ON ticket_changes(user_id,created_at,cursor);
+                CREATE TABLE IF NOT EXISTS upload_intents (
+                    user_id TEXT NOT NULL REFERENCES users(id), id TEXT NOT NULL,
+                    asset_id TEXT NOT NULL, object_key TEXT NOT NULL, mime TEXT NOT NULL,
+                    size INTEGER NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('pending','stored','attached')),
+                    storage_identity TEXT NOT NULL, created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL, last_checked_at INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY(user_id,id)
                 );
-                CREATE TABLE IF NOT EXISTS likes (
-                    user_id TEXT NOT NULL, id TEXT NOT NULL, PRIMARY KEY(user_id,id),
-                    FOREIGN KEY(user_id,id) REFERENCES community(user_id,id)
+                CREATE INDEX IF NOT EXISTS upload_pending ON upload_intents(status,last_checked_at,created_at);
+                CREATE TABLE IF NOT EXISTS processing_jobs (
+                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), ticket_id TEXT NOT NULL,
+                    input_version INTEGER NOT NULL, original_asset_id TEXT NOT NULL,
+                    status TEXT NOT NULL, error TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+                    lease_owner TEXT, lease_token INTEGER NOT NULL DEFAULT 0, lease_until INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at INTEGER NOT NULL, deadline_at INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+                    last_enqueued_at INTEGER NOT NULL DEFAULT 0, ocr_fields TEXT, artifact_id TEXT,
+                    FOREIGN KEY(user_id,ticket_id) REFERENCES tickets(user_id,id),
+                    FOREIGN KEY(user_id,original_asset_id) REFERENCES asset_grants(user_id,asset_id)
                 );
-                CREATE TABLE IF NOT EXISTS jobs (
-                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),
-                    collection_id TEXT NOT NULL, asset_id TEXT NOT NULL, input_revision INTEGER NOT NULL,
-                    status TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', model_id TEXT,
-                    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, result TEXT,
-                    UNIQUE(user_id,collection_id,input_revision),
-                    FOREIGN KEY(user_id,asset_id) REFERENCES asset_grants(user_id,asset_id),
-                    FOREIGN KEY(user_id,model_id) REFERENCES model_grants(user_id,model_id)
+                CREATE TABLE IF NOT EXISTS ticket_processing (
+                    user_id TEXT NOT NULL, ticket_id TEXT NOT NULL, job_id TEXT NOT NULL REFERENCES processing_jobs(id),
+                    PRIMARY KEY(user_id,ticket_id), FOREIGN KEY(user_id,ticket_id) REFERENCES tickets(user_id,id)
                 );
-                CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status,created_at);
-                CREATE INDEX IF NOT EXISTS jobs_owner ON jobs(user_id,id);
+                CREATE TABLE IF NOT EXISTS processing_artifacts (
+                    id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES processing_jobs(id), user_id TEXT NOT NULL,
+                    descriptor TEXT NOT NULL, source TEXT NOT NULL, temp_name TEXT NOT NULL, created_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS poster_sources (
+                    user_id TEXT NOT NULL, ticket_id TEXT NOT NULL, asset_id TEXT NOT NULL,
+                    source TEXT NOT NULL, PRIMARY KEY(user_id,ticket_id),
+                    FOREIGN KEY(user_id,ticket_id) REFERENCES tickets(user_id,id),
+                    FOREIGN KEY(user_id,asset_id) REFERENCES asset_grants(user_id,asset_id)
+                );
+                CREATE TABLE IF NOT EXISTS processing_cleanup (
+                    temp_name TEXT PRIMARY KEY, artifact_id TEXT, reason TEXT NOT NULL, cleaned_at INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS processing_due ON processing_jobs(status,next_attempt_at,last_enqueued_at);
+                CREATE INDEX IF NOT EXISTS tickets_active ON tickets(user_id,deleted_at,created_at);
             """)
-            for key, value in {"schema_version": "2", "server_id": str(uuid.uuid4())}.items():
+            for key, value in {"schema_version": "3", "server_id": str(uuid.uuid4()), "storage_binding": storage.storage_binding}.items():
                 db.execute("INSERT OR IGNORE INTO meta VALUES (?,?)", (key, value))
+            bound = db.execute("SELECT value FROM meta WHERE key='storage_binding'").fetchone()[0]
+            if bound != storage.storage_binding:
+                raise RuntimeError("Storage binding changed during initialization; application was not started.")
+            db.execute("INSERT OR IGNORE INTO sync_baselines SELECT id,revision FROM users")
             db.commit()
 
     def connect(self, *, timeout=15):
-        db = sqlite3.connect(self.database, timeout=timeout)
+        db = sqlite3.connect(self.database, timeout=timeout, factory=TrackedConnection)
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys=ON")
         return db
@@ -129,15 +175,42 @@ class Store:
     @contextmanager
     def transaction(self, write=False, *, timeout=15):
         db = self.connect(timeout=timeout)
+        changes = ()
         try:
             db.execute("BEGIN IMMEDIATE" if write else "BEGIN")
             yield db
             db.commit()
+            changes = tuple(db.changed_owners.items())
         except BaseException:
             db.rollback()
             raise
         finally:
             db.close()
+        if changes:
+            with self._change_lock:
+                subscribers = tuple(self._change_subscribers)
+            for user_id, cursor in changes:
+                for callback in subscribers:
+                    try:
+                        callback(user_id, cursor)
+                    except Exception:
+                        log.warning("Committed change notification deferred; durable log retained")
+
+    def subscribe_changes(self, callback):
+        """Callbacks must only enqueue work: no blocking network inside this hook."""
+        with self._change_lock:
+            self._change_subscribers.add(callback)
+
+        def unsubscribe():
+            with self._change_lock:
+                self._change_subscribers.discard(callback)
+        return unsubscribe
+
+    def watermark(self, user_id):
+        with self.transaction(timeout=1) as db:
+            user = self.require_user(db, user_id)
+            server = db.execute("SELECT value FROM meta WHERE key='server_id'").fetchone()[0]
+            return {"serverId": server, "cursor": user["revision"]}
 
     @staticmethod
     def require_user(db, user_id):
@@ -152,6 +225,43 @@ class Store:
             raise StoreError(401, "账号不可用，请重新登录。")
 
     @staticmethod
+    def ensure_sync_baseline(db, user_id):
+        """Imported/restored metadata begins at this cursor, not invented history."""
+        Store.require_user(db, user_id)
+        db.execute("INSERT OR IGNORE INTO sync_baselines SELECT id,revision FROM users WHERE id=?", (user_id,))
+
+    @staticmethod
+    def record_ticket_change(db, user_id, ticket):
+        revision = Store.require_user(db, user_id)["revision"]
+        db.execute("INSERT INTO ticket_changes VALUES (?,?,?,?,?)",
+                   (user_id, revision, ticket["id"], encode(ticket), now_ms()))
+        Store._prune_changes(db, user_id, revision)
+        db.changed_owners[user_id] = revision
+
+    @staticmethod
+    def _prune_changes(db, user_id, head):
+        baseline = db.execute("SELECT cursor FROM sync_baselines WHERE user_id=?", (user_id,)).fetchone()[0]
+        aged = db.execute("SELECT MAX(cursor) FROM ticket_changes WHERE user_id=? AND created_at<?",
+                          (user_id, now_ms() - CHANGE_RETENTION_MS)).fetchone()[0]
+        cutoff = min(head, max(baseline, head - CHANGE_WINDOW, aged or 0))
+        if cutoff > baseline:
+            db.execute("DELETE FROM ticket_changes WHERE user_id=? AND cursor<=?", (user_id, cutoff))
+            db.execute("UPDATE sync_baselines SET cursor=? WHERE user_id=?", (cutoff, user_id))
+
+    def prune_changes(self, user_id):
+        with self.transaction(timeout=1) as db:
+            user = self.require_user(db, user_id)
+            baseline = db.execute("SELECT cursor FROM sync_baselines WHERE user_id=?", (user_id,)).fetchone()
+            aged = db.execute("SELECT 1 FROM ticket_changes WHERE user_id=? AND created_at<? LIMIT 1",
+                              (user_id, now_ms() - CHANGE_RETENTION_MS)).fetchone()
+            if baseline and not aged and user["revision"] - baseline[0] <= CHANGE_WINDOW:
+                return
+        with self.transaction(True, timeout=1) as db:
+            user = self.require_user(db, user_id)
+            self.ensure_sync_baseline(db, user_id)
+            self._prune_changes(db, user_id, user["revision"])
+
+    @staticmethod
     def asset(db, user_id, identifier):
         row = db.execute("SELECT a.* FROM assets a JOIN asset_grants g ON g.asset_id=a.id WHERE g.user_id=? AND a.id=?", (user_id, identifier)).fetchone()
         if not row:
@@ -159,24 +269,30 @@ class Store:
         return row
 
     @staticmethod
-    def model(db, user_id, identifier):
-        row = db.execute("SELECT m.* FROM models m JOIN model_grants g ON g.model_id=m.id WHERE g.user_id=? AND m.id=?", (user_id, identifier)).fetchone()
-        if not row:
-            raise StoreError(404, "模型不存在或无权访问。")
-        return row
+    def referenced_asset(db, user_id, identifier):
+        asset = Store.asset(db, user_id, identifier)
+        reference = db.execute("SELECT 1 FROM tickets WHERE user_id=? AND deleted_at IS NULL AND (original_asset_id=? OR poster_asset_id=?) LIMIT 1", (user_id, identifier, identifier)).fetchone()
+        if not reference:
+            raise StoreError(404, "图片不存在或无权访问。")
+        return asset
+
+    def attach_asset(self, db, user_id, identifier):
+        """Only a freshly verified upload or an existing live reference is attachable."""
+        asset = Store.asset(db, user_id, identifier)
+        receipt = db.execute("SELECT 1 FROM upload_receipts r JOIN upload_intents u ON u.user_id=r.user_id AND u.asset_id=r.asset_id WHERE r.user_id=? AND r.asset_id=? AND u.status='stored' AND u.storage_identity=? LIMIT 1",
+                             (user_id, identifier, self.storage.cache_identity)).fetchone()
+        if not receipt:
+            Store.referenced_asset(db, user_id, identifier)
+        db.execute("DELETE FROM upload_receipts WHERE user_id=? AND asset_id=?", (user_id, identifier))
+        db.execute("UPDATE upload_intents SET status='attached',updated_at=? WHERE user_id=? AND asset_id=? AND status IN ('pending','stored')",
+                   (now_ms(), user_id, identifier))
+        return asset
 
     @staticmethod
-    def collection(db, user_id, identifier):
-        row = db.execute("SELECT * FROM collections WHERE user_id=? AND id=?", (user_id, identifier)).fetchone()
+    def ticket(db, user_id, identifier):
+        row = db.execute("SELECT * FROM tickets WHERE user_id=? AND id=? AND deleted_at IS NULL", (user_id, identifier)).fetchone()
         if not row:
-            raise StoreError(404, "这件收藏已不存在或无权访问。")
-        return row
-
-    @staticmethod
-    def job(db, user_id, identifier):
-        row = db.execute("SELECT * FROM jobs WHERE user_id=? AND id=?", (user_id, identifier)).fetchone()
-        if not row:
-            raise StoreError(404, "生成任务不存在或无权访问。")
+            raise StoreError(404, "电影票不存在或已删除。")
         return row
 
     @staticmethod
@@ -188,14 +304,3 @@ class Store:
                 raise StoreError(409, "不可变图片元数据冲突，未覆盖原图。")
             return
         db.execute("INSERT INTO assets VALUES (?,?,?,?,?,?,?)", (*values, now_ms()))
-
-    @staticmethod
-    def register_model(db, model):
-        metadata = {key: value for key, value in model.items() if key not in {"id", "assetId", "path", "files", "camera"}}
-        values = (model["id"], model["assetId"], model["path"], canonical(model["files"]).decode(), canonical(model["camera"]).decode(), canonical(metadata).decode())
-        old = db.execute("SELECT id,asset_id,model_key,files,camera,metadata FROM models WHERE id=?", (model["id"],)).fetchone()
-        if old:
-            if tuple(old) != values:
-                raise StoreError(409, "不可变模型元数据冲突，未覆盖已有模型。")
-            return
-        db.execute("INSERT INTO models VALUES (?,?,?,?,?,?,?)", (*values, now_ms()))

@@ -115,11 +115,11 @@ class ActivationTests(unittest.TestCase):
         self.next_env = self.etc / 'memoverse.env.next'
         self.next_site = self.etc / 'nginx/sites-available/memoverse.next'
         self.environment = '\n'.join([
-            'MEMOVERSE_DATA_DIR=/var/lib/memoverse-v2', 'MEMOVERSE_STORAGE=s3',
+            'MEMOVERSE_DATA_DIR=/var/lib/memoverse-v3', 'MEMOVERSE_STORAGE=s3',
             'MEMOVERSE_S3_BUCKET=private-fixture', 'AWS_REGION=ap-northeast-1',
             'MEMOVERSE_COGNITO_REGION=ap-northeast-1', 'MEMOVERSE_COGNITO_USER_POOL_ID=ap-northeast-1_test',
             'MEMOVERSE_COGNITO_CLIENT_ID=client', 'MEMOVERSE_COGNITO_DOMAIN=https://auth.example.test',
-            'MEMOVERSE_PUBLIC_URL=https://example.test', 'MEMOVERSE_TEMPLATE_DIR=/fixture/template',
+            'MEMOVERSE_PUBLIC_URL=https://example.test',
             'MEMOVERSE_SESSION_KEY=' + base64.urlsafe_b64encode(b'a' * 32).decode(),
         ]) + '\n'
         self.env.write_text(self.environment)
@@ -349,11 +349,13 @@ sleep() { :; }
                 self.assertEqual(self.site.read_text(), 'PRIVATE_BASIC')
 
     def test_wrong_candidate_data_root_fails_without_touching_legacy_data(self):
-        self.next_env.write_text(self.environment.replace('/var/lib/memoverse-v2', '/var/lib/memoverse'))
-        result = self.run_activation('success', configuration=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertNotIn('systemctl stop memoverse', self.log.read_text())
-        self.assertEqual(self.current.read_text(), self.old.as_posix())
+        for legacy in ('/var/lib/memoverse', '/var/lib/memoverse-v2'):
+            with self.subTest(legacy=legacy):
+                self.next_env.write_text(self.environment.replace('/var/lib/memoverse-v3', legacy))
+                result = self.run_activation('success', configuration=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn('systemctl stop memoverse', self.log.read_text())
+                self.assertEqual(self.current.read_text(), self.old.as_posix())
 
 
 class PrepareOnlyTests(unittest.TestCase):

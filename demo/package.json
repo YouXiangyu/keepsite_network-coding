@@ -10,15 +10,16 @@
     "test:web": "playwright test --config=playwright.web.config.ts",
     "test:reliability": "npm run build && playwright test --config=playwright.reliability.config.ts",
     "test:mobile-archive": "playwright test --config=playwright.config.ts",
-    "test:unit": "node --test tests/api.test.mjs tests/data.test.mjs tests/relief-angle.test.mjs",
+    "test:p2p": "playwright test --config=playwright.p2p.config.ts",
+    "test:unit": "node --test tests/api.test.mjs tests/data.test.mjs tests/media-cache.test.mjs tests/account-sync.test.mjs tests/data-channel.test.mjs tests/peer-media.test.mjs",
     "test:sites": "node --test tests/sites-worker.test.mjs",
     "predev": "npm run check:runtime",
     "dev": "vite",
     "prebuild": "npm run check:runtime",
-    "build": "tsc && vite build && node scripts/prepare-sites-build.mjs"
+    "build": "tsc && vite build && node scripts/prepare-sites-build.mjs",
+    "build:benchmark": "tsc --project benchmark/tsconfig.json && vite build --config vite.benchmark.config.ts"
   },
   "dependencies": {
-    "@fontsource/roboto": "5.2.10",
     "@phosphor-icons/react": "2.1.10",
     "@radix-ui/react-dialog": "1.1.19",
     "@radix-ui/react-dropdown-menu": "2.1.20",
@@ -26,14 +27,12 @@
     "@use-gesture/react": "10.3.1",
     "motion": "12.42.2",
     "react": "19.2.7",
-    "react-dom": "19.2.7",
-    "three": "0.186.1"
+    "react-dom": "19.2.7"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
-    "@types/three": "0.186.0",
     "@vitejs/plugin-react": "6.0.3",
     "typescript": "7.0.2",
     "vite": "8.1.3"

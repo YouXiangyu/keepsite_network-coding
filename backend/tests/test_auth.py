@@ -470,3 +470,128 @@ def test_provider_http_errors_close_response_without_leaking_body(auth, monkeypa
     assert raised.value.status == expected
     assert body.closed
     assert 'private' not in raised.value.detail
+
+
+def test_websocket_bridge_uses_opaque_cookie_and_returns_no_credentials(auth):
+    from backend.auth import hashed, SESSION_SECONDS
+    logged_in = login(auth).json()
+    sid = auth.client.cookies.get(auth.service.cookie_name)
+    accepted = auth.service.websocket_session(sid, PUBLIC)
+    assert set(accepted) == {"user", "sessionKey", "expiresAt"}
+    assert accepted["user"] == logged_in["user"]
+    assert accepted["sessionKey"] == hashed(sid) and accepted["sessionKey"] != sid
+    assert accepted["expiresAt"] == int((auth.now[0] + SESSION_SECONDS) * 1000)
+
+
+@pytest.mark.parametrize("origin", [None, "null", "https://foreign.example", PUBLIC + "/"])
+def test_websocket_bridge_rejects_origin_before_refresh(auth, origin):
+    login(auth)
+    sid = auth.client.cookies.get(auth.service.cookie_name)
+    auth.now[0] += 871
+    with pytest.raises(AuthError) as error:
+        auth.service.websocket_session(sid, origin)
+    assert error.value.status == 403 and error.value.code == "invalid_origin"
+    assert auth.provider.refresh_calls == 0
+    assert auth.service.websocket_session(sid, PUBLIC)["user"]["email"] == "person@example.com"
+    assert auth.provider.refresh_calls == 1
+
+
+def test_websocket_refresh_failure_preserves_session_but_absolute_expiry_revokes(auth):
+    from backend.auth import hashed, SESSION_SECONDS
+    login(auth)
+    sid = auth.client.cookies.get(auth.service.cookie_name)
+    revoked = []
+    unsubscribe = auth.service.subscribe_revocations(revoked.append)
+    auth.now[0] += 871
+    auth.provider.refresh_error = AuthError(503, "temporary", "provider_unavailable")
+    with pytest.raises(AuthError) as error:
+        auth.service.websocket_session(sid, PUBLIC)
+    assert error.value.status == 503 and revoked == []
+    with auth.service.db() as db:
+        assert db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 1
+    auth.now[0] += SESSION_SECONDS
+    with pytest.raises(AuthError) as error:
+        auth.service.websocket_session(sid, PUBLIC)
+    assert error.value.status == 401 and revoked == [hashed(sid)]
+    unsubscribe()
+
+
+def test_logout_revocation_callback_commits_before_upstream_and_is_failure_isolated(auth, monkeypatch):
+    from backend.auth import hashed
+    session = login(auth).json()
+    sid = auth.client.cookies.get(auth.service.cookie_name)
+    observed = []
+    def committed(session_key):
+        with auth.service.db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            assert db.execute("SELECT 1 FROM sessions WHERE sid_hash=?", (session_key,)).fetchone() is None
+            db.rollback()
+        observed.append(session_key)
+    auth.service.subscribe_revocations(committed)
+    auth.service.subscribe_revocations(lambda _: (_ for _ in ()).throw(RuntimeError("subscriber unavailable")))
+    def upstream(_token):
+        assert observed == [hashed(sid)]
+        raise AuthError(503, "upstream unavailable")
+    monkeypatch.setattr(auth.provider, "revoke", upstream)
+    response = auth.client.post("/api/auth/logout", headers={**HEADERS, "X-CSRF-Token": session["csrfToken"]})
+    assert response.status_code == 200 and observed == [hashed(sid)]
+    with pytest.raises(AuthError):
+        auth.service.websocket_session(sid, PUBLIC)
+
+
+def test_account_switch_revokes_only_old_socket_session_and_unsubscribe_is_idempotent(auth):
+    from backend.auth import hashed
+    first = login(auth).json()
+    old_sid = auth.client.cookies.get(auth.service.cookie_name)
+    revoked = []
+    unsubscribe = auth.service.subscribe_revocations(revoked.append)
+    auth.provider.subject = "second-subject"
+    auth.provider.email = "second@example.com"
+    second = login(auth).json()
+    new_sid = auth.client.cookies.get(auth.service.cookie_name)
+    assert second["user"]["id"] != first["user"]["id"]
+    assert revoked == [hashed(old_sid)]
+    assert auth.service.websocket_session(new_sid, PUBLIC)["user"] == second["user"]
+    with pytest.raises(AuthError):
+        auth.service.websocket_session(old_sid, PUBLIC)
+    unsubscribe()
+    unsubscribe()
+    auth.service.invalidate(new_sid)
+    assert revoked == [hashed(old_sid)]
+
+
+def test_peer_digest_authorization_shares_cookie_refresh_lock_and_revocation(auth):
+    from backend.auth import hashed
+    login(auth)
+    sid = auth.client.cookies.get(auth.service.cookie_name)
+    digest = hashed(sid)
+    auth.now[0] += 871
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        cookie = executor.submit(auth.service.websocket_session, sid, PUBLIC)
+        peer = executor.submit(auth.service.websocket_session_key, digest)
+        assert cookie.result() == peer.result()
+    assert auth.provider.refresh_calls == 1
+    auth.service.invalidate(sid)
+    with pytest.raises(AuthError) as error:
+        auth.service.websocket_session_key(digest)
+    assert error.value.status == 401
+    with pytest.raises(AuthError):
+        auth.service.websocket_session_key(sid)
+
+
+def test_peer_digest_transient_failure_preserves_session_and_absolute_expiry_revokes(auth):
+    from backend.auth import hashed, SESSION_SECONDS
+    login(auth)
+    sid = auth.client.cookies.get(auth.service.cookie_name)
+    digest = hashed(sid)
+    auth.now[0] += 871
+    auth.provider.refresh_error = AuthError(503, "temporary", "provider_unavailable")
+    with pytest.raises(AuthError) as error:
+        auth.service.websocket_session_key(digest)
+    assert error.value.status == 503
+    with auth.service.db() as db:
+        assert db.execute("SELECT 1 FROM sessions WHERE sid_hash=?", (digest,)).fetchone()
+    auth.now[0] += SESSION_SECONDS
+    with pytest.raises(AuthError) as error:
+        auth.service.websocket_session_key(digest)
+    assert error.value.status == 401

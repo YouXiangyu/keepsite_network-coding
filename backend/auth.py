@@ -348,6 +348,8 @@ class AuthService:
         self.oauth_cookie = '__Host-memoverse_oauth' if self.config and self.config.secure else 'memoverse_oauth'
         self.limiter = RateLimiter(clock)
         self.locks = [threading.Lock() for _ in range(64)]
+        self._revocation_lock = threading.Lock()
+        self._revocation_subscribers = set()
         data_root = Path(data_root)
         data_root.mkdir(parents=True, exist_ok=True)
         self.database = data_root / 'auth.sqlite3'
@@ -432,20 +434,67 @@ class AuthService:
 
     def invalidate(self, sid):
         if sid:
-            with self.db() as db:
-                db.execute('DELETE FROM sessions WHERE sid_hash=?', (hashed(sid),))
+            self._invalidate_digest(hashed(sid))
+
+    def _invalidate_digest(self, digest):
+        with self.db() as db:
+            db.execute('DELETE FROM sessions WHERE sid_hash=?', (digest,))
+        self._notify_revoked(digest)
+
+    def subscribe_revocations(self, callback):
+        """The callback receives only a session digest and must enqueue without I/O."""
+        with self._revocation_lock:
+            self._revocation_subscribers.add(callback)
+
+        def unsubscribe():
+            with self._revocation_lock:
+                self._revocation_subscribers.discard(callback)
+        return unsubscribe
+
+    def _notify_revoked(self, session_key):
+        with self._revocation_lock:
+            callbacks = tuple(self._revocation_subscribers)
+        for callback in callbacks:
+            try:
+                callback(session_key)
+            except Exception:
+                logging.getLogger(__name__).warning('Session revocation notification deferred')
+
+    def websocket_session(self, sid, origin):
+        """Browser WS uses the same opaque cookie and existing refresh semantics."""
+        self.require_config()
+        if origin != self.config.public_url:
+            raise AuthError(403, '请求来源验证失败。', 'invalid_origin')
+        session = self.session(sid)
+        if session is None:
+            raise AuthError(401, '请先登录。', 'authentication_required')
+        return {'user': session['user'], 'sessionKey': hashed(session['sid']),
+                'expiresAt': int(session['expires'] * 1000)}
 
     def session(self, sid):
         if not self.configured or not isinstance(sid, str) or not re.fullmatch(r'[A-Za-z0-9_-]{43}', sid):
             return None
-        digest = hashed(sid)
+        return self._session_for_digest(hashed(sid), sid)
+
+    def websocket_session_key(self, session_key):
+        """Server-internal peer authorization; no route accepts a session digest."""
+        self.require_config()
+        if not isinstance(session_key, str) or not re.fullmatch(r'[a-f0-9]{64}', session_key):
+            raise AuthError(401, '请先登录。', 'authentication_required')
+        session = self._session_for_digest(session_key)
+        if session is None:
+            raise AuthError(401, '请先登录。', 'authentication_required')
+        return {'user': session['user'], 'sessionKey': session_key,
+                'expiresAt': int(session['expires'] * 1000)}
+
+    def _session_for_digest(self, digest, sid=None):
         with self.locks[int(digest[:4], 16) % len(self.locks)]:
             with self.db() as db:
                 row = db.execute('SELECT * FROM sessions WHERE sid_hash=?', (digest,)).fetchone()
             if row is None:
                 return None
             if row['expires'] <= self.clock():
-                self.invalidate(sid)
+                self._invalidate_digest(digest)
                 return None
             owner = None
             try:
@@ -473,7 +522,7 @@ class AuthService:
                 return {'sid': sid, 'user': user, 'csrf': row['csrf'], 'expires': row['expires']}
             except AuthError as error:
                 if error.status in (401, 403):
-                    self.invalidate(sid)
+                    self._invalidate_digest(digest)
                 raise
             finally:
                 if owner:
@@ -486,6 +535,8 @@ class AuthService:
             row = db.execute('SELECT tokens FROM sessions WHERE sid_hash=?', (hashed(sid),)).fetchone() if sid else None
             if sid:
                 db.execute('DELETE FROM sessions WHERE sid_hash=?', (hashed(sid),))
+        if sid:
+            self._notify_revoked(hashed(sid))
         if row:
             try:
                 tokens = self.decrypt(row['tokens'])

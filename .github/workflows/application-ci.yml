@@ -3,7 +3,7 @@ name: Application CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, 'codex/**']
 
 permissions:
   contents: read
@@ -17,9 +17,19 @@ jobs:
     name: Backend tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      redis:
+        image: redis:8.2.10-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     env:
       AWS_EC2_METADATA_DISABLED: 'true'
-      MEMOVERSE_RUN_REAL_GENERATION: '0'
+      MEMOVERSE_TEST_REDIS_URL: redis://127.0.0.1:6379/15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -29,8 +39,12 @@ jobs:
           cache-dependency-path: backend/requirements*.txt
       - name: Install test dependencies
         run: python -m pip install -r backend/requirements-dev.txt
+      - name: Prepare and verify fixed OCR models
+        run: |
+          python -B scripts/prepare-ocr.py --destination "$RUNNER_TEMP/ocr-models" --execute
+          echo "MEMOVERSE_TEST_OCR_MODEL_DIR=$RUNNER_TEMP/ocr-models" >> "$GITHUB_ENV"
       - name: Test backend contracts, isolation, and recovery
-        run: python -B -m pytest backend/tests scripts/tests/test_capacity_benchmark.py -q -ra --basetemp "$RUNNER_TEMP/pytest-backend" --junitxml=test-results/backend.xml
+        run: python -B -m pytest backend/tests scripts/tests/test_capacity_benchmark.py scripts/tests/test_sync_benchmark.py scripts/tests/test_processing_benchmark.py scripts/tests/test_ticket_migration.py scripts/tests/test_ocr_preparation.py -q -ra --basetemp "$RUNNER_TEMP/pytest-backend" --junitxml=test-results/backend.xml
       - name: Upload backend failure report
         if: ${{ failure() }}
         uses: actions/upload-artifact@v4
@@ -72,11 +86,32 @@ jobs:
         run: npx playwright test --config=playwright.reliability.config.ts --reporter=line,junit --output=test-results/reliability
         env:
           PLAYWRIGHT_JUNIT_OUTPUT_FILE: test-results/reliability-junit.xml
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: backend/requirements*.txt
+      - name: Install local P2P fixture dependencies
+        run: python -m pip install -r ../backend/requirements-dev.txt
+      - name: Test real two-browser media transfer and fallback
+        run: npm run test:p2p -- --reporter=line,junit --output=test-results/p2p
+        env:
+          AWS_EC2_METADATA_DISABLED: 'true'
+          PLAYWRIGHT_JUNIT_OUTPUT_FILE: test-results/p2p-junit.xml
+      - name: Test benchmark accounting and isolated browser smoke matrix
+        run: |
+          node --test ../scripts/tests/browser-benchmark.test.mjs
+          npm run build:benchmark
+          node ../scripts/benchmark-browser.mjs --count 3 --sample 3 --output "$RUNNER_TEMP/m6-browser-smoke" --execute
+        env:
+          AWS_EC2_METADATA_DISABLED: 'true'
       - name: Upload frontend failure reports and traces
         if: ${{ failure() }}
         uses: actions/upload-artifact@v4
         with:
           name: frontend-failure-reports
-          path: demo/test-results/
+          path: |
+            demo/test-results/
+            ${{ runner.temp }}/m6-browser-smoke/
           if-no-files-found: ignore
           retention-days: 7

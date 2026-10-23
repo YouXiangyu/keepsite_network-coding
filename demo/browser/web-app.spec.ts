@@ -1,167 +1,225 @@
-import { glb } from '../tests/glb-fixture.mjs';
 import { expect, test, type Page, type Route } from '@playwright/test';
-
+import { sampleItem, media, pngHash, otherHash, otherPng, imageFixture, posterSource } from '../tests/web-fixtures.mjs';
 const password = 'ExamplePassword123!';
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=', 'base64');
-const categories = ['travel', 'movie', 'daily', 'exhibition'];
-const art = ['sea', 'lighthouse', 'cafe', 'exhibition'];
-function dataFor(user: string) {
-  const collections = Array.from({ length: 17 }, (_, index) => ({
-    id: `item-${index + 1}`, title: index === 0 ? `${user.toUpperCase()} 的海边` : `珍藏片刻 ${index + 1}`,
-    category: categories[index % 4], tags: ['纪念'], note: '把值得留念的日子，好好收藏。', date: '2026-10-14',
-    addedAt: 100 - index, source: 'mine', art: art[index % 4], version: 1, generation: 'ready',
-    assetId: `asset-${index}`, customImage: `/api/media/${index}`, modelUrl: `/api/models/${index}/model.glb`,
-  }));
-  return {
-    collections,
-    shares: Array.from({ length: 4 }, (_, index) => ({ id: `share-${index}`, sender: '小林', receivedAt: '2026-10-13', unread: index < 2,
-      item: { ...collections[index], id: `shared-${index}`, source: 'friend', sender: '小林' } })),
-    community: Array.from({ length: 6 }, (_, index) => ({ id: `community-${index}`, title: `社区灵感 ${index + 1}`, category: categories[index % 4], art: art[index % 4],
-      author: '小雨', description: '一起收藏生活里的片刻。', exposures: 100, saves: 10, likes: 20, generation: 'ready',
-      customImage: `/api/media/${index}`, modelUrl: `/api/models/${index}/model.glb` })),
-    profile: { name: `用户 ${user.toUpperCase()}`, bio: '把喜欢的日子留下来' }, likedCommunityIds: [] as string[],
-  };
-}
-const model = glb();
-
-async function mockApi(page: Page, options: { user?: string; configured?: boolean; google?: boolean; sessionGate?: Promise<void> } = {}) {
+async function mockApi(page: Page, options: { user?: string; configured?: boolean; google?: boolean; sessionGate?: Promise<void>; empty?: boolean; cloud?: boolean; processing?: boolean; deviceSync?: boolean; peerName?: string } = {}) {
   const server = {
     user: options.user ?? '', configured: options.configured ?? true, google: options.google ?? false,
     requests: [] as { path: string; method: string; body: any; headers: Record<string, string> }[],
-    data: new Map<string, ReturnType<typeof dataFor>>(), revision: 1, denyModel: false, conflictOnce: false,
-    rejectVerification: false, unverifiedLogin: false, holdState: undefined as Promise<void> | undefined,
-    csrfToken: undefined as string | undefined,
-    logoutUrl: undefined as string | undefined,
-    generationRecovery: [] as { jobId: string; collectionId: string; error: string }[],
+    data: new Map<string, { tickets: ReturnType<typeof sampleItem>[] }>(), revision: 1,
+    rejectVerification: false, unverifiedLogin: false, holdChanges: undefined as Promise<void> | undefined,
+    csrfToken: undefined as string | undefined, logoutUrl: undefined as string | undefined,
+    appliedOperations: new Set<string>(),
+    uploads: new Map<string, { uploadId: string; status: string; asset: ReturnType<typeof media> }>(),
+    processing: options.processing ?? false,
+    peerMessages: [] as any[],
   };
   const currentData = (user = server.user) => {
-    if (!server.data.has(user)) server.data.set(user, dataFor(user));
+    if (!server.data.has(user)) { const ticket = sampleItem(); ticket.fields.title = `${user.toUpperCase()} 的电影票`; ticket.media.original.cloudStatus = options.cloud === false ? 'not_configured' : 'saved'; server.data.set(user, { tickets: options.empty ? [] : [ticket] }); }
     return server.data.get(user)!;
   };
-  const session = () => ({ authenticated: !!server.user, configured: server.configured,
-    providers: { google: server.google, email: true }, ...(server.user ? { user: { id: server.user, email: `${server.user}@example.test`, name: `用户 ${server.user.toUpperCase()}` }, csrfToken: server.csrfToken ?? `csrf-${server.user}` } : {}) });
-  const state = (user = server.user) => ({ initialized: true, serverId: 'web-server', userId: user, revision: server.revision,
-    data: structuredClone(currentData(user)), generationRecovery: user === 'a' ? server.generationRecovery : [], generationEngine: { available: true, reason: 'test engine' } });
+  const session = () => ({ authenticated: !!server.user, configured: server.configured, providers: { google: server.google, email: true },
+    ...(server.user ? { user: { id: server.user, email: `${server.user}@example.test`, name: server.user }, csrfToken: server.csrfToken ?? `csrf-${server.user}` } : {}) });
+  const capabilities = () => ({ processing: server.processing, processingUnavailableReason: server.processing ? null : '处理配置未就绪，请配置服务端识别。', deviceSync: !!options.deviceSync, cloudStorage: options.cloud !== false });
+  const histories = new Map<string, { cursor: number; previous: Map<string, string>; changes: any[] }>();
+  const sockets = new Set<{ user: string; send: (value: string) => void }>();
+  const views = new Map<string, any>(); let snapshotCount = 0;
+  const history = (user = server.user) => { if (!histories.has(user)) histories.set(user, { cursor: 1, previous: new Map(currentData(user).tickets.map(ticket => [ticket.id, JSON.stringify(ticket)])), changes: [] }); return histories.get(user)!; };
+  const hint = () => { for (const socket of sockets) if (socket.user === server.user) socket.send(JSON.stringify({ v: 1, type: 'sync.hint', serverId: 'web-server', userId: socket.user, cursor: history(socket.user).cursor })); };
+  const commit = () => {
+    const log = history();
+    for (const ticket of currentData().tickets) {
+      const raw = JSON.stringify(ticket); if (log.previous.get(ticket.id) === raw) continue;
+      log.previous.set(ticket.id, raw); log.cursor++;
+      log.changes.push(ticket.deletedAt !== null ? { cursor: log.cursor, type: 'delete', id: ticket.id, version: ticket.version, deletedAt: ticket.deletedAt } : { cursor: log.cursor, type: 'upsert', ticket: structuredClone(ticket) });
+    }
+    hint();
+  };
+  Object.defineProperty(server, 'revision', { get: () => history().cursor, set: () => commit() });
   const respond = (route: Route, value: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) });
-  await page.addInitScript(() => {
-    (window as any).__legacyReads = 0;
-    indexedDB.open = (() => { (window as any).__legacyReads += 1; throw new Error('Legacy IndexedDB must not be read'); }) as typeof indexedDB.open;
+  await page.routeWebSocket('**/api/sync/events', socket => {
+    const entry = { user: server.user, send: (value: string) => socket.send(value) }; sockets.add(entry);
+    let revision = 0, inventory = new Set<string>(), staged = [] as string[];
+    socket.onMessage(raw => {
+      const message = JSON.parse(String(raw)); server.peerMessages.push(message); let response: any;
+      if (message.type === 'device.register') { revision = 0; inventory = new Set(); response = { type: 'device.registered', peerId: 'web-peer', enabled: true, reason: null, heartbeatMs: 15000, leaseMs: 45000, inventoryRevision: 0, limits: { maxInventory: 1024, maxBatchAssets: 32, maxControlBytes: 4096, maxSignalBytes: 65536, maxSdpBytes: 49152, maxIceBytes: 2048, maxActiveTransfers: 2 }, iceServers: [], turnEnabled: false }; }
+      else if (message.type === 'device.list') response = { type: 'device.peers', peers: [{ peerId: 'web-peer', name: options.peerName ?? '测试浏览器页面' }] };
+      else if (message.type === 'device.heartbeat') response = { type: 'device.alive', leaseMs: 45000, inventoryRevision: revision };
+      else if (message.type === 'device.unregister') { inventory.clear(); response = { type: 'device.unregistered' }; }
+      else if (message.type === 'cache.replace') { if (message.batchIndex === 0) staged = []; staged.push(...message.assetIds); const complete = message.batchIndex === message.batchCount - 1; if (complete) { inventory = new Set(staged); revision = message.revision; } response = { type: 'cache.ack', revision: message.revision, count: staged.length, complete, nextBatchIndex: complete ? null : message.batchIndex + 1 }; }
+      else if (message.type === 'cache.patch') { for (const id of message.add) inventory.add(id); for (const id of message.remove) inventory.delete(id); revision = message.revision; response = { type: 'cache.ack', revision, count: inventory.size, complete: true, nextBatchIndex: null }; }
+      else if (message.type === 'peer.find') response = { type: 'peer.sources', assetId: message.assetId, peers: [] };
+      else response = { type: 'peer.error', code: 'unavailable', message: '测试无在线源' };
+      socket.send(JSON.stringify({ v: 1, serverId: 'web-server', userId: entry.user, requestId: message.requestId, ...response }));
+    });
+    socket.send(JSON.stringify({ v: 1, type: 'sync.ready', serverId: 'web-server', userId: entry.user, cursor: history(entry.user).cursor }));
+    socket.onClose(() => sockets.delete(entry));
   });
+  await page.addInitScript(() => { (window as any).__legacyReads = 0; const open = indexedDB.open.bind(indexedDB); indexedDB.open = ((name: string, version?: number) => { if (name === 'memoverse-media-cache-v1') return open(name, version); (window as any).__legacyReads += 1; throw new Error('Legacy data must not be read'); }) as typeof indexedDB.open; });
   await page.route('**/api/**', async route => {
-    const request = route.request();
-    const path = new URL(request.url()).pathname;
-    const method = request.method();
-    let body: any;
-    try { body = request.postDataJSON(); } catch { body = request.postData(); }
+    const request = route.request(), path = new URL(request.url()).pathname, method = request.method();
+    let body: any; try { body = request.postDataJSON(); } catch { body = request.postData(); }
     server.requests.push({ path, method, body, headers: request.headers() });
-    if (path === '/api/auth/session') {
-      await options.sessionGate;
-      return respond(route, session()).catch(() => {});
-    }
-    if (path === '/api/auth/login') {
-      if (server.unverifiedLogin) return respond(route, { detail: '请先验证邮箱。', code: 'email_unverified' }, 403);
-      if (body.password !== password && body.password !== 'NewExamplePassword456!') return respond(route, { detail: '邮箱或密码不正确。' }, 401);
-      server.user = body.email.startsWith('b') ? 'b' : 'a';
-      return respond(route, session());
-    }
+    if (path === '/api/auth/session') { await options.sessionGate; return respond(route, session()).catch(() => {}); }
+    if (path === '/api/auth/login') { if (server.unverifiedLogin) return respond(route, { detail: '请先验证邮箱。', code: 'email_unverified' }, 403); server.user = body.email.startsWith('b') ? 'b' : 'a'; return respond(route, session()); }
     if (path === '/api/auth/register') return respond(route, { verificationRequired: true, email: body.email });
     if (path === '/api/auth/verify-email') return respond(route, server.rejectVerification ? { detail: '验证码不正确。' } : { verified: true }, server.rejectVerification ? 400 : 200);
     if (['/api/auth/resend-code', '/api/auth/forgot-password', '/api/auth/reset-password'].includes(path)) return respond(route, { ok: true });
     if (path === '/api/auth/logout') { server.user = ''; return respond(route, { ok: true, logoutUrl: server.logoutUrl }); }
     if (!server.user) return respond(route, { detail: '请登录。' }, 401);
-    if (path === '/api/state') {
-      const snapshot = state();
-      const held = server.holdState;
-      server.holdState = undefined;
-      if (held) await held;
-      return respond(route, snapshot).catch(() => {});
+    if (path === '/api/sync/snapshot') {
+      const token = new URL(request.url()).searchParams.get('pageToken'); let view;
+      if (token) view = views.get(token);
+      else {
+        const tickets = structuredClone(currentData().tickets.filter(ticket => ticket.deletedAt === null));
+        view = { serverId: 'web-server', userId: server.user, snapshotId: 'view-' + ++snapshotCount, cursor: history().cursor, total: tickets.length, offset: 0, tickets, expiresAt: Date.now() + 600000, capabilities: capabilities() };
+      }
+      if (!view || view.userId !== server.user) return respond(route, { detail: { code: 'snapshot_expired', message: '快照已失效' } }, 410);
+      const end = Math.min(view.offset + 100, view.total), nextPageToken = end < view.total ? view.snapshotId + '-' + end : null;
+      if (nextPageToken) views.set(nextPageToken, { ...view, offset: end });
+      return respond(route, { ...view, tickets: view.tickets.slice(view.offset, end), nextPageToken });
     }
-    if (path.startsWith('/api/models/')) {
-      if (server.denyModel) return respond(route, { detail: '登录已过期。' }, 401);
-      return route.fulfill({ status: 200, contentType: 'model/gltf-binary', body: model });
+    if (path === '/api/sync/changes') {
+      const query = new URL(request.url()).searchParams, after = Number(query.get('after')), log = history();
+      const changes = structuredClone(log.changes.filter(change => change.cursor > after).slice(0, 100));
+      const nextCursor = changes.at(-1)?.cursor ?? after;
+      const response = { serverId: 'web-server', userId: server.user, fromCursor: after, nextCursor, headCursor: log.cursor, hasMore: nextCursor < log.cursor, changes, capabilities: capabilities() };
+      const held = server.holdChanges; server.holdChanges = undefined; if (held) await held;
+      return respond(route, response).catch(() => {});
     }
-    if (path.startsWith('/api/media/')) {
-      const index = Number(path.split('/').pop()) || 0;
-      const colors = [['#c4d3d6', '#e7e6d8', '#82949a'], ['#c9bfab', '#eee9df', '#8c8575'], ['#ccd6c6', '#e9ece2', '#81917b']][index % 3];
-      return route.fulfill({ contentType: 'image/svg+xml', body: `<svg xmlns="http://www.w3.org/2000/svg" width="600" height="450"><rect width="600" height="450" fill="${colors[0]}"/><circle cx="450" cy="90" r="48" fill="${colors[1]}"/><path d="M0 300L160 160L360 340L500 260L600 330V450H0Z" fill="${colors[2]}"/><path d="M0 370Q200 270 600 390V450H0Z" fill="${colors[1]}"/></svg>` });
-    }
-    if (path === '/api/media' && method === 'POST') return respond(route, { assetId: 'uploaded', url: '/api/media/uploaded', sha256: 'hash', width: 1, height: 1, size: 68, mimeType: 'image/png' });
+    if (method !== 'GET' && request.headers()['x-csrf-token'] !== (server.csrfToken ?? `csrf-${server.user}`)) return respond(route, { detail: 'CSRF' }, 403);
+    if (path.startsWith('/api/operations/')) { const operationId = path.split('/')[3]; const applied = server.appliedOperations.has(`${server.user}/${operationId}`); return respond(route, { serverId: 'web-server', operationId, applied, committedCursor: applied ? history().cursor : null }); }
+    if (path.startsWith('/api/uploads/')) { const upload = server.uploads.get(`${server.user}/${path.split('/')[3]}`); return respond(route, upload ?? { detail: '未找到上传' }, upload ? 200 : 404); }
+    if (path.endsWith('/download')) { const hash = path.split('/')[3]; const assets = currentData().tickets.flatMap(ticket => [ticket.media.original, ticket.media.poster]).filter(Boolean); const asset = assets.find(asset => asset!.assetId === hash) ?? media(); return respond(route, { ...asset, transport: 'server', expiresAt: Date.now() + 60000 }); }
+    if (path.startsWith('/api/media/')) return route.fulfill({ contentType: 'image/png', body: path.endsWith(otherHash) ? otherPng : png });
+    if (path === '/api/media') { const uploadId = /name="uploadId"\r\n\r\n([^\r]+)/.exec(body)?.[1] ?? ''; const asset = media(); server.uploads.set(`${server.user}/${uploadId}`, { uploadId, status: 'stored', asset }); return respond(route, { ...asset, uploadId }); }
     const data = currentData();
-    if (path.endsWith('/retry-generation')) {
-      server.generationRecovery = [];
-      return respond(route, state());
-    }
-    if (path === '/api/collections' && method === 'POST') {
-      data.collections.push({ ...body, tags: body.tags ?? [], addedAt: 1000, source: 'mine', version: 1, generation: 'queued',
-        customImage: '/api/media/uploaded', generationJobId: 'new-job' } as any);
-    } else if (path.startsWith('/api/collections/') && method === 'PATCH') {
-      const item = data.collections.find(item => item.id === path.split('/')[3])!;
-      if (server.conflictOnce) { server.conflictOnce = false; item.version = 3; server.revision += 1; return respond(route, { detail: '版本已更新，草稿仍保留。' }, 409); }
-      if (body.version !== item.version) return respond(route, { detail: '版本已更新。' }, 409);
-      Object.assign(item, body, { version: item.version + 1 });
-    } else if (path.startsWith('/api/collections/') && method === 'DELETE') {
-      data.collections = data.collections.filter(item => item.id !== path.split('/')[3]);
-    } else if (path === '/api/profile') data.profile = body;
-    else if (path === '/api/shares/read-all') data.shares.forEach(share => { share.unread = false; });
-    else if (path.match(/^\/api\/shares\/[^/]+\/read$/)) data.shares.find(share => share.id === path.split('/')[3])!.unread = false;
-    else if (path.match(/^\/api\/community\/[^/]+\/view$/)) data.community.find(item => item.id === path.split('/')[3])!.exposures += 1;
-    else if (path.match(/^\/api\/community\/[^/]+\/like$/) && method === 'PUT') {
-      const item = data.community.find(item => item.id === path.split('/')[3])!;
-      const wasLiked = data.likedCommunityIds.includes(item.id);
-      data.likedCommunityIds = data.likedCommunityIds.filter(id => id !== item.id);
-      if (body.liked) data.likedCommunityIds.push(item.id);
-      item.likes += Number(body.liked) - Number(wasLiked);
-    } else if (path.match(/^\/api\/(community|shares)\/[^/]+\/collect$/) && method === 'POST') {
-      const [, , source, id] = path.split('/');
-      const shared = source === 'shares' ? data.shares.find(share => share.id === id)!.item : undefined;
-      const community = source === 'community' ? data.community.find(item => item.id === id)! : undefined;
-      data.collections.push(shared ? { ...shared, id: `collected-${id}` } : {
-        ...data.collections[0], ...community, id: `collected-${id}`, source: 'friend', sender: community!.author,
-        note: community!.description,
-      });
-    }
-    server.revision += 1;
-    return respond(route, state());
+    if (server.appliedOperations.has(`${server.user}/${body?.operationId}`)) return respond(route, { serverId: 'web-server', operationId: body.operationId, committedCursor: history().cursor });
+    if (path.endsWith('/process') && method === 'POST') {
+      if (!server.processing) return respond(route, { detail: '处理配置未就绪' }, 503);
+      const ticket = data.tickets.find(item => item.id === decodeURIComponent(path.split('/')[3]));
+      if (!ticket || ticket.deletedAt !== null) return respond(route, { detail: '票根不存在' }, 404);
+      ticket.processing = { status: 'queued', error: null }; ticket.version++;
+    } else if (path === '/api/tickets' && method === 'POST') { const ticket = sampleItem(body.id); ticket.fields = { title: '', cinema: '', hall: '', seat: '', showtime: '', ...body.fields }; ticket.media.original.cloudStatus = options.cloud === false ? 'not_configured' : 'saved'; if (server.processing && ticket.media.original.cloudStatus === 'saved') ticket.processing.status = 'queued'; data.tickets.push(ticket); }
+    else if (path.startsWith('/api/tickets/')) { const ticket = data.tickets.find(item => item.id === decodeURIComponent(path.split('/')[3])); if (!ticket) return respond(route, { detail: '不存在' }, 404); if (method === 'PATCH') { Object.assign(ticket.fields, body.fields); for (const key of Object.keys(body.fields ?? {})) ticket.fieldSources[key] = 'user'; if (body.originalAssetId || 'title' in (body.fields ?? {}) || 'showtime' in (body.fields ?? {})) { ticket.inputVersion++; if (server.processing) ticket.processing = { status: 'queued', error: null }; } } else if (method === 'DELETE') ticket.deletedAt = Date.now(); else return respond(route, {}, 404); ticket.version++; }
+    else return respond(route, { detail: 'Not found' }, 404);
+    if (body.originalAssetId) for (const [key, upload] of server.uploads) if (key.startsWith(server.user + '/') && upload.asset.assetId === body.originalAssetId) upload.status = 'attached';
+    server.appliedOperations.add(`${server.user}/${body.operationId}`);
+    server.revision++; return respond(route, { serverId: 'web-server', operationId: body.operationId, committedCursor: history().cursor });
   });
-  return server;
+  return Object.assign(server, { hint });
 }
+async function login(page: Page, email = 'a@example.test') { await page.getByLabel('邮箱地址', { exact: true }).fill(email); await page.getByLabel('密码', { exact: true }).fill(password); await page.getByRole('button', { name: '登录', exact: true }).click(); }
 
-async function login(page: Page, email = 'a@example.test') {
-  await page.getByLabel('邮箱地址', { exact: true }).fill(email);
-  await page.getByLabel('密码', { exact: true }).fill(password);
-  await page.getByRole('button', { name: '登录', exact: true }).click();
-}
+test('all snapshot pages publish together and later hints transfer only changed records', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' });
+  api.data.set('a', { tickets: Array.from({ length: 201 }, (_, index) => sampleItem('ticket-' + index)) });
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; }); let held = false;
+  await page.route('**/api/sync/snapshot?**', async route => {
+    if (new URL(route.request().url()).searchParams.has('pageToken') && !held) { held = true; await gate; }
+    await route.fallback();
+  });
+  const bodies: { path: string; size: number }[] = [];
+  page.on('response', async response => { if (response.url().includes('/api/sync/')) { try { bodies.push({ path: new URL(response.url()).pathname, size: (await response.body()).byteLength }); } catch {} } });
+  await page.goto('/tickets'); await expect.poll(() => held).toBe(true);
+  await expect(page.locator('.ticket-card')).toHaveCount(0);
+  expect(api.requests.filter(request => request.path.startsWith('/api/media/'))).toHaveLength(0);
+  release(); await expect(page.locator('.ticket-card')).toHaveCount(201);
+  await expect.poll(() => bodies.filter(body => body.path.endsWith('/snapshot')).length).toBe(3);
+  const initialBytes = bodies.filter(body => body.path.endsWith('/snapshot')).reduce((sum, body) => sum + body.size, 0);
+  const before = bodies.length, snapshots = api.requests.filter(request => request.path.endsWith('/snapshot')).length;
+  const ticket = api.data.get('a')!.tickets[0]; ticket.fields.title = '增量修改的一张电影票'; ticket.version++; api.revision++;
+  await expect(page.getByText('增量修改的一张电影票', { exact: true })).toBeVisible();
+  await expect.poll(() => bodies.length).toBeGreaterThan(before);
+  const deltaBytes = bodies.slice(before).reduce((sum, body) => sum + body.size, 0);
+  expect(deltaBytes).toBeLessThan(initialBytes / 10);
+  expect(api.requests.filter(request => request.path.endsWith('/snapshot'))).toHaveLength(snapshots);
+  expect(api.requests.some(request => request.path === '/api/state')).toBe(false);
+  await page.clock.install(); const reads = api.requests.filter(request => request.path.endsWith('/changes')).length;
+  api.hint(); await page.clock.runFor(200); expect(api.requests.filter(request => request.path.endsWith('/changes'))).toHaveLength(reads);
+});
 
-test('session barrier shows no business, does not initialize browser data, and disables unavailable Google', async ({ page }, info) => {
-  let release!: () => void;
-  const gate = new Promise<void>(resolve => { release = resolve; });
-  const api = await mockApi(page, { sessionGate: gate });
-  await page.goto('/collection/item-1');
-  await expect(page.getByText('正在确认登录状态…')).toBeVisible();
-  await expect(page.locator('.memoverse-shell')).toHaveCount(0);
-  expect(api.requests.every(request => request.path.startsWith('/api/auth/'))).toBeTruthy();
-  release();
+test('a remote tombstone preserves edited fields and the selected photo while disabling old-record save', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' }); await page.goto('/tickets/item-1/edit');
+  await page.getByLabel('片名').fill('尚未提交的本地草稿');
+  await page.getByLabel('选择原票照片').setInputFiles({ name: 'draft.png', mimeType: 'image/png', buffer: png });
+  const preview = await page.getByAltText('原票预览').getAttribute('src'); expect(preview).toMatch(/^blob:/);
+  const ticket = api.data.get('a')!.tickets[0]; ticket.deletedAt = Date.now(); ticket.version++; api.revision++;
+  await expect(page.getByRole('alert')).toContainText('已被删除');
+  await expect(page.getByLabel('片名')).toHaveValue('尚未提交的本地草稿');
+  await expect(page.getByAltText('原票预览')).toHaveAttribute('src', preview!);
+  await expect(page.getByRole('button', { name: '保存票根' })).toBeDisabled();
+  expect(api.requests.filter(request => request.method === 'PATCH')).toHaveLength(0);
+});
+
+test('peer inventory follows durable cache clearing, external eviction and the page toggle without stopping sync', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a', deviceSync: true }); await page.goto('/tickets');
+  await expect(page.getByText('已校验并保存到本机缓存', { exact: true })).toBeVisible();
+  await page.getByRole('link', { name: '设备与状态', exact: true }).click();
+  await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '1');
+  await page.getByLabel('本页启用 P2P 加速').uncheck(); await expect(page.getByTestId('peer-status')).toHaveAttribute('data-enabled', 'false');
+  const before = api.requests.filter(request => request.path.endsWith('/changes')).length;
+  api.data.get('a')!.tickets[0].fields.title = '停用P2P仍同步'; api.data.get('a')!.tickets[0].version++; api.revision++;
+  await expect.poll(() => api.requests.filter(request => request.path.endsWith('/changes')).length).toBeGreaterThan(before);
+  await page.getByLabel('本页启用 P2P 加速').check(); await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '1');
+  await page.evaluate(() => new Promise<void>((resolve, reject) => {
+    const open = indexedDB.open('memoverse-media-cache-v1'); open.onsuccess = () => { const database = open.result, tx = database.transaction('media', 'readwrite'); tx.objectStore('media').clear(); tx.oncomplete = () => { database.close(); resolve(); }; tx.onerror = () => reject(tx.error); };
+  }));
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '0');
+  expect(api.peerMessages.some(message => message.type === 'cache.patch' && message.remove.includes(pngHash))).toBe(true);
+  await page.getByRole('link', { name: '票夹', exact: true }).click(); await expect(page.getByText('停用P2P仍同步', { exact: true })).toBeVisible();
+  await expect(page.getByText('已校验并保存到本机缓存', { exact: true })).toBeVisible();
+  await page.getByRole('link', { name: '设备与状态', exact: true }).click(); await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '1');
+  await page.getByRole('button', { name: '清除本账号本机缓存', exact: true }).click(); await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '0');
+});
+
+test('a quota-failed temporary image is never advertised as a peer source', async ({ page }) => {
+  await page.addInitScript(() => { IDBObjectStore.prototype.put = function() { throw new DOMException('test quota', 'QuotaExceededError'); }; });
+  const api = await mockApi(page, { user: 'a', deviceSync: true }); await page.goto('/tickets');
+  await expect(page.getByText('本机缓存空间不足 · 当前仅临时展示', { exact: true })).toBeVisible();
+  await page.getByRole('link', { name: '设备与状态', exact: true }).click();
+  await expect(page.getByTestId('peer-status')).toHaveAttribute('data-enabled', 'true');
+  await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '0');
+  expect(api.peerMessages.filter(message => message.type === 'cache.replace').every(message => message.assetIds.length === 0)).toBe(true);
+  expect(api.peerMessages.filter(message => message.type === 'cache.patch').every(message => message.add.length === 0)).toBe(true);
+});
+
+test('online page controls and observed transport totals fit all supported viewport widths', async ({ page }, info) => {
+  await mockApi(page, { user: 'a', deviceSync: true, peerName: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef' }); await page.goto('/tickets');
+  await expect(page.getByText('已校验并保存到本机缓存', { exact: true })).toBeVisible();
+  await page.getByRole('link', { name: '设备与状态', exact: true }).click(); await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '1');
+  for (const width of [360, 390, 768, 1280, 1440]) {
+    await page.setViewportSize({ width, height: 900 }); await page.getByLabel('本页启用 P2P 加速').focus();
+    await expect(page.getByLabel('本页启用 P2P 加速')).toBeFocused(); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    expect(await page.locator('.peer-toggle').evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44);
+    if (width > 1100) expect(await page.locator('.device-panels').evaluate(element => { const [cloud, cache, peers] = [...element.children].map(child => child.getBoundingClientRect()); return peers.top >= Math.max(cloud.bottom, cache.bottom) && peers.width > cloud.width * 1.8; })).toBe(true);
+    await page.screenshot({ path: info.outputPath(`devices-${width}.png`), fullPage: true });
+  }
+  await page.evaluate(() => { document.documentElement.style.zoom = '200%'; });
+  await page.getByLabel('本页启用 P2P 加速').focus(); await page.keyboard.press('Space');
+  await expect(page.getByTestId('peer-status')).toHaveAttribute('data-enabled', 'false');
+  await page.keyboard.press('Space'); await expect(page.getByTestId('peer-status')).toHaveAttribute('data-enabled', 'true');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: info.outputPath('devices-1440-zoom200.png'), fullPage: true });
+});
+
+test('session barrier blocks private pages and all business requests', async ({ page }) => {
+  let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
+  const api = await mockApi(page, { sessionGate: gate }); await page.goto('/tickets/item-1');
+  await expect(page.getByText('正在确认登录状态…')).toBeVisible(); await expect(page.locator('.memoverse-shell')).toHaveCount(0);
+  expect(api.requests.every(request => request.path.startsWith('/api/auth/'))).toBeTruthy(); release();
   await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Google 登录暂不可用' })).toBeDisabled();
   expect(await page.evaluate(() => (window as any).__legacyReads)).toBe(0);
-  await expect(page.getByLabel('密码', { exact: true })).toHaveAttribute('autocomplete', 'current-password');
-  await page.screenshot({ path: info.outputPath('auth-desktop.png'), fullPage: true });
 });
-
-test('native login opens the existing template with no device chrome', async ({ page }) => {
-  const api = await mockApi(page);
-  await page.goto('/login');
-  await login(page);
-  await expect(page.getByRole('heading', { name: '我的收藏', exact: true })).toBeVisible();
-  await expect(page.locator('.collection-overview')).toContainText('17');
-  await expect(page.locator('.sidebar')).toBeVisible();
-  await expect(page.locator('.phone-device, .device-menu-bar, .keyboard-dock, .mobile-scroll')).toHaveCount(0);
-  expect(await page.evaluate(() => (window as any).__legacyReads)).toBe(0);
-  const request = api.requests.find(request => request.path === '/api/auth/login')!;
-  expect(request.headers['x-memoverse-client']).toBe('web');
-  expect(api.requests.some(request => request.path.includes('bootstrap'))).toBeFalsy();
+test('new account starts empty and obsolete business routes are not mounted', async ({ page }) => {
+  const api = await mockApi(page, { empty: true }); await page.goto('/login'); await login(page);
+  await expect(page.getByRole('heading', { name: '你的第一张电影票' })).toBeVisible();
+  await expect(page.locator('.phone-device,.keyboard-dock,.mobile-scroll')).toHaveCount(0);
+  await page.goto('/explore'); await expect(page.getByRole('heading', { name: '票根或页面不存在' })).toBeVisible();
+  expect(api.requests.some(request => /community|shares|bootstrap|models/.test(request.path))).toBeFalsy();
 });
-
 test('registration verifies email and keeps invalid-code input for correction', async ({ page }) => {
   const api = await mockApi(page);
   await page.goto('/register');
@@ -205,105 +263,10 @@ test('unverified login routes to verification without exposing the collection', 
   await expect(page.locator('.memoverse-shell')).toHaveCount(0);
 });
 
-for (const width of [360, 390, 768, 1440]) {
-  test(`native browser layout at ${width}px has no page overflow or fake keyboard`, async ({ page }, info) => {
-    await mockApi(page, { user: 'a' });
-    await page.setViewportSize({ width, height: 900 });
-    await page.goto('/collection');
-    await expect(page.getByRole('heading', { name: '我的收藏', exact: true })).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
-    if (width >= 1024) await expect(page.locator('.sidebar')).toBeVisible();
-    else await expect(page.getByRole('navigation', { name: '手机主导航' })).toBeVisible();
-    await page.mouse.wheel(0, 650);
-    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(100);
-    await page.evaluate(() => window.scrollTo(0, 0));
-    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
-    await page.screenshot({ path: info.outputPath(`collection-${width}.png`), fullPage: true });
-    await page.goto('/add');
-    await page.getByRole('textbox', { name: '名称', exact: true }).fill('浏览器原生输入');
-    await expect(page.locator('.keyboard-dock, .phone-frame, .phone-device')).toHaveCount(0);
-    await expect(page.getByLabel('日期', { exact: true })).toHaveAttribute('type', 'date');
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
-  });
-}
-
-test('detail deep links survive refresh and browser navigation; real WebGL controls stay bounded', async ({ page }) => {
-  const api = await mockApi(page, { user: 'a' });
-  await page.goto('/collection/item-1');
-  await expect(page.getByRole('heading', { name: 'A 的海边', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '浮雕向右', exact: true })).toBeEnabled();
-  for (let index = 0; index < 9; index += 1) await page.getByRole('button', { name: '浮雕向右', exact: true }).click();
-  expect(Number(await page.locator('.relief-viewport').getAttribute('data-tilt-degrees'))).toBeLessThanOrEqual(40);
-  await page.reload();
-  await expect(page.getByRole('heading', { name: 'A 的海边', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: /返回我的收藏/ }).click();
-  await expect(page).toHaveURL(/\/collection$/);
-  await page.getByRole('link', { name: /A 的海边/ }).first().click();
-  await expect(page).toHaveURL(/\/collection\/item-1$/);
-  await page.goBack();
-  await expect(page.getByRole('heading', { name: '我的收藏', exact: true })).toBeVisible();
-  expect(api.requests.some(request => request.path === '/api/models/0/model.glb')).toBeTruthy();
-});
-
-test('upload, edit, conflict recovery and document-portal delete preserve business semantics', async ({ page }) => {
-  const api = await mockApi(page, { user: 'a' });
-  await page.goto('/add');
-  await page.getByLabel('选择收藏图片').setInputFiles({ name: 'photo.png', mimeType: 'image/png', buffer: png });
-  await page.getByRole('textbox', { name: '名称', exact: true }).fill('新的一杯咖啡');
-  await page.getByRole('textbox', { name: /标签/ }).fill('咖啡、周末');
-  await page.getByRole('textbox', { name: /想记住的话/ }).fill('留下这一天');
-  await page.getByRole('button', { name: '保存收藏', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '新的一杯咖啡' })).toBeVisible();
-  const create = api.requests.find(request => request.path === '/api/collections' && request.method === 'POST')!;
-  expect(create.body.tags).toEqual(['咖啡', '周末']);
-  expect(create.headers['x-csrf-token']).toBe('csrf-a');
-  expect(create.headers['x-memoverse-client']).toBe('web');
-  await page.getByRole('link', { name: '编辑收藏' }).click();
-  await page.getByRole('textbox', { name: /想记住的话/ }).fill('版本冲突后保留的草稿');
-  api.conflictOnce = true;
-  await page.getByRole('button', { name: '保存收藏', exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText('版本已更新');
-  await expect(page.getByRole('textbox', { name: /想记住的话/ })).toHaveValue('版本冲突后保留的草稿');
-  await expect(page.getByRole('link', { name: '取消编辑', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '读取最新版本，保留草稿' }).click();
-  await page.getByRole('button', { name: '保存收藏', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '新的一杯咖啡' })).toBeVisible();
-  expect(api.requests.filter(request => request.method === 'PATCH').at(-1)?.body.version).toBe(3);
-  await page.getByRole('button', { name: '删除收藏', exact: true }).click();
-  await expect(page.getByRole('dialog')).toBeVisible();
-  expect(await page.getByRole('dialog').evaluate(element => element.closest('.memoverse-shell') === null)).toBeTruthy();
-  await page.getByRole('dialog').getByRole('button', { name: '删除收藏', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '我的收藏', exact: true })).toBeVisible();
-});
-
-test('model authorization failure returns to login and removes all private business UI', async ({ page }) => {
-  const api = await mockApi(page, { user: 'a' });
-  api.denyModel = true;
-  await page.goto('/collection/item-1');
-  await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
-  await expect(page.locator('.memoverse-shell')).toHaveCount(0);
-});
-
-test('logout discards a late account response before another account signs in', async ({ page }) => {
-  const api = await mockApi(page, { user: 'a' });
-  let release!: () => void;
-  api.holdState = new Promise(resolve => { release = resolve; });
-  await page.goto('/collection');
-  await expect(page.getByRole('button', { name: '退出登录', exact: true }).first()).toBeVisible();
-  await page.getByRole('button', { name: '退出登录', exact: true }).first().click();
-  await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
-  await login(page, 'b@example.test');
-  await expect(page.getByRole('heading', { name: '我的收藏', exact: true })).toBeVisible();
-  release();
-  await expect(page.locator('.memoverse-shell')).toHaveAttribute('data-user-id', 'b');
-  await expect(page.getByRole('link', { name: /B 的海边/ }).first()).toBeVisible();
-  await expect(page.getByText('A 的海边', { exact: true })).toHaveCount(0);
-});
-
 test('Cognito logout leaves an anonymous document before redirect and returns signed out', async ({ page }) => {
   const api = await mockApi(page, { user: 'a' });
-  await page.goto('/collection');
-  await expect(page.getByRole('heading', { name: '我的收藏', exact: true })).toBeVisible();
+  await page.goto('/tickets');
+  await expect(page.getByRole('heading', { name: '我的票夹', exact: true })).toBeVisible();
   const origin = new URL(page.url()).origin;
   const provider = 'https://memoverse.auth.ap-northeast-3.amazoncognito.com';
   api.logoutUrl = provider + '/logout?' + new URLSearchParams({ client_id: 'testclient123', logout_uri: origin + '/' });
@@ -329,8 +292,8 @@ test('Cognito logout leaves an anonymous document before redirect and returns si
 test('an unsafe logout URL stays on the signed-out local page', async ({ page }) => {
   const api = await mockApi(page, { user: 'a' });
   api.logoutUrl = 'https://evil.example/logout';
-  await page.goto('/collection');
-  await expect(page.getByRole('heading', { name: '我的收藏', exact: true })).toBeVisible();
+  await page.goto('/tickets');
+  await expect(page.getByRole('heading', { name: '我的票夹', exact: true })).toBeVisible();
   const origin = new URL(page.url()).origin;
   const externalNavigations: string[] = [];
   await page.route('https://evil.example/**', async route => { externalNavigations.push(route.request().url()); await route.abort(); });
@@ -362,248 +325,471 @@ test('Google callback failure shows a fixed message and removes the error query'
 
 test('returning to a browser tab rechecks a session ended elsewhere', async ({ page }) => {
   const api = await mockApi(page, { user: 'a' });
-  await page.goto('/collection');
-  await expect(page.getByRole('heading', { name: '我的收藏', exact: true })).toBeVisible();
+  await page.goto('/tickets');
+  await expect(page.getByRole('heading', { name: '我的票夹', exact: true })).toBeVisible();
   api.user = '';
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
   await expect(page.locator('.memoverse-shell')).toHaveCount(0);
 });
 
-test('same-account session refresh retries a pending initial state request', async ({ page }) => {
-  const api = await mockApi(page, { user: 'a' });
-  let release!: () => void;
-  const initialState = new Promise<void>(resolve => { release = resolve; });
-  let delayedRequests = 0;
-  await page.route('**/api/state', async route => {
-    if (!api.csrfToken) { delayedRequests += 1; await initialState; }
-    await route.fallback().catch(() => {});
+
+for (const width of [360, 390, 768, 1280, 1440]) {
+  test(`ticket library and native editor fit ${width}px`, async ({ page }, info) => {
+    await mockApi(page, { user: 'a' }); await page.setViewportSize({ width, height: 900 }); await page.goto('/tickets');
+    await expect(page.getByRole('heading', { name: '我的票夹', exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+    await page.screenshot({ path: info.outputPath(`tickets-${width}.png`), fullPage: true });
+    await page.getByRole('link', { name: '上传电影票', exact: true }).click();
+    await expect(page.getByLabel('片名')).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+    await expect(page.locator('.keyboard-dock,.phone-device')).toHaveCount(0);
+    await page.getByLabel('片名').focus(); await expect(page.getByLabel('片名')).toBeFocused();
+    if (width === 390 || width === 1440) { await page.evaluate(() => window.scrollTo(0, 0)); await page.screenshot({ path: info.outputPath(`editor-${width}.png`), fullPage: true }); }
   });
-  try {
-    await page.goto('/collection');
-    await expect.poll(() => delayedRequests).toBeGreaterThan(0);
-    await expect(page.getByRole('heading', { name: '正在打开你的收藏', exact: true })).toBeVisible();
-    api.csrfToken = 'csrf-a-renewed';
-    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-    await expect(page.getByRole('heading', { name: '我的收藏', exact: true })).toBeVisible();
-    await expect(page.locator('.memoverse-shell')).toHaveAttribute('data-user-id', 'a');
-    expect(api.requests.some(request => request.path === '/api/state')).toBeTruthy();
-  } finally { release(); }
+}
+test('direct links, refresh, back and cloud status remain accurate', async ({ page }) => {
+  await mockApi(page, { user: 'a', cloud: false }); await page.goto('/tickets/item-1');
+  await expect(page.getByRole('heading', { name: 'A 的电影票' })).toBeVisible();
+  await expect(page.getByText('原票已保存到当前服务器，尚未云存')).toBeVisible();
+  await expect(page.getByText('本机可用情况以图片下方的校验与缓存状态为准。')).toBeVisible();
+  await page.reload(); await expect(page.getByRole('heading', { name: 'A 的电影票' })).toBeVisible();
+  await page.getByRole('link', { name: '编辑票根' }).click(); await page.goBack();
+  await expect(page.getByRole('heading', { name: 'A 的电影票' })).toBeVisible();
+  await page.getByRole('link', { name: '设备与状态' }).click();
+  await expect(page.getByText('当前服务器未配置云存储。当前保存不具备云端恢复保障。')).toBeVisible();
 });
-
-test('same-account session refresh preserves an in-progress edit', async ({ page }) => {
-  const api = await mockApi(page, { user: 'a' });
-  await page.goto('/collection/item-1');
-  await page.getByRole('link', { name: '编辑收藏' }).click();
-  const note = page.getByRole('textbox', { name: /想记住的话/ });
-  await note.fill('同账号会话刷新时保留这份草稿');
-  const stateRequests = api.requests.filter(request => request.path === '/api/state').length;
-  api.csrfToken = 'csrf-a-renewed';
-  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-  await expect.poll(() => api.requests.filter(request => request.path === '/api/state').length).toBeGreaterThan(stateRequests);
-  await expect(note).toHaveValue('同账号会话刷新时保留这份草稿');
-  await page.getByRole('button', { name: '保存收藏', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'A 的海边', exact: true })).toBeVisible();
-  const update = api.requests.find(request => request.method === 'PATCH')!;
-  expect(update.body.note).toBe('同账号会话刷新时保留这份草稿');
-  expect(update.headers['x-csrf-token']).toBe('csrf-a-renewed');
+test('upload with empty fields, field-only correction and deletion use the new contract', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a', empty: true }); await page.goto('/tickets/new');
+  await page.getByLabel('选择原票照片').setInputFiles({ name: 'ticket.png', mimeType: 'image/png', buffer: png });
+  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '待补充片名' })).toBeVisible();
+  const create = api.requests.find(request => request.path === '/api/tickets' && request.method === 'POST')!;
+  expect(create.body.fields).toEqual({}); expect(create.body.operationId).toBeTruthy();
+  await page.getByRole('link', { name: '编辑票根' }).click(); await page.getByLabel('片名').fill('新片名');
+  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '新片名' })).toBeVisible();
+  expect(api.requests.find(request => request.method === 'PATCH')?.body.fields).toEqual({ title: '新片名' });
+  await page.getByRole('button', { name: '删除票根', exact: true }).click();
+  await expect(page.getByRole('dialog')).toBeVisible(); await page.getByRole('button', { name: '确认删除' }).click();
+  await expect(page.getByRole('heading', { name: '你的第一张电影票' })).toBeVisible();
+  expect(api.requests.find(request => request.method === 'DELETE')?.body.operationId).toBeTruthy();
 });
-
-test('gallery supporting text retains readable contrast on its light surfaces', async ({ page }) => {
-  await mockApi(page, { user: 'a' });
-  await page.goto('/collection');
-  await expect(page.getByRole('heading', { name: '我的收藏', exact: true })).toBeVisible();
-  const ratios = await page.locator('.card-caption p, .page-heading p, .sidebar-caption').evaluateAll(elements => {
-    const luminance = (channels: number[]) => channels.slice(0, 3).map(value => value / 255)
-      .map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4)
-      .reduce((sum, value, index) => sum + value * [.2126, .7152, .0722][index], 0);
-    return elements.map(element => {
-      const color = getComputedStyle(element).color.match(/[\d.]+/g)!.map(Number);
-      const foreground = luminance(color);
-      return 1.05 / (foreground + .05);
-    });
-  });
-  expect(ratios.length).toBeGreaterThan(0);
-  expect(Math.min(...ratios)).toBeGreaterThanOrEqual(4.5);
+test('same-account session renewal retains the draft and attaches the new CSRF token', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' }); await page.goto('/tickets/item-1/edit');
+  await page.getByLabel('影院').fill('会话刷新后保留的影院');
+  api.csrfToken = 'renewed'; await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect.poll(() => api.requests.filter(request => request.path === '/api/auth/session').length).toBeGreaterThan(1);
+  await expect(page.getByLabel('影院')).toHaveValue('会话刷新后保留的影院');
+  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'A 的电影票' })).toBeVisible();
+  expect(api.requests.find(request => request.method === 'PATCH')?.headers['x-csrf-token']).toBe('renewed');
 });
-
-
-test('explore filtering survives detail navigation and community actions update the account', async ({ page }) => {
-  const api = await mockApi(page, { user: 'a' });
-  await page.goto('/explore');
-  await page.getByRole('group', { name: '探索分类' }).getByRole('button', { name: '旅行', exact: true }).click();
-  await expect(page.locator('.explore-grid .photo-card')).toHaveCount(2);
-  await page.locator('.explore-grid .photo-card').first().click();
-  await expect(page.getByRole('heading', { name: '社区灵感 1', exact: true })).toBeVisible();
-  await expect.poll(() => api.requests.some(request => request.path === '/api/community/community-0/view')).toBeTruthy();
-  await page.getByRole('button', { name: '喜欢这件纪念品', exact: true }).click();
-  await expect(page.getByRole('button', { name: '取消喜欢', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '加入我的收藏', exact: true }).click();
-  await expect(page.getByText('已加入我的收藏', { exact: true })).toBeVisible();
-  const liked = api.requests.find(request => request.path === '/api/community/community-0/like')!;
-  expect(liked.method).toBe('PUT');
-  expect(liked.body).toEqual({ liked: true });
-  expect(liked.headers['x-csrf-token']).toBe('csrf-a');
-  await page.goBack();
-  await expect(page.getByRole('group', { name: '探索分类' }).getByRole('button', { name: '旅行', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('.explore-grid .photo-card')).toHaveCount(2);
-  await expect(page.locator('.community-byline').first()).toContainText('21 人喜欢');
-  await page.getByRole('navigation', { name: '主导航', exact: true }).getByRole('link', { name: '我的收藏', exact: true }).click();
-  await expect(page.locator('.recent-grid').getByRole('heading', { name: '社区灵感 1', exact: true })).toBeVisible();
-});
-
-test('shares preserve unread filtering across detail navigation and add the received item to collections', async ({ page }) => {
-  const api = await mockApi(page, { user: 'a' });
-  await page.goto('/friends');
-  await page.getByRole('group', { name: '分享筛选' }).getByRole('button', { name: /未查看/ }).click();
-  await expect(page.locator('.friend-card')).toHaveCount(2);
-  await page.locator('.friend-card .photo-card').first().click();
-  await expect(page.getByRole('heading', { name: 'A 的海边', exact: true })).toBeVisible();
-  await expect.poll(() => api.requests.some(request => request.path === '/api/shares/share-0/read')).toBeTruthy();
-  await expect(page.locator('#main-content')).toHaveAttribute('aria-busy', 'false');
-  await page.goBack();
-  await expect(page.getByRole('group', { name: '分享筛选' }).getByRole('button', { name: /未查看/ })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.locator('.friend-card')).toHaveCount(1);
-  await page.getByRole('button', { name: '收藏这份分享', exact: true }).click();
-  await expect(page.getByText('已加入我的收藏', { exact: true })).toBeVisible();
-  const collect = api.requests.find(request => request.path === '/api/shares/share-1/collect')!;
-  expect(collect.method).toBe('POST');
-  expect(collect.headers['x-csrf-token']).toBe('csrf-a');
-  await page.getByRole('navigation', { name: '主导航', exact: true }).getByRole('link', { name: '我的收藏', exact: true }).click();
-  await expect(page.locator('a[href="/collection/collected-share-1"]').first()).toBeVisible();
-});
-
-test('generation publication recovery appears and clears at the same revision, without leaking to a replacement account', async ({ page }) => {
-  const api = await mockApi(page, { user: 'a' });
-  const data = dataFor('a');
-  data.collections[0].generation = 'processing';
-  api.data.set('a', data);
-  await page.clock.install();
-  await page.goto('/collection/item-1');
-  await expect(page.getByRole('heading', { name: 'A 的海边', exact: true })).toBeVisible();
-  const revision = api.revision;
-  api.generationRecovery = [{ jobId: 'completed-job', collectionId: 'item-1', error: '请重试保存生成结果。' }];
-  await page.clock.fastForward(4001);
-  await expect(page.getByRole('alert')).toContainText('生成结果保存失败');
-  await expect(page.locator('.generation-status')).toContainText('生成结果保存未完成');
-  await page.getByRole('button', { name: '重试保存生成结果：A 的海边', exact: true }).click();
-  await expect(page.getByRole('alert')).toHaveCount(0);
-  expect(api.revision).toBe(revision);
-  expect(api.requests.filter(request => request.path === '/api/collections/item-1/retry-generation')).toHaveLength(1);
-  api.generationRecovery = [{ jobId: 'completed-job', collectionId: 'item-1', error: '请重试保存生成结果。' }];
-  await page.clock.fastForward(4001);
-  await expect(page.getByRole('alert')).toContainText('生成结果保存失败');
-  await page.getByRole('button', { name: '退出登录', exact: true }).first().click();
-  await login(page, 'b@example.test');
+test('logout discards a late old-account state before another login', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' }); await page.goto('/tickets');
+  await expect(page.getByRole('heading', { name: 'A 的电影票' })).toBeVisible();
+  let release!: () => void; api.holdChanges = new Promise<void>(resolve => { release = resolve; });
+  const before = api.requests.length; await page.getByRole('button', { name: '刷新票夹' }).click();
+  await expect.poll(() => api.requests.length).toBeGreaterThan(before);
+  await page.getByRole('button', { name: '退出登录' }).click(); await login(page, 'b@example.test'); release();
   await expect(page.locator('.memoverse-shell')).toHaveAttribute('data-user-id', 'b');
-  await expect(page.getByText(/生成结果保存失败/)).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'B 的电影票' })).toBeVisible();
+  await expect(page.getByText('A 的电影票', { exact: true })).toHaveCount(0);
+});
+test('temporary photo URLs are released on replacement, navigation and logout', async ({ page }) => {
+  await mockApi(page, { user: 'a' });
+  await page.addInitScript(() => { const create = URL.createObjectURL.bind(URL), revoke = URL.revokeObjectURL.bind(URL); (window as any).__urls = []; (window as any).__draftUrls = []; (window as any).__revoked = []; URL.createObjectURL = value => { const url = create(value); (window as any).__urls.push(url); if (value instanceof File) (window as any).__draftUrls.push(url); return url; }; URL.revokeObjectURL = url => { (window as any).__revoked.push(url); revoke(url); }; });
+  await page.goto('/tickets/new');
+  const select = () => page.getByLabel('选择原票照片').setInputFiles({ name: 'ticket.png', mimeType: 'image/png', buffer: png });
+  await select(); await select(); await page.getByRole('link', { name: '取消', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__revoked.filter((url: string) => (window as any).__draftUrls.includes(url)).length)).toBe(2);
+  await page.getByRole('link', { name: '上传电影票', exact: true }).click(); await select();
+  await page.getByRole('button', { name: '退出登录' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__revoked.filter((url: string) => (window as any).__draftUrls.includes(url)).length)).toBe(3);
 });
 
-test('an older polled snapshot cannot undo a completed community mutation', async ({ page }) => {
+test('an authenticated state 401 removes all private UI', async ({ page }) => {
+  await mockApi(page, { user: 'a' }); await page.goto('/tickets');
+  await expect(page.getByRole('heading', { name: 'A 的电影票' })).toBeVisible();
+  await page.route('**/api/sync/changes?**', route => route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ detail: '会话结束' }) }));
+  await page.getByRole('button', { name: '刷新票夹' }).click();
+  await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible(); await expect(page.locator('.memoverse-shell')).toHaveCount(0);
+});
+test('an old in-flight delta cannot restore a deleted ticket', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' }); await page.clock.install(); await page.goto('/tickets/item-1');
+  await expect(page.getByRole('heading', { name: 'A 的电影票' })).toBeVisible();
+  let release!: () => void; api.holdChanges = new Promise<void>(resolve => { release = resolve; });
+  const before = api.requests.filter(request => request.path === '/api/sync/changes').length;
+  await page.evaluate(() => window.dispatchEvent(new Event('focus'))); await expect.poll(() => api.requests.filter(request => request.path === '/api/sync/changes').length).toBeGreaterThan(before);
+  await page.getByRole('button', { name: '删除票根', exact: true }).click(); await page.getByRole('button', { name: '确认删除' }).click();
+  release(); await expect(page.getByRole('heading', { name: '你的第一张电影票' })).toBeVisible();
+  await expect(page.getByText('A 的电影票', { exact: true })).toHaveCount(0);
+});
+
+async function cacheEntries(page: Page): Promise<{ accountId: string; sha256: string }[]> {
+  return page.evaluate(() => new Promise((resolve, reject) => {
+    const open = indexedDB.open('memoverse-media-cache-v1', 1);
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const database = open.result;
+      if (!database.objectStoreNames.contains('media')) { database.close(); resolve([]); return; }
+      const request = database.transaction('media').objectStore('media').getAll();
+      request.onsuccess = () => { const entries = request.result.map((record: any) => ({ accountId: record.accountId, sha256: record.sha256 })); database.close(); resolve(entries); };
+      request.onerror = () => { database.close(); reject(request.error); };
+    };
+  }));
+}
+const imageReads = (api: Awaited<ReturnType<typeof mockApi>>) => api.requests.filter(request => /^\/api\/media\/[a-f0-9]{64}$/.test(request.path)).length;
+
+test('verified cache survives reload and clearing recovers from the server only on the next read', async ({ page }, info) => {
+  const api = await mockApi(page, { user: 'a' }); await page.goto('/tickets');
+  await expect(page.locator('.media-availability').first()).toContainText('已校验');
+  const firstReads = imageReads(api); expect(firstReads).toBe(1);
+  await page.reload(); await expect(page.locator('.media-availability').first()).toContainText('本机缓存可用');
+  expect(imageReads(api)).toBe(firstReads);
+  await page.getByRole('link', { name: '设备与状态' }).click();
+  await expect(page.getByText(/本账号已存 1 张图片/)).toBeVisible();
+  await page.screenshot({ path: info.outputPath('cache-desktop-1440.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.screenshot({ path: info.outputPath('cache-mobile-390.png'), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.getByRole('button', { name: '清除本账号本机缓存' }).click();
+  await expect(page.getByText(/本账号已存 0 张图片/)).toBeVisible();
+  expect(await cacheEntries(page)).toEqual([]); expect(imageReads(api)).toBe(firstReads);
+  await page.getByRole('link', { name: '票夹', exact: true }).click();
+  await expect(page.locator('.media-availability').first()).toContainText('已校验');
+  expect(imageReads(api)).toBe(firstReads + 1);
+});
+test('equal hashes remain isolated across accounts and clearing B keeps A cache', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' }); await page.goto('/tickets');
+  await expect(page.locator('.media-availability').first()).toContainText('已校验');
+  await page.getByRole('button', { name: '退出登录' }).click(); await login(page, 'b@example.test');
+  await expect(page.locator('.media-availability').first()).toContainText('已校验');
+  expect(imageReads(api)).toBe(2);
+  expect((await cacheEntries(page)).map(entry => entry.accountId).sort()).toEqual(['a', 'b']);
+  await page.getByRole('link', { name: '设备与状态' }).click(); await page.getByRole('button', { name: '清除本账号本机缓存' }).click();
+  await expect(page.getByText(/本账号已存 0 张图片/)).toBeVisible();
+  expect((await cacheEntries(page)).map(entry => entry.accountId)).toEqual(['a']);
+});
+test('quota exhaustion still displays the verified cloud image without claiming it is cached', async ({ page }) => {
+  await mockApi(page, { user: 'a' });
+  await page.addInitScript(() => { IDBObjectStore.prototype.put = function() { throw new DOMException('test quota', 'QuotaExceededError'); }; });
+  await page.goto('/tickets/item-1');
+  await expect(page.locator('.ticket-image img')).toBeVisible();
+  await expect(page.locator('.media-availability')).toContainText('本机缓存空间不足');
+  expect(await cacheEntries(page)).toEqual([]);
+  await page.goto('/tickets/new');
+  await page.getByLabel('选择原票照片').setInputFiles({ name: 'quota.png', mimeType: 'image/png', buffer: png });
+  await page.getByLabel('片名').fill('缓存不足也能保存');
+  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '缓存不足也能保存' })).toBeVisible();
+  await expect(page.getByText('原票已保存到云端', { exact: true })).toBeVisible();
+  await expect(page.locator('.media-availability')).toContainText('本机缓存空间不足');
+});
+test('unavailable browser storage does not prevent a verified temporary image', async ({ page }) => {
+  await mockApi(page, { user: 'a' });
+  await page.addInitScript(() => { indexedDB.open = () => { throw new DOMException('test denied', 'SecurityError'); }; });
+  await page.goto('/tickets/item-1');
+  await expect(page.locator('.ticket-image img')).toBeVisible();
+  await expect(page.locator('.media-availability')).toContainText('本机缓存不可用');
+});
+test('a checksum mismatch is never displayed or marked cached', async ({ page }) => {
+  await mockApi(page, { user: 'a' });
+  await page.route('**/api/media/' + pngHash, route => route.fulfill({ contentType: 'image/png', body: Buffer.alloc(png.length) }));
+  await page.goto('/tickets/item-1');
+  await expect(page.locator('.media-availability')).toContainText('图片完整性校验失败');
+  await expect(page.locator('.ticket-image img')).toHaveCount(0);
+  expect(await cacheEntries(page)).toEqual([]);
+});
+test('logout during a download cannot write the old account cache', async ({ page }) => {
   const api = await mockApi(page, { user: 'a' });
-  await page.clock.install();
-  await page.goto('/community/community-0');
-  await expect(page.getByRole('button', { name: '喜欢这件纪念品', exact: true })).toBeEnabled();
-  let release!: () => void;
-  api.holdState = new Promise<void>(resolve => { release = resolve; });
-  const previous = api.requests.filter(request => request.path === '/api/state').length;
-  await page.clock.fastForward(10_001);
-  await expect.poll(() => api.requests.filter(request => request.path === '/api/state').length).toBeGreaterThan(previous);
-  const cancelledPoll = page.waitForEvent('requestfailed', request => new URL(request.url()).pathname === '/api/state');
-  await page.getByRole('button', { name: '喜欢这件纪念品', exact: true }).click();
-  await expect(page.getByRole('button', { name: '取消喜欢', exact: true })).toBeVisible();
-  await cancelledPoll;
-  release();
-  await page.clock.runFor(20);
-  await expect(page.getByRole('button', { name: '取消喜欢', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '喜欢这件纪念品', exact: true })).toHaveCount(0);
+  let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; }); let started = false;
+  await page.route('**/api/media/' + pngHash, async route => { if (api.user === 'a') { started = true; await held; await route.fulfill({ contentType: 'image/png', body: png }).catch(() => {}); } else await route.fallback(); });
+  await page.goto('/tickets'); await expect.poll(() => started).toBeTruthy();
+  await page.getByRole('button', { name: '退出登录' }).click(); await login(page, 'b@example.test'); release();
+  await expect(page.locator('.media-availability').first()).toContainText('已校验');
+  expect((await cacheEntries(page)).map(entry => entry.accountId)).toEqual(['b']);
 });
-
-test('photo previews are released on replacement, leaving the editor and logout', async ({ page }) => {
+test('logout during SHA-256 cannot publish a stale URL or write the old cache', async ({ page }) => {
   await mockApi(page, { user: 'a' });
   await page.addInitScript(() => {
-    const created: string[] = [];
-    const revoked: string[] = [];
-    (window as any).__previewURLs = { created, revoked };
-    const create = URL.createObjectURL.bind(URL);
-    const revoke = URL.revokeObjectURL.bind(URL);
-    URL.createObjectURL = value => {
-      const url = create(value);
-      if (value instanceof File) created.push(url);
-      return url;
-    };
-    URL.revokeObjectURL = url => { revoked.push(url); revoke(url); };
+    const digest = crypto.subtle.digest.bind(crypto.subtle); let calls = 0;
+    crypto.subtle.digest = async (algorithm, data) => { const result = await digest(algorithm, data); if (calls++ === 0) { (window as any).__digestStarted = true; await new Promise<void>(resolve => { (window as any).__releaseDigest = resolve; }); } return result; };
   });
-  await page.goto('/add');
-  const image = { name: 'photo.png', mimeType: 'image/png', buffer: png };
-  await page.getByLabel('选择收藏图片').setInputFiles(image);
-  await page.getByLabel('选择收藏图片').setInputFiles({ ...image, name: 'replacement.png' });
-  await expect.poll(() => page.evaluate(() => {
-    const urls = (window as any).__previewURLs;
-    return urls.created.length === 2 && urls.revoked.includes(urls.created[0]) && !urls.revoked.includes(urls.created[1]);
-  })).toBeTruthy();
-  await page.getByRole('link', { name: '取消编辑', exact: true }).click();
-  await expect.poll(() => page.evaluate(() => {
-    const urls = (window as any).__previewURLs;
-    return urls.created.every((url: string) => urls.revoked.includes(url));
-  })).toBeTruthy();
-  await page.locator('.sidebar-add').click();
-  await page.getByLabel('选择收藏图片').setInputFiles(image);
-  await page.getByRole('button', { name: '退出登录', exact: true }).first().click();
-  await expect(page.locator('.memoverse-shell')).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => {
-    const urls = (window as any).__previewURLs;
-    return urls.created.length === 3 && urls.created.every((url: string) => urls.revoked.includes(url));
-  })).toBeTruthy();
+  await page.goto('/tickets'); await expect.poll(() => page.evaluate(() => (window as any).__digestStarted)).toBeTruthy();
+  await page.getByRole('button', { name: '退出登录' }).click(); await login(page, 'b@example.test');
+  await page.evaluate(() => (window as any).__releaseDigest());
+  await expect(page.locator('.media-availability').first()).toContainText('已校验');
+  expect((await cacheEntries(page)).map(entry => entry.accountId)).toEqual(['b']);
+});
+test('deletion prunes only unreferenced account images and retains shared originals', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' }); const first = sampleItem('first'), second = sampleItem('second');
+  api.data.set('a', { tickets: [first, second] }); await page.goto('/tickets');
+  await expect(page.locator('.media-availability').first()).toContainText('已校验'); expect(await cacheEntries(page)).toHaveLength(1);
+  await page.goto('/tickets/first'); await page.getByRole('button', { name: '删除票根', exact: true }).click(); await page.getByRole('button', { name: '确认删除' }).click();
+  await expect(page.locator('.ticket-card')).toHaveCount(1); expect(await cacheEntries(page)).toHaveLength(1);
+  await page.goto('/tickets/second'); await page.getByRole('button', { name: '删除票根', exact: true }).click(); await page.getByRole('button', { name: '确认删除' }).click();
+  await expect(page.getByRole('heading', { name: '你的第一张电影票' })).toBeVisible();
+  await expect.poll(() => cacheEntries(page)).toEqual([]);
 });
 
-test('an older poll at the same revision cannot restore a recovered generation warning', async ({ page }) => {
-  const api = await mockApi(page, { user: 'a' });
-  const data = dataFor('a');
-  data.collections[0].generation = 'processing';
-  api.data.set('a', data);
-  api.generationRecovery = [{ jobId: 'completed-job', collectionId: 'item-1', error: '请重试保存生成结果。' }];
-  await page.clock.install();
-  await page.goto('/collection/item-1');
-  await expect(page.getByRole('alert')).toContainText('生成结果保存失败');
-  let release!: () => void;
-  api.holdState = new Promise<void>(resolve => { release = resolve; });
-  const previous = api.requests.filter(request => request.path === '/api/state').length;
-  await page.clock.fastForward(4001);
-  await expect.poll(() => api.requests.filter(request => request.path === '/api/state').length).toBeGreaterThan(previous);
-  const cancelledPoll = page.waitForEvent('requestfailed', request => new URL(request.url()).pathname === '/api/state');
-  await page.getByRole('button', { name: '重试保存生成结果：A 的海边', exact: true }).click();
-  await expect(page.getByRole('alert')).toHaveCount(0);
-  await cancelledPoll;
-  release();
-  await page.clock.runFor(20);
-  await expect(page.getByRole('alert')).toHaveCount(0);
+test('focus and device status recheck storage eviction without redownloading an in-memory image', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' }); await page.goto('/tickets/item-1');
+  await expect(page.locator('.media-availability')).toContainText('已校验'); const reads = imageReads(api);
+  await page.evaluate(() => new Promise<void>((resolve, reject) => {
+    const open = indexedDB.open('memoverse-media-cache-v1', 1);
+    open.onsuccess = () => { const database = open.result, tx = database.transaction('media', 'readwrite'); tx.objectStore('media').clear(); tx.oncomplete = () => { database.close(); resolve(); }; tx.onerror = () => reject(tx.error); };
+  }));
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(page.locator('.media-availability')).toContainText('本机缓存已被回收');
+  await expect(page.locator('.ticket-image img')).toBeVisible(); expect(imageReads(api)).toBe(reads);
+  await page.getByRole('link', { name: '设备与状态' }).click();
+  await expect(page.getByText(/本账号已存 0 张图片/)).toBeVisible(); expect(imageReads(api)).toBe(reads);
 });
 
-test('polling pauses while a recovery mutation is unresolved and resumes with its resulting state', async ({ page }) => {
+test('a large library fetches only near-viewport images with at most four concurrent transfers', async ({ page }) => {
   const api = await mockApi(page, { user: 'a' });
-  const data = dataFor('a');
-  data.collections[0].generation = 'processing';
-  api.data.set('a', data);
-  api.generationRecovery = [{ jobId: 'completed-job', collectionId: 'item-1', error: '请重试保存生成结果。' }];
-  let release!: () => void;
-  const heldMutation = new Promise<void>(resolve => { release = resolve; });
-  await page.route('**/api/collections/item-1/retry-generation', async route => {
-    await heldMutation;
-    await route.fallback();
+  const images = Array.from({ length: 100 }, (_, index) => imageFixture(index + 1));
+  api.data.set('a', { tickets: images.map((image, index) => ({ ...sampleItem(`many-${index}`), createdAt: 1000 - index, media: { original: image.asset, poster: null } })) });
+  const byHash = new Map(images.map(image => [image.asset.sha256, image]));
+  let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; }); let started = 0, active = 0, maximum = 0;
+  const reads = new Map<string, number>();
+  await page.addInitScript(() => { const revoke = URL.revokeObjectURL.bind(URL); (window as any).__releasedMedia = []; URL.revokeObjectURL = url => { (window as any).__releasedMedia.push(url); revoke(url); }; });
+  await page.route('**/api/media/**', async route => {
+    const path = new URL(route.request().url()).pathname, image = byHash.get(path.split('/')[3]);
+    if (!image) return route.fallback();
+    if (path.endsWith('/download')) return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...image.asset, transport: 'server', expiresAt: Date.now() + 60000 }) });
+    started++; active++; reads.set(image.asset.sha256, (reads.get(image.asset.sha256) ?? 0) + 1); maximum = Math.max(maximum, active); await held;
+    try { await route.fulfill({ contentType: 'image/png', body: image.bytes }); } catch { /* Closed test page. */ } finally { active--; }
   });
-  await page.clock.install();
-  await page.goto('/collection/item-1');
-  await expect(page.getByRole('alert')).toContainText('生成结果保存失败');
-  const before = api.requests.filter(request => request.path === '/api/state').length;
-  await page.getByRole('button', { name: '重试保存生成结果：A 的海边', exact: true }).click();
-  await expect(page.locator('#main-content')).toHaveAttribute('aria-busy', 'true');
-  await page.clock.runFor(8001);
-  expect(api.requests.filter(request => request.path === '/api/state')).toHaveLength(before);
-  release();
+  await page.goto('/tickets'); await expect.poll(() => started).toBe(4);
+  expect(maximum).toBe(4); release();
+  const eligible = await page.locator('.ticket-image').evaluateAll(nodes => nodes.filter(node => { const bounds = node.getBoundingClientRect(); return bounds.top < innerHeight + 200 && bounds.bottom > -200; }).length);
+  await expect.poll(() => started).toBe(eligible); expect(started).toBeLessThan(100); expect(maximum).toBeLessThanOrEqual(4);
+  await expect(page.locator('.media-availability').first()).toContainText('已校验');
+  const firstUrl = await page.locator('.ticket-image img').first().getAttribute('src');
+  await page.locator('.ticket-card').last().scrollIntoViewIfNeeded();
+  await expect(page.locator('.media-availability').last()).toContainText('已校验');
+  await expect.poll(() => page.evaluate(url => (window as any).__releasedMedia.includes(url), firstUrl)).toBeTruthy();
+  await page.locator('.ticket-card').first().scrollIntoViewIfNeeded();
+  await expect(page.locator('.media-availability').first()).toContainText('本机缓存可用');
+  expect(reads.get(images[0].asset.sha256)).toBe(1);
+});
+test('a collapsed original photo is not downloaded until it is opened', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' }); const poster = imageFixture(123); const ticket = sampleItem(); ticket.media.poster = { ...poster.asset, source: posterSource() };
+  api.data.set('a', { tickets: [ticket] });
+  await page.route('**/api/media/' + poster.asset.sha256 + '**', route => new URL(route.request().url()).pathname.endsWith('/download')
+    ? route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...poster.asset, transport: 'server', expiresAt: Date.now() + 60000 }) })
+    : route.fulfill({ contentType: 'image/png', body: poster.bytes }));
+  await page.goto('/tickets/item-1'); await expect(page.locator('.media-availability').first()).toContainText('已校验');
+  expect(api.requests.filter(request => request.path === media().url)).toHaveLength(0);
+  await page.getByText('查看原票照片', { exact: true }).click();
+  await expect(page.locator('.original-photo .media-availability')).toContainText('已校验');
+  expect(api.requests.filter(request => request.path === media().url)).toHaveLength(1);
+});
+test('a corrupt cached blob is removed even when cloud retrieval also fails', async ({ page }) => {
+  await mockApi(page, { user: 'a' }); await page.goto('/tickets'); await expect(page.locator('.media-availability').first()).toContainText('已校验');
+  await page.getByRole('link', { name: '设备与状态' }).click();
+  await page.evaluate(() => new Promise<void>((resolve, reject) => {
+    const open = indexedDB.open('memoverse-media-cache-v1', 1);
+    open.onsuccess = () => { const database = open.result, tx = database.transaction('media', 'readwrite'), store = tx.objectStore('media'), request = store.openCursor();
+      request.onsuccess = () => { const cursor = request.result; if (cursor) { const record = cursor.value; record.blob = new Blob([new Uint8Array(record.size)], { type: record.mimeType }); cursor.update(record); } };
+      tx.oncomplete = () => { database.close(); resolve(); }; tx.onerror = () => reject(tx.error); };
+  }));
+  await page.route('**/api/media/' + pngHash, route => route.abort('failed'));
+  await page.getByRole('link', { name: '票夹', exact: true }).click();
+  await expect(page.locator('.media-availability').first()).toContainText('暂时无法连接服务');
+  expect(await cacheEntries(page)).toEqual([]);
+});
+
+test('disabled processing reports configuration readiness while retaining manual editing', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' }); await page.goto('/tickets/item-1');
+  await expect(page.getByRole('region', { name: '自动处理' })).toContainText('处理配置未就绪');
+  await expect(page.getByRole('button', { name: '开始识别' })).toBeDisabled();
+  await page.getByRole('link', { name: '编辑票根' }).click();
+  await expect(page.getByText('处理配置未就绪，请配置服务端识别。', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('片名')).toBeEditable();
+  expect(api.requests.some(request => request.path.endsWith('/process'))).toBeFalsy();
+});
+test('active processing advances in the library and catches up after a failed state request', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a', processing: true }); const ticket = sampleItem(); ticket.processing.status = 'queued';
+  api.data.set('a', { tickets: [ticket] }); await page.clock.install(); await page.goto('/tickets');
+  await expect(page.getByText('等待处理', { exact: true })).toBeVisible();
+  await expect(page.locator('.media-availability')).toContainText('已校验');
+  await expect(page.getByText('处理完成', { exact: true })).toHaveCount(0);
+  ticket.processing.status = 'ocr'; ticket.version++; api.revision++;
+  await page.clock.fastForward(4001); await expect(page.getByText('正在识别票面', { exact: true })).toBeVisible();
+  const unavailable = (route: Route) => route.abort('failed'); await page.route('**/api/sync/changes?**', unavailable);
+  ticket.processing.status = 'poster'; ticket.version++; api.revision++;
+  await page.clock.fastForward(4001); await expect(page.getByRole('alert')).toContainText('暂时无法连接服务');
+  ticket.processing.status = 'no_match'; ticket.version++; api.revision++;
+  await page.unroute('**/api/sync/changes?**', unavailable); await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(page.getByText('未找到可靠海报', { exact: true })).toBeVisible();
   await expect(page.getByRole('alert')).toHaveCount(0);
-  await expect(page.locator('#main-content')).toHaveAttribute('aria-busy', 'false');
+});
+test('OCR updates untouched fields while preserving a local correction and an explicit clearing', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a', processing: true }); const ticket = sampleItem();
+  ticket.fields = { title: '', cinema: '', hall: '', seat: '', showtime: '' };
+  ticket.fieldSources = { title: 'empty', cinema: 'empty', hall: 'empty', seat: 'empty', showtime: 'empty' };
+  ticket.processing.status = 'ocr'; api.data.set('a', { tickets: [ticket] });
+  await page.clock.install(); await page.goto('/tickets/item-1/edit'); await page.getByLabel('片名').fill('用户修正的片名');
+  ticket.fields = { title: '识别的片名', cinema: '识别的影院', hall: '3 号厅', seat: '5 排 6 座', showtime: '2026-10-22T19:30' };
+  ticket.fieldSources = { title: 'ocr', cinema: 'ocr', hall: 'ocr', seat: 'ocr', showtime: 'ocr' };
+  ticket.processing.status = 'poster'; ticket.version++; api.revision++;
   await page.clock.fastForward(4001);
-  await expect.poll(() => api.requests.filter(request => request.path === '/api/state').length).toBeGreaterThan(before);
-  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.getByLabel('片名')).toHaveValue('用户修正的片名'); await expect(page.getByLabel('影院')).toHaveValue('识别的影院');
+  await page.getByLabel('座位').fill(''); await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '用户修正的片名' })).toBeVisible();
+  const update = api.requests.find(request => request.method === 'PATCH')!;
+  expect(update.body.fields).toEqual({ title: '用户修正的片名', seat: '' });
+  expect(ticket.fieldSources.title).toBe('user'); expect(ticket.fieldSources.seat).toBe('user');
+  ticket.processing.status = 'no_match'; ticket.fields.cinema = '后续识别的影院'; ticket.version++; api.revision++;
+  await page.clock.fastForward(4001);
+  await expect(page.getByRole('heading', { name: '用户修正的片名' })).toBeVisible();
+  await expect(page.getByRole('definition').filter({ hasText: '未填写' })).toContainText('手动填写');
+  await expect(page.getByRole('definition').filter({ hasText: '后续识别的影院' })).toContainText('识别结果');
+});
+test('a failed task can be retried and a later failure starts a fresh operation', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a', processing: true }); const ticket = sampleItem(); ticket.processing = { status: 'failed', error: '识别暂时失败，请重试。' }; api.data.set('a', { tickets: [ticket] });
+  await page.clock.install(); await page.goto('/tickets/item-1');
+  await expect(page.getByRole('alert')).toContainText('识别暂时失败');
+  await page.getByRole('button', { name: '重试处理', exact: true }).click(); await expect(page.getByRole('button', { name: '处理中…' })).toBeDisabled();
+  const first = api.requests.find(request => request.path.endsWith('/process'))!; expect(first.body.operationId).toBeTruthy(); expect(first.headers['x-csrf-token']).toBe('csrf-a');
+  ticket.processing = { status: 'failed', error: '海报保存失败，原票保留。' }; ticket.version++; api.revision++;
+  await page.clock.fastForward(4001); await page.getByRole('button', { name: '重试处理', exact: true }).click();
+  const requests = api.requests.filter(request => request.path.endsWith('/process')); expect(requests).toHaveLength(2); expect(requests[1].body.operationId).not.toBe(requests[0].body.operationId);
+});
+async function servePoster(page: Page, image: ReturnType<typeof imageFixture>) {
+  await page.route('**/api/media/' + image.asset.sha256 + '**', route => new URL(route.request().url()).pathname.endsWith('/download')
+    ? route.fulfill({ contentType: 'application/json', body: JSON.stringify({ ...image.asset, transport: 'server', expiresAt: Date.now() + 60000 }) })
+    : route.fulfill({ contentType: 'image/png', body: image.bytes }));
+}
+for (const recovery of ['focus', 'metadata'] as const) {
+  test(`failed reference cleanup remains visible and retries on ${recovery} without a background loop`, async ({ page }) => {
+    const api = await mockApi(page, { user: 'a' }), oldPoster = imageFixture(230), nextPoster = imageFixture(231);
+    const first = sampleItem('first'), second = sampleItem('second');
+    first.media.poster = { ...oldPoster.asset, source: posterSource('Old_poster.png') };
+    second.media.poster = { ...nextPoster.asset, source: posterSource('Next_poster.png') };
+    api.data.set('a', { tickets: [first, second] }); await servePoster(page, oldPoster); await servePoster(page, nextPoster);
+    await page.goto('/tickets');
+    await expect(page.locator('.media-availability')).toHaveText(['已校验并保存到本机缓存', '已校验并保存到本机缓存']);
+    await expect.poll(async () => (await cacheEntries(page)).map(entry => entry.sha256)).toEqual([oldPoster.asset.sha256, nextPoster.asset.sha256].sort());
+    await page.getByRole('link', { name: '设备与状态', exact: true }).click(); await expect(page.getByText(/本账号已存 2 张图片/)).toBeVisible();
+    await page.evaluate(() => {
+      const open = IDBIndex.prototype.openCursor;
+      (window as any).__pruneFault = { remaining: 1, attempts: 0 };
+      IDBIndex.prototype.openCursor = function(...args) {
+        if (this.name === 'accountId') {
+          const fault = (window as any).__pruneFault; fault.attempts++;
+          if (fault.remaining > 0) { fault.remaining--; throw new DOMException('Synthetic temporary IDB failure', 'UnknownError'); }
+        }
+        return open.apply(this, args);
+      };
+    });
+    first.media.poster = { ...nextPoster.asset, source: posterSource('Next_poster.png') }; first.version++; api.revision++;
+    await expect(page.getByText('无引用缓存清理未完成，返回页面或重新同步后会重试。', { exact: true })).toBeVisible();
+    expect((await cacheEntries(page)).map(entry => entry.sha256)).toEqual([oldPoster.asset.sha256, nextPoster.asset.sha256].sort());
+    expect(await page.evaluate(() => (window as any).__pruneFault.attempts)).toBe(1);
+    if (recovery === 'focus') {
+      // A failed explicit clear has priority over the earlier prune warning.
+      await page.evaluate(() => { (window as any).__pruneFault.remaining = 1; });
+      await page.getByRole('button', { name: '清除本账号本机缓存', exact: true }).click();
+      await expect(page.getByText('本机缓存清理未完成，请重试。', { exact: true })).toBeVisible();
+      await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    } else { first.fields.title = '同一媒体引用的新状态'; first.version++; api.revision++; }
+    await expect.poll(async () => (await cacheEntries(page)).map(entry => entry.sha256)).toEqual([nextPoster.asset.sha256]);
+    await expect(page.getByText('无引用缓存清理未完成，返回页面或重新同步后会重试。', { exact: true })).toHaveCount(0);
+    expect(await page.evaluate(() => (window as any).__pruneFault.attempts)).toBe(recovery === 'focus' ? 3 : 2);
+    if (recovery === 'focus') {
+      await expect(page.getByText('本机缓存清理未完成，请重试。', { exact: true })).toBeVisible();
+      await page.getByRole('button', { name: '清除本账号本机缓存', exact: true }).click(); await expect.poll(() => cacheEntries(page)).toEqual([]);
+      await expect(page.getByText('已清除本账号的本机缓存，云端记录和图片不受影响。', { exact: true })).toBeVisible();
+    }
+  });
+}
+test('old posters stay while processing and fall back on no-match or failure', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a', processing: true }); const oldPoster = imageFixture(201), nextPoster = imageFixture(202);
+  const coverHash = () => page.locator('.ticket-image img').first().evaluate(async image => {
+    const bytes = await (await fetch((image as HTMLImageElement).src)).arrayBuffer();
+    return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), byte => byte.toString(16).padStart(2, '0')).join('');
+  });
+  const ticket = sampleItem(); ticket.media.poster = { ...oldPoster.asset, source: posterSource('Old_poster.png') }; ticket.processing.status = 'queued'; api.data.set('a', { tickets: [ticket] });
+  // WebSocket pushes each update; keep real time for asynchronous IndexedDB work.
+  await servePoster(page, oldPoster); await servePoster(page, nextPoster); await page.goto('/tickets/item-1');
+  await expect(page.locator('.ticket-image img').first()).toBeVisible(); const oldUrl = await page.locator('.ticket-image img').first().getAttribute('src');
+  ticket.processing.status = 'poster'; ticket.version++; api.revision++;
+  await expect(page.getByText('正在查找海报', { exact: true })).toBeVisible(); await expect(page.locator('.ticket-image img').first()).toHaveAttribute('src', oldUrl!);
+  ticket.media.poster = null; ticket.processing.status = 'no_match'; ticket.version++; api.revision++;
+  await expect(page.getByText('没有找到可靠海报，使用原票作为封面。可以纠正片名后重试。')).toBeVisible();
+  await expect(page.locator('.ticket-image img').first()).not.toHaveAttribute('src', oldUrl!);
+  await expect(page.locator('.ticket-image img').first()).toHaveAttribute('src', /^blob:/);
+  await expect(page.locator('.media-availability').first()).toContainText('已校验');
+  const originalUrl = await page.locator('.ticket-image img').first().getAttribute('src');
+  expect(await coverHash()).toBe(pngHash);
+  await expect(page.locator('.poster-attribution')).toHaveCount(0);
+  await expect.poll(async () => (await cacheEntries(page)).map(entry => entry.sha256)).toEqual([pngHash]);
+  await page.getByRole('button', { name: '重试处理', exact: true }).click();
+  await expect(page.getByText('等待处理', { exact: true })).toBeVisible();
+  await expect(page.locator('.ticket-image img').first()).toHaveAttribute('src', originalUrl!);
+  ticket.media.poster = { ...nextPoster.asset, source: { ...posterSource('New_poster.png'), author: '合成作者 <b>纯文本</b>' } };
+  ticket.processing.status = 'ready'; ticket.version++; api.revision++;
+  await expect(page.getByText('处理完成', { exact: true })).toBeVisible();
+  await expect(page.locator('.ticket-image img').first()).not.toHaveAttribute('src', oldUrl!);
+  await expect(page.locator('.ticket-image img').first()).not.toHaveAttribute('src', originalUrl!);
+  await expect(page.locator('.ticket-image img').first()).toHaveAttribute('src', /^blob:/);
+  await expect(page.getByRole('link', { name: 'Wikimedia Commons 来源页' })).toHaveAttribute('href', ticket.media.poster.source.sourcePage);
+  await expect(page.getByRole('link', { name: 'CC BY-SA 4.0' })).toHaveAttribute('href', 'https://creativecommons.org/licenses/by-sa/4.0/');
+  await expect(page.getByText('作者：合成作者 <b>纯文本</b>', { exact: true })).toBeVisible();
+  await expect(page.locator('.poster-attribution b')).toHaveCount(0);
+  await expect.poll(async () => (await cacheEntries(page)).map(entry => entry.sha256).sort()).toEqual([pngHash, nextPoster.asset.sha256].sort());
+  const nextUrl = await page.locator('.ticket-image img').first().getAttribute('src');
+  await page.getByRole('button', { name: '重新处理', exact: true }).click();
+  await expect(page.getByText('等待处理', { exact: true })).toBeVisible();
+  await expect(page.locator('.ticket-image img').first()).toHaveAttribute('src', nextUrl!);
+  ticket.media.poster = null; ticket.processing = { status: 'failed', error: '合成海报处理失败' }; ticket.version++; api.revision++;
+  await expect(page.getByText('处理失败', { exact: true })).toBeVisible();
+  await expect(page.getByText('处理失败，原票照片仍被保留，可以稍后重试。')).toBeVisible();
+  await expect(page.locator('.ticket-image img').first()).not.toHaveAttribute('src', nextUrl!);
+  await expect(page.locator('.ticket-image img').first()).toHaveAttribute('src', /^blob:/);
+  await expect(page.locator('.media-availability').first()).toContainText('已校验');
+  expect(await coverHash()).toBe(pngHash);
+  await expect(page.locator('.poster-attribution')).toHaveCount(0);
+  await expect.poll(async () => (await cacheEntries(page)).map(entry => entry.sha256)).toEqual([pngHash]);
+});
+for (const width of [360, 390, 768, 1280, 1440]) {
+  test(`processing and poster attribution remain readable at ${width}px`, async ({ page }, info) => {
+    const api = await mockApi(page, { user: 'a', processing: true }); const poster = imageFixture(204), ticket = sampleItem();
+    ticket.media.poster = { ...poster.asset, source: posterSource() }; ticket.processing.status = 'poster'; ticket.fieldSources.title = 'ocr';
+    api.data.set('a', { tickets: [ticket] }); await servePoster(page, poster); await page.setViewportSize({ width, height: 1000 }); await page.goto('/tickets/item-1');
+    await expect(page.getByRole('region', { name: '自动处理' })).toContainText('正在查找海报');
+    await expect(page.getByRole('link', { name: 'CC BY-SA 4.0' })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
+    await page.evaluate(() => window.scrollTo(0, 0));
+    if (width === 390 || width === 1440) await page.screenshot({ path: info.outputPath(`processing-${width}.png`), fullPage: true });
+  });
+}
+
+test('a manual value matching a concurrent OCR result still claims the user field source', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a', processing: true }); const ticket = sampleItem();
+  ticket.fields.title = ''; ticket.fieldSources.title = 'empty'; ticket.processing.status = 'ocr'; api.data.set('a', { tickets: [ticket] });
+  await page.clock.install(); await page.goto('/tickets/item-1/edit'); await page.getByLabel('片名').fill('用户手填 A');
+  ticket.fields.title = '用户手填 A'; ticket.fieldSources.title = 'ocr'; ticket.processing.status = 'poster'; ticket.version++; api.revision++;
+  await page.clock.fastForward(4001); await page.getByLabel('影院').fill('用户填写的影院');
+  await expect(page.getByLabel('片名')).toHaveValue('用户手填 A');
+  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '用户手填 A' })).toBeVisible();
+  const update = api.requests.find(request => request.method === 'PATCH')!;
+  expect(update.body.fields).toEqual({ title: '用户手填 A', cinema: '用户填写的影院' });
+  expect(ticket.fieldSources.title).toBe('user');
+  await expect(page.getByRole('definition').filter({ hasText: '用户手填 A' })).toContainText('手动填写');
+});
+
+test('explicitly clearing a new manual field preserves its user intent while untouched fields stay available to OCR', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a', empty: true, processing: true }); await page.goto('/tickets/new');
+  await page.getByLabel('选择原票照片').setInputFiles({ name: 'manual-empty.png', mimeType: 'image/png', buffer: png });
+  await page.getByLabel('片名').fill('临时手填'); await page.getByLabel('片名').fill('');
+  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '待补充片名' })).toBeVisible();
+  const created = api.requests.find(request => request.path === '/api/tickets' && request.method === 'POST')!;
+  expect(created.body.fields).toEqual({ title: '' });
 });

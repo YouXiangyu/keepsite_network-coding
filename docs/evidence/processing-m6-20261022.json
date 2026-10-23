@@ -1,0 +1,2059 @@
+{
+  "consumerStartedMs": 854.2652,
+  "samples": [
+    {
+      "ticketId": "benchmark-ticket-0",
+      "sha256": "131d79d4930211ccb96a55fe2a4d06c9778ec85ff2a6cdd111cd1a4c2b320936",
+      "status": "ready",
+      "attempts": 1,
+      "retryCount": 0,
+      "admissionBatchWaitMs": 280.3112000000001,
+      "postConsumerToFirstClaimMs": 242.4242999999999,
+      "queuedToFirstClaimMs": 522.7355,
+      "firstClaimToTerminalMs": 3411.7508000000003,
+      "queuedToTerminalMs": 3934.4863000000005,
+      "ocrAttempts": [
+        {
+          "sha256": "131d79d4930211ccb96a55fe2a4d06c9778ec85ff2a6cdd111cd1a4c2b320936",
+          "startedMs": 1102.3144,
+          "success": true,
+          "finishedMs": 4422.1789,
+          "elapsedMs": 3319.8644999999997
+        }
+      ],
+      "events": [
+        {
+          "cursor": 1,
+          "ticketId": "benchmark-ticket-0",
+          "status": "queued",
+          "observedCommitMs": 573.954,
+          "notificationCursor": 1,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 21,
+          "ticketId": "benchmark-ticket-0",
+          "status": "ocr",
+          "observedCommitMs": 1096.6895,
+          "notificationCursor": 21,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 22,
+          "ticketId": "benchmark-ticket-0",
+          "status": "poster",
+          "observedCommitMs": 4429.9698,
+          "notificationCursor": 22,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 23,
+          "ticketId": "benchmark-ticket-0",
+          "status": "ready",
+          "observedCommitMs": 4508.4403,
+          "notificationCursor": 23,
+          "notificationBatchSize": 1
+        }
+      ],
+      "expected": {
+        "title": "流浪地球",
+        "cinema": "星光影城1店",
+        "hall": "1号厅",
+        "seat": "1排1座",
+        "showtime": "2026-11-01T18:30"
+      },
+      "actual": {
+        "cinema": "星光影城1店",
+        "hall": "1号厅",
+        "seat": "1排1座",
+        "showtime": "2026-11-01T18:30",
+        "title": "流浪地球"
+      }
+    },
+    {
+      "ticketId": "benchmark-ticket-1",
+      "sha256": "7789932ef116ee3602f5b37905d992d124a8aabac4e548e9c53507f28f3188a0",
+      "status": "ready",
+      "attempts": 1,
+      "retryCount": 0,
+      "admissionBatchWaitMs": 265.94720000000007,
+      "postConsumerToFirstClaimMs": 3697.8635000000004,
+      "queuedToFirstClaimMs": 3963.8107,
+      "firstClaimToTerminalMs": 2078.4766,
+      "queuedToTerminalMs": 6042.2873,
+      "ocrAttempts": [
+        {
+          "sha256": "7789932ef116ee3602f5b37905d992d124a8aabac4e548e9c53507f28f3188a0",
+          "startedMs": 4569.4553,
+          "success": true,
+          "finishedMs": 6540.8462,
+          "elapsedMs": 1971.3909000000003
+        }
+      ],
+      "events": [
+        {
+          "cursor": 2,
+          "ticketId": "benchmark-ticket-1",
+          "status": "queued",
+          "observedCommitMs": 588.318,
+          "notificationCursor": 2,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 24,
+          "ticketId": "benchmark-ticket-1",
+          "status": "ocr",
+          "observedCommitMs": 4552.1287,
+          "notificationCursor": 24,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 25,
+          "ticketId": "benchmark-ticket-1",
+          "status": "poster",
+          "observedCommitMs": 6550.3209,
+          "notificationCursor": 25,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 26,
+          "ticketId": "benchmark-ticket-1",
+          "status": "ready",
+          "observedCommitMs": 6630.6053,
+          "notificationCursor": 26,
+          "notificationBatchSize": 1
+        }
+      ],
+      "expected": {
+        "title": "星际穿越",
+        "cinema": "星光影城2店",
+        "hall": "2号厅",
+        "seat": "2排2座",
+        "showtime": "2026-11-02T19:30"
+      },
+      "actual": {
+        "cinema": "星光影城2店",
+        "hall": "2号厅",
+        "seat": "2排2座",
+        "showtime": "2026-11-02T19:30",
+        "title": "星际穿越"
+      }
+    },
+    {
+      "ticketId": "benchmark-ticket-2",
+      "sha256": "006adc4da7dcb08ad7f22efea4412c01b9eea655842bd76a34e878cac8958d9e",
+      "status": "no_match",
+      "attempts": 1,
+      "retryCount": 0,
+      "admissionBatchWaitMs": 254.0439,
+      "postConsumerToFirstClaimMs": 5822.329,
+      "queuedToFirstClaimMs": 6076.372899999999,
+      "firstClaimToTerminalMs": 2147.683000000001,
+      "queuedToTerminalMs": 8224.055900000001,
+      "ocrAttempts": [
+        {
+          "sha256": "006adc4da7dcb08ad7f22efea4412c01b9eea655842bd76a34e878cac8958d9e",
+          "startedMs": 6689.3368,
+          "success": true,
+          "finishedMs": 8772.7484,
+          "elapsedMs": 2083.4116000000004
+        }
+      ],
+      "events": [
+        {
+          "cursor": 3,
+          "ticketId": "benchmark-ticket-2",
+          "status": "queued",
+          "observedCommitMs": 600.2213,
+          "notificationCursor": 3,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 27,
+          "ticketId": "benchmark-ticket-2",
+          "status": "ocr",
+          "observedCommitMs": 6676.5942,
+          "notificationCursor": 27,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 28,
+          "ticketId": "benchmark-ticket-2",
+          "status": "poster",
+          "observedCommitMs": 8784.4203,
+          "notificationCursor": 28,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 29,
+          "ticketId": "benchmark-ticket-2",
+          "status": "no_match",
+          "observedCommitMs": 8824.2772,
+          "notificationCursor": 29,
+          "notificationBatchSize": 1
+        }
+      ],
+      "expected": {
+        "title": "千与千寻",
+        "cinema": "星光影城3店",
+        "hall": "3号厅",
+        "seat": "3排3座",
+        "showtime": "2026-11-03T20:30"
+      },
+      "actual": {
+        "cinema": "星光影城3店",
+        "hall": "3号厅",
+        "seat": "3排3座",
+        "showtime": "2026-11-03T20:30",
+        "title": ""
+      }
+    },
+    {
+      "ticketId": "benchmark-ticket-3",
+      "sha256": "03e9ea48848f9594bbf167ea17844f99b80dd46bf06dcb9e2324f17ae39de3f0",
+      "status": "ready",
+      "attempts": 1,
+      "retryCount": 0,
+      "admissionBatchWaitMs": 228.8523,
+      "postConsumerToFirstClaimMs": 8020.0219,
+      "queuedToFirstClaimMs": 8248.8742,
+      "firstClaimToTerminalMs": 2184.5892000000003,
+      "queuedToTerminalMs": 10433.4634,
+      "ocrAttempts": [
+        {
+          "sha256": "03e9ea48848f9594bbf167ea17844f99b80dd46bf06dcb9e2324f17ae39de3f0",
+          "startedMs": 8891.892,
+          "success": true,
+          "finishedMs": 10966.2114,
+          "elapsedMs": 2074.3194000000003
+        }
+      ],
+      "events": [
+        {
+          "cursor": 4,
+          "ticketId": "benchmark-ticket-3",
+          "status": "queued",
+          "observedCommitMs": 625.4129,
+          "notificationCursor": 4,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 30,
+          "ticketId": "benchmark-ticket-3",
+          "status": "ocr",
+          "observedCommitMs": 8874.2871,
+          "notificationCursor": 30,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 31,
+          "ticketId": "benchmark-ticket-3",
+          "status": "poster",
+          "observedCommitMs": 11001.7023,
+          "notificationCursor": 31,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 32,
+          "ticketId": "benchmark-ticket-3",
+          "status": "ready",
+          "observedCommitMs": 11058.8763,
+          "notificationCursor": 32,
+          "notificationBatchSize": 1
+        }
+      ],
+      "expected": {
+        "title": "哪吒之魔童降世",
+        "cinema": "星光影城4店",
+        "hall": "4号厅",
+        "seat": "4排4座",
+        "showtime": "2026-11-04T21:30"
+      },
+      "actual": {
+        "cinema": "星光影城4店",
+        "hall": "4号厅",
+        "seat": "4排4座",
+        "showtime": "2026-11-04T21:30",
+        "title": "哪吒之魔童降世"
+      }
+    },
+    {
+      "ticketId": "benchmark-ticket-4",
+      "sha256": "489ac68c254d432b71550784be0252f575780a178661f4437833725fc31fe730",
+      "status": "ready",
+      "attempts": 1,
+      "retryCount": 0,
+      "admissionBatchWaitMs": 217.62620000000004,
+      "postConsumerToFirstClaimMs": 10423.7708,
+      "queuedToFirstClaimMs": 10641.397,
+      "firstClaimToTerminalMs": 2234.5980999999992,
+      "queuedToTerminalMs": 12875.9951,
+      "ocrAttempts": [
+        {
+          "sha256": "489ac68c254d432b71550784be0252f575780a178661f4437833725fc31fe730",
+          "startedMs": 11284.1957,
+          "success": true,
+          "finishedMs": 13430.6924,
+          "elapsedMs": 2146.4966999999997
+        }
+      ],
+      "events": [
+        {
+          "cursor": 5,
+          "ticketId": "benchmark-ticket-4",
+          "status": "queued",
+          "observedCommitMs": 636.639,
+          "notificationCursor": 5,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 33,
+          "ticketId": "benchmark-ticket-4",
+          "status": "ocr",
+          "observedCommitMs": 11278.036,
+          "notificationCursor": 33,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 34,
+          "ticketId": "benchmark-ticket-4",
+          "status": "poster",
+          "observedCommitMs": 13444.0042,
+          "notificationCursor": 34,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 35,
+          "ticketId": "benchmark-ticket-4",
+          "status": "ready",
+          "observedCommitMs": 13512.6341,
+          "notificationCursor": 35,
+          "notificationBatchSize": 1
+        }
+      ],
+      "expected": {
+        "title": "寻梦环游记",
+        "cinema": "星光影城5店",
+        "hall": "5号厅",
+        "seat": "5排5座",
+        "showtime": "2026-11-05T18:30"
+      },
+      "actual": {
+        "cinema": "星光影城5店",
+        "hall": "5号厅",
+        "seat": "5排5座",
+        "showtime": "2026-11-05T18:30",
+        "title": "寻梦环游记"
+      }
+    },
+    {
+      "ticketId": "benchmark-ticket-5",
+      "sha256": "5d1f58769ca4e922006a3a1189e134795ca70465ceeba9d158c8f98d83bcdcd1",
+      "status": "ready",
+      "attempts": 1,
+      "retryCount": 0,
+      "admissionBatchWaitMs": 205.18910000000005,
+      "postConsumerToFirstClaimMs": 12706.6125,
+      "queuedToFirstClaimMs": 12911.801599999999,
+      "firstClaimToTerminalMs": 2287.724400000001,
+      "queuedToTerminalMs": 15199.526,
+      "ocrAttempts": [
+        {
+          "sha256": "5d1f58769ca4e922006a3a1189e134795ca70465ceeba9d158c8f98d83bcdcd1",
+          "startedMs": 13566.7782,
+          "success": true,
+          "finishedMs": 15779.9408,
+          "elapsedMs": 2213.1625999999997
+        }
+      ],
+      "events": [
+        {
+          "cursor": 6,
+          "ticketId": "benchmark-ticket-5",
+          "status": "queued",
+          "observedCommitMs": 649.0761,
+          "notificationCursor": 6,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 36,
+          "ticketId": "benchmark-ticket-5",
+          "status": "ocr",
+          "observedCommitMs": 13560.8777,
+          "notificationCursor": 36,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 37,
+          "ticketId": "benchmark-ticket-5",
+          "status": "poster",
+          "observedCommitMs": 15790.3667,
+          "notificationCursor": 37,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 38,
+          "ticketId": "benchmark-ticket-5",
+          "status": "ready",
+          "observedCommitMs": 15848.6021,
+          "notificationCursor": 38,
+          "notificationBatchSize": 1
+        }
+      ],
+      "expected": {
+        "title": "疯狂动物城",
+        "cinema": "星光影城6店",
+        "hall": "6号厅",
+        "seat": "6排6座",
+        "showtime": "2026-11-06T19:30"
+      },
+      "actual": {
+        "cinema": "星光影城6店",
+        "hall": "6号厅",
+        "seat": "6排6座",
+        "showtime": "2026-11-06T19:30",
+        "title": "疯狂动物城"
+      }
+    },
+    {
+      "ticketId": "benchmark-ticket-6",
+      "sha256": "438764b27751726c9b26f1088db926ad215df8a3e701ce04f9b6026a2e821fcf",
+      "status": "ready",
+      "attempts": 1,
+      "retryCount": 0,
+      "admissionBatchWaitMs": 193.6372,
+      "postConsumerToFirstClaimMs": 15023.0473,
+      "queuedToFirstClaimMs": 15216.6845,
+      "firstClaimToTerminalMs": 2095.9229000000014,
+      "queuedToTerminalMs": 17312.6074,
+      "ocrAttempts": [
+        {
+          "sha256": "438764b27751726c9b26f1088db926ad215df8a3e701ce04f9b6026a2e821fcf",
+          "startedMs": 15898.3264,
+          "success": true,
+          "finishedMs": 17886.2256,
+          "elapsedMs": 1987.8992000000017
+        }
+      ],
+      "events": [
+        {
+          "cursor": 7,
+          "ticketId": "benchmark-ticket-6",
+          "status": "queued",
+          "observedCommitMs": 660.628,
+          "notificationCursor": 7,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 39,
+          "ticketId": "benchmark-ticket-6",
+          "status": "ocr",
+          "observedCommitMs": 15877.3125,
+          "notificationCursor": 39,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 40,
+          "ticketId": "benchmark-ticket-6",
+          "status": "poster",
+          "observedCommitMs": 17912.3178,
+          "notificationCursor": 40,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 41,
+          "ticketId": "benchmark-ticket-6",
+          "status": "ready",
+          "observedCommitMs": 17973.2354,
+          "notificationCursor": 41,
+          "notificationBatchSize": 1
+        }
+      ],
+      "expected": {
+        "title": "长安三万里",
+        "cinema": "星光影城7店",
+        "hall": "7号厅",
+        "seat": "7排7座",
+        "showtime": "2026-11-07T20:30"
+      },
+      "actual": {
+        "cinema": "星光影城7店",
+        "hall": "7号厅",
+        "seat": "7排7座",
+        "showtime": "2026-11-07T20:30",
+        "title": "长安三万里"
+      }
+    },
+    {
+      "ticketId": "benchmark-ticket-7",
+      "sha256": "55463bf7e2b8f7395929f0559e7d30f04093803aaa94f743296b4883e8684def",
+      "status": "ready",
+      "attempts": 1,
+      "retryCount": 0,
+      "admissionBatchWaitMs": 180.79060000000004,
+      "postConsumerToFirstClaimMs": 17151.986299999997,
+      "queuedToFirstClaimMs": 17332.776899999997,
+      "firstClaimToTerminalMs": 2130.948800000002,
+      "queuedToTerminalMs": 19463.7257,
+      "ocrAttempts": [
+        {
+          "sha256": "55463bf7e2b8f7395929f0559e7d30f04093803aaa94f743296b4883e8684def",
+          "startedMs": 18023.8859,
+          "success": true,
+          "finishedMs": 20007.9581,
+          "elapsedMs": 1984.0721999999987
+        }
+      ],
+      "events": [
+        {
+          "cursor": 8,
+          "ticketId": "benchmark-ticket-7",
+          "status": "queued",
+          "observedCommitMs": 673.4746,
+          "notificationCursor": 8,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 42,
+          "ticketId": "benchmark-ticket-7",
+          "status": "ocr",
+          "observedCommitMs": 18006.2515,
+          "notificationCursor": 42,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 43,
+          "ticketId": "benchmark-ticket-7",
+          "status": "poster",
+          "observedCommitMs": 20047.5518,
+          "notificationCursor": 43,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 44,
+          "ticketId": "benchmark-ticket-7",
+          "status": "ready",
+          "observedCommitMs": 20137.2003,
+          "notificationCursor": 44,
+          "notificationBatchSize": 1
+        }
+      ],
+      "expected": {
+        "title": "让子弹飞",
+        "cinema": "星光影城8店",
+        "hall": "1号厅",
+        "seat": "8排8座",
+        "showtime": "2026-11-08T21:30"
+      },
+      "actual": {
+        "cinema": "星光影城8店",
+        "hall": "1号厅",
+        "seat": "8排8座",
+        "showtime": "2026-11-08T21:30",
+        "title": "让子弹飞"
+      }
+    },
+    {
+      "ticketId": "benchmark-ticket-8",
+      "sha256": "360930d5f83604a1a801fa1ee2270d0847ea33b79c3a8e2b341e7b34462d9247",
+      "status": "ready",
+      "attempts": 1,
+      "retryCount": 0,
+      "admissionBatchWaitMs": 168.8492,
+      "postConsumerToFirstClaimMs": 19323.4125,
+      "queuedToFirstClaimMs": 19492.2617,
+      "firstClaimToTerminalMs": 2165.4833,
+      "queuedToTerminalMs": 21657.745,
+      "ocrAttempts": [
+        {
+          "sha256": "360930d5f83604a1a801fa1ee2270d0847ea33b79c3a8e2b341e7b34462d9247",
+          "startedMs": 20192.9437,
+          "success": true,
+          "finishedMs": 22267.4924,
+          "elapsedMs": 2074.5486999999994
+        }
+      ],
+      "events": [
+        {
+          "cursor": 9,
+          "ticketId": "benchmark-ticket-8",
+          "status": "queued",
+          "observedCommitMs": 685.416,
+          "notificationCursor": 9,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 45,
+          "ticketId": "benchmark-ticket-8",
+          "status": "ocr",
+          "observedCommitMs": 20177.6777,
+          "notificationCursor": 45,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 46,
+          "ticketId": "benchmark-ticket-8",
+          "status": "poster",
+          "observedCommitMs": 22275.6666,
+          "notificationCursor": 46,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 47,
+          "ticketId": "benchmark-ticket-8",
+          "status": "ready",
+          "observedCommitMs": 22343.161,
+          "notificationCursor": 47,
+          "notificationBatchSize": 1
+        }
+      ],
+      "expected": {
+        "title": "无间道",
+        "cinema": "星光影城9店",
+        "hall": "2号厅",
+        "seat": "9排9座",
+        "showtime": "2026-11-09T18:30"
+      },
+      "actual": {
+        "cinema": "星光影城9店",
+        "hall": "2号厅",
+        "seat": "9排9座",
+        "showtime": "2026-11-09T18:30",
+        "title": "无间道"
+      }
+    },
+    {
+      "ticketId": "benchmark-ticket-9",
+      "sha256": "a18f06054e682c6a30a2b1ed40bc819f3f3c8f458c8f2d1873256fde0d6d2fa8",
+      "status": "ready",
+      "attempts": 1,
+      "retryCount": 0,
+      "admissionBatchWaitMs": 157.29920000000004,
+      "postConsumerToFirstClaimMs": 21599.921299999998,
+      "queuedToFirstClaimMs": 21757.2205,
+      "firstClaimToTerminalMs": 2164.7220000000016,
+      "queuedToTerminalMs": 23921.9425,
+      "ocrAttempts": [
+        {
+          "sha256": "a18f06054e682c6a30a2b1ed40bc819f3f3c8f458c8f2d1873256fde0d6d2fa8",
+          "startedMs": 22483.9019,
+          "success": true,
+          "finishedMs": 24528.9797,
+          "elapsedMs": 2045.0777999999991
+        }
+      ],
+      "events": [
+        {
+          "cursor": 10,
+          "ticketId": "benchmark-ticket-9",
+          "status": "queued",
+          "observedCommitMs": 696.966,
+          "notificationCursor": 10,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 48,
+          "ticketId": "benchmark-ticket-9",
+          "status": "ocr",
+          "observedCommitMs": 22454.1865,
+          "notificationCursor": 48,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 49,
+          "ticketId": "benchmark-ticket-9",
+          "status": "poster",
+          "observedCommitMs": 24540.1586,
+          "notificationCursor": 49,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 50,
+          "ticketId": "benchmark-ticket-9",
+          "status": "ready",
+          "observedCommitMs": 24618.9085,
+          "notificationCursor": 50,
+          "notificationBatchSize": 1
+        }
+      ],
+      "expected": {
+        "title": "大话西游",
+        "cinema": "星光影城10店",
+        "hall": "3号厅",
+        "seat": "1排10座",
+        "showtime": "2026-11-10T19:30"
+      },
+      "actual": {
+        "cinema": "星光影城10店",
+        "hall": "3号厅",
+        "seat": "1排10座",
+        "showtime": "2026-11-10T19:30",
+        "title": "大话西游"
+      }
+    },
+    {
+      "ticketId": "benchmark-ticket-10",
+      "sha256": "e2c1c12cdf47994d7549a98b1bc543c5c6a65b8a25b5f7357dd2c71fef307508",
+      "status": "ready",
+      "attempts": 1,
+      "retryCount": 0,
+      "admissionBatchWaitMs": 144.85900000000004,
+      "postConsumerToFirstClaimMs": 23785.6013,
+      "queuedToFirstClaimMs": 23930.4603,
+      "firstClaimToTerminalMs": 2175.6087000000007,
+      "queuedToTerminalMs": 26106.069,
+      "ocrAttempts": [
+        {
+          "sha256": "e2c1c12cdf47994d7549a98b1bc543c5c6a65b8a25b5f7357dd2c71fef307508",
+          "startedMs": 24682.0416,
+          "success": true,
+          "finishedMs": 26717.3159,
+          "elapsedMs": 2035.274300000001
+        }
+      ],
+      "events": [
+        {
+          "cursor": 11,
+          "ticketId": "benchmark-ticket-10",
+          "status": "queued",
+          "observedCommitMs": 709.4062,
+          "notificationCursor": 11,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 51,
+          "ticketId": "benchmark-ticket-10",
+          "status": "ocr",
+          "observedCommitMs": 24639.8665,
+          "notificationCursor": 51,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 52,
+          "ticketId": "benchmark-ticket-10",
+          "status": "poster",
+          "observedCommitMs": 26746.7971,
+          "notificationCursor": 52,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 53,
+          "ticketId": "benchmark-ticket-10",
+          "status": "ready",
+          "observedCommitMs": 26815.4752,
+          "notificationCursor": 53,
+          "notificationBatchSize": 1
+        }
+      ],
+      "expected": {
+        "title": "Metropolis",
+        "cinema": "Aurora Cinema",
+        "hall": "4",
+        "seat": "G11",
+        "showtime": "2026-11-11T20:30"
+      },
+      "actual": {
+        "cinema": "Aurora Cinema",
+        "hall": "4",
+        "seat": "G11",
+        "showtime": "2026-11-11T20:30",
+        "title": "Metropolis"
+      }
+    },
+    {
+      "ticketId": "benchmark-ticket-11",
+      "sha256": "edaf4fd40110da4f14bc22780f71737e281235ab284e86d1f5317d29c6acd277",
+      "status": "ready",
+      "attempts": 1,
+      "retryCount": 0,
+      "admissionBatchWaitMs": 132.62790000000007,
+      "postConsumerToFirstClaimMs": 25990.745899999998,
+      "queuedToFirstClaimMs": 26123.3738,
+      "firstClaimToTerminalMs": 2211.5164000000004,
+      "queuedToTerminalMs": 28334.8902,
+      "ocrAttempts": [
+        {
+          "sha256": "edaf4fd40110da4f14bc22780f71737e281235ab284e86d1f5317d29c6acd277",
+          "startedMs": 26880.2065,
+          "success": true,
+          "finishedMs": 28960.711,
+          "elapsedMs": 2080.504499999999
+        }
+      ],
+      "events": [
+        {
+          "cursor": 12,
+          "ticketId": "benchmark-ticket-11",
+          "status": "queued",
+          "observedCommitMs": 721.6373,
+          "notificationCursor": 12,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 54,
+          "ticketId": "benchmark-ticket-11",
+          "status": "ocr",
+          "observedCommitMs": 26845.0111,
+          "notificationCursor": 54,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 55,
+          "ticketId": "benchmark-ticket-11",
+          "status": "poster",
+          "observedCommitMs": 28970.0879,
+          "notificationCursor": 55,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 56,
+          "ticketId": "benchmark-ticket-11",
+          "status": "ready",
+          "observedCommitMs": 29056.5275,
+          "notificationCursor": 56,
+          "notificationBatchSize": 1
+        }
+      ],
+      "expected": {
+        "title": "Nosferatu",
+        "cinema": "Aurora Cinema",
+        "hall": "5",
+        "seat": "G12",
+        "showtime": "2026-11-12T21:30"
+      },
+      "actual": {
+        "cinema": "Aurora Cinema",
+        "hall": "5",
+        "seat": "G12",
+        "showtime": "2026-11-12T21:30",
+        "title": "Nosferatu"
+      }
+    },
+    {
+      "ticketId": "benchmark-ticket-12",
+      "sha256": "aaec699e40aef0306eac40a693c8337807da69d5d533a9cfb3148cecf5c13b43",
+      "status": "ready",
+      "attempts": 1,
+      "retryCount": 0,
+      "admissionBatchWaitMs": 120.09160000000008,
+      "postConsumerToFirstClaimMs": 28212.949399999998,
+      "queuedToFirstClaimMs": 28333.041,
+      "firstClaimToTerminalMs": 2217.8022999999994,
+      "queuedToTerminalMs": 30550.8433,
+      "ocrAttempts": [
+        {
+          "sha256": "aaec699e40aef0306eac40a693c8337807da69d5d533a9cfb3148cecf5c13b43",
+          "startedMs": 29073.213,
+          "success": true,
+          "finishedMs": 31201.9773,
+          "elapsedMs": 2128.764299999999
+        }
+      ],
+      "events": [
+        {
+          "cursor": 13,
+          "ticketId": "benchmark-ticket-12",
+          "status": "queued",
+          "observedCommitMs": 734.1736,
+          "notificationCursor": 13,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 57,
+          "ticketId": "benchmark-ticket-12",
+          "status": "ocr",
+          "observedCommitMs": 29067.2146,
+          "notificationCursor": 57,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 58,
+          "ticketId": "benchmark-ticket-12",
+          "status": "poster",
+          "observedCommitMs": 31211.7582,
+          "notificationCursor": 58,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 59,
+          "ticketId": "benchmark-ticket-12",
+          "status": "ready",
+          "observedCommitMs": 31285.0169,
+          "notificationCursor": 59,
+          "notificationBatchSize": 1
+        }
+      ],
+      "expected": {
+        "title": "The General",
+        "cinema": "Aurora Cinema",
+        "hall": "6",
+        "seat": "G13",
+        "showtime": "2026-11-13T18:30"
+      },
+      "actual": {
+        "cinema": "Aurora Cinema",
+        "hall": "6",
+        "seat": "G13",
+        "showtime": "2026-11-13T18:30",
+        "title": "The General"
+      }
+    },
+    {
+      "ticketId": "benchmark-ticket-13",
+      "sha256": "a159bcf84d4c28fa5251b209b2acd07add46ee55f05d62b883efa82fde72998c",
+      "status": "ready",
+      "attempts": 1,
+      "retryCount": 0,
+      "admissionBatchWaitMs": 107.14780000000007,
+      "postConsumerToFirstClaimMs": 30440.8085,
+      "queuedToFirstClaimMs": 30547.9563,
+      "firstClaimToTerminalMs": 2089.500399999997,
+      "queuedToTerminalMs": 32637.4567,
+      "ocrAttempts": [
+        {
+          "sha256": "a159bcf84d4c28fa5251b209b2acd07add46ee55f05d62b883efa82fde72998c",
+          "startedMs": 31305.3949,
+          "success": true,
+          "finishedMs": 33326.1117,
+          "elapsedMs": 2020.716800000002
+        }
+      ],
+      "events": [
+        {
+          "cursor": 14,
+          "ticketId": "benchmark-ticket-13",
+          "status": "queued",
+          "observedCommitMs": 747.1174,
+          "notificationCursor": 14,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 60,
+          "ticketId": "benchmark-ticket-13",
+          "status": "ocr",
+          "observedCommitMs": 31295.0737,
+          "notificationCursor": 60,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 61,
+          "ticketId": "benchmark-ticket-13",
+          "status": "poster",
+          "observedCommitMs": 33334.9158,
+          "notificationCursor": 61,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 62,
+          "ticketId": "benchmark-ticket-13",
+          "status": "ready",
+          "observedCommitMs": 33384.5741,
+          "notificationCursor": 62,
+          "notificationBatchSize": 1
+        }
+      ],
+      "expected": {
+        "title": "The Kid",
+        "cinema": "Aurora Cinema",
+        "hall": "7",
+        "seat": "G14",
+        "showtime": "2026-11-14T19:30"
+      },
+      "actual": {
+        "cinema": "Aurora Cinema",
+        "hall": "7",
+        "seat": "G14",
+        "showtime": "2026-11-14T19:30",
+        "title": "The Kid"
+      }
+    },
+    {
+      "ticketId": "benchmark-ticket-14",
+      "sha256": "163bc29c3dca5a936d59fb3924c29d3a4f7f524429a3823f6d2d1f164fc269fa",
+      "status": "ready",
+      "attempts": 1,
+      "retryCount": 0,
+      "admissionBatchWaitMs": 94.20210000000009,
+      "postConsumerToFirstClaimMs": 32590.1988,
+      "queuedToFirstClaimMs": 32684.4009,
+      "firstClaimToTerminalMs": 2086.4130000000005,
+      "queuedToTerminalMs": 34770.8139,
+      "ocrAttempts": [
+        {
+          "sha256": "163bc29c3dca5a936d59fb3924c29d3a4f7f524429a3823f6d2d1f164fc269fa",
+          "startedMs": 33468.5158,
+          "success": true,
+          "finishedMs": 35438.2837,
+          "elapsedMs": 1969.767899999999
+        }
+      ],
+      "events": [
+        {
+          "cursor": 15,
+          "ticketId": "benchmark-ticket-14",
+          "status": "queued",
+          "observedCommitMs": 760.0631,
+          "notificationCursor": 15,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 63,
+          "ticketId": "benchmark-ticket-14",
+          "status": "ocr",
+          "observedCommitMs": 33444.464,
+          "notificationCursor": 63,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 64,
+          "ticketId": "benchmark-ticket-14",
+          "status": "poster",
+          "observedCommitMs": 35465.0275,
+          "notificationCursor": 64,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 65,
+          "ticketId": "benchmark-ticket-14",
+          "status": "ready",
+          "observedCommitMs": 35530.877,
+          "notificationCursor": 65,
+          "notificationBatchSize": 1
+        }
+      ],
+      "expected": {
+        "title": "Sherlock Jr.",
+        "cinema": "Aurora Cinema",
+        "hall": "1",
+        "seat": "G15",
+        "showtime": "2026-11-15T20:30"
+      },
+      "actual": {
+        "cinema": "Aurora Cinema",
+        "hall": "1",
+        "seat": "G15",
+        "showtime": "2026-11-15T20:30",
+        "title": "Sherlock Jr."
+      }
+    },
+    {
+      "ticketId": "benchmark-ticket-15",
+      "sha256": "510f70bdd452faebf40924cb2c9d04ec406282804dc74df38e2e512c7c9b8f22",
+      "status": "ready",
+      "attempts": 1,
+      "retryCount": 0,
+      "admissionBatchWaitMs": 80.5969,
+      "postConsumerToFirstClaimMs": 34716.244,
+      "queuedToFirstClaimMs": 34796.8409,
+      "firstClaimToTerminalMs": 2139.1059000000023,
+      "queuedToTerminalMs": 36935.946800000005,
+      "ocrAttempts": [
+        {
+          "sha256": "510f70bdd452faebf40924cb2c9d04ec406282804dc74df38e2e512c7c9b8f22",
+          "startedMs": 35616.018,
+          "success": true,
+          "finishedMs": 37643.941,
+          "elapsedMs": 2027.9230000000025
+        }
+      ],
+      "events": [
+        {
+          "cursor": 16,
+          "ticketId": "benchmark-ticket-15",
+          "status": "queued",
+          "observedCommitMs": 773.6683,
+          "notificationCursor": 16,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 66,
+          "ticketId": "benchmark-ticket-15",
+          "status": "ocr",
+          "observedCommitMs": 35570.5092,
+          "notificationCursor": 66,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 67,
+          "ticketId": "benchmark-ticket-15",
+          "status": "poster",
+          "observedCommitMs": 37654.9177,
+          "notificationCursor": 67,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 68,
+          "ticketId": "benchmark-ticket-15",
+          "status": "ready",
+          "observedCommitMs": 37709.6151,
+          "notificationCursor": 68,
+          "notificationBatchSize": 1
+        }
+      ],
+      "expected": {
+        "title": "City Lights",
+        "cinema": "Aurora Cinema",
+        "hall": "2",
+        "seat": "G16",
+        "showtime": "2026-11-16T21:30"
+      },
+      "actual": {
+        "cinema": "Aurora Cinema",
+        "hall": "2",
+        "seat": "G16",
+        "showtime": "2026-11-16T21:30",
+        "title": "City Lights"
+      }
+    },
+    {
+      "ticketId": "benchmark-ticket-16",
+      "sha256": "25362b6a2f2029244bb1900035967ba3aab2a399a466d3210e8286d5b28f977b",
+      "status": "ready",
+      "attempts": 1,
+      "retryCount": 0,
+      "admissionBatchWaitMs": 68.37160000000006,
+      "postConsumerToFirstClaimMs": 36892.4308,
+      "queuedToFirstClaimMs": 36960.8024,
+      "firstClaimToTerminalMs": 2150.5611999999965,
+      "queuedToTerminalMs": 39111.3636,
+      "ocrAttempts": [
+        {
+          "sha256": "25362b6a2f2029244bb1900035967ba3aab2a399a466d3210e8286d5b28f977b",
+          "startedMs": 37752.8505,
+          "success": true,
+          "finishedMs": 39812.8542,
+          "elapsedMs": 2060.003700000001
+        }
+      ],
+      "events": [
+        {
+          "cursor": 17,
+          "ticketId": "benchmark-ticket-16",
+          "status": "queued",
+          "observedCommitMs": 785.8936,
+          "notificationCursor": 17,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 69,
+          "ticketId": "benchmark-ticket-16",
+          "status": "ocr",
+          "observedCommitMs": 37746.696,
+          "notificationCursor": 69,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 70,
+          "ticketId": "benchmark-ticket-16",
+          "status": "poster",
+          "observedCommitMs": 39839.0243,
+          "notificationCursor": 70,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 71,
+          "ticketId": "benchmark-ticket-16",
+          "status": "ready",
+          "observedCommitMs": 39897.2572,
+          "notificationCursor": 71,
+          "notificationBatchSize": 1
+        }
+      ],
+      "expected": {
+        "title": "Modern Times",
+        "cinema": "Aurora Cinema",
+        "hall": "3",
+        "seat": "G17",
+        "showtime": "2026-11-17T18:30"
+      },
+      "actual": {
+        "cinema": "Aurora Cinema",
+        "hall": "3",
+        "seat": "G17",
+        "showtime": "2026-11-17T18:30",
+        "title": "Modern Times"
+      }
+    },
+    {
+      "ticketId": "benchmark-ticket-17",
+      "sha256": "72e00cc8e72e444603129f308263fcc305d10dacf903c068a4888c0d3628f357",
+      "status": "ready",
+      "attempts": 1,
+      "retryCount": 0,
+      "admissionBatchWaitMs": 55.988000000000056,
+      "postConsumerToFirstClaimMs": 39053.3217,
+      "queuedToFirstClaimMs": 39109.309700000005,
+      "firstClaimToTerminalMs": 2061.5369999999966,
+      "queuedToTerminalMs": 41170.8467,
+      "ocrAttempts": [
+        {
+          "sha256": "72e00cc8e72e444603129f308263fcc305d10dacf903c068a4888c0d3628f357",
+          "startedMs": 39932.924,
+          "success": true,
+          "finishedMs": 41892.7964,
+          "elapsedMs": 1959.8724000000002
+        }
+      ],
+      "events": [
+        {
+          "cursor": 18,
+          "ticketId": "benchmark-ticket-17",
+          "status": "queued",
+          "observedCommitMs": 798.2772,
+          "notificationCursor": 18,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 72,
+          "ticketId": "benchmark-ticket-17",
+          "status": "ocr",
+          "observedCommitMs": 39907.5869,
+          "notificationCursor": 72,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 73,
+          "ticketId": "benchmark-ticket-17",
+          "status": "poster",
+          "observedCommitMs": 41902.6114,
+          "notificationCursor": 73,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 74,
+          "ticketId": "benchmark-ticket-17",
+          "status": "ready",
+          "observedCommitMs": 41969.1239,
+          "notificationCursor": 74,
+          "notificationBatchSize": 1
+        }
+      ],
+      "expected": {
+        "title": "The Gold Rush",
+        "cinema": "Aurora Cinema",
+        "hall": "4",
+        "seat": "G18",
+        "showtime": "2026-11-18T19:30"
+      },
+      "actual": {
+        "cinema": "Aurora Cinema",
+        "hall": "4",
+        "seat": "G18",
+        "showtime": "2026-11-18T19:30",
+        "title": "The Gold Rush"
+      }
+    },
+    {
+      "ticketId": "benchmark-ticket-18",
+      "sha256": "06a9685c3ce9af5fed2ecaa320221e29a9f2abd2dab15d1a889838d9cacb919a",
+      "status": "ready",
+      "attempts": 1,
+      "retryCount": 0,
+      "admissionBatchWaitMs": 42.70810000000006,
+      "postConsumerToFirstClaimMs": 41127.3201,
+      "queuedToFirstClaimMs": 41170.0282,
+      "firstClaimToTerminalMs": 2176.188399999999,
+      "queuedToTerminalMs": 43346.2166,
+      "ocrAttempts": [
+        {
+          "sha256": "06a9685c3ce9af5fed2ecaa320221e29a9f2abd2dab15d1a889838d9cacb919a",
+          "startedMs": 41988.0356,
+          "success": true,
+          "finishedMs": 44088.5208,
+          "elapsedMs": 2100.4851999999955
+        }
+      ],
+      "events": [
+        {
+          "cursor": 19,
+          "ticketId": "benchmark-ticket-18",
+          "status": "queued",
+          "observedCommitMs": 811.5571,
+          "notificationCursor": 19,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 75,
+          "ticketId": "benchmark-ticket-18",
+          "status": "ocr",
+          "observedCommitMs": 41981.5853,
+          "notificationCursor": 75,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 76,
+          "ticketId": "benchmark-ticket-18",
+          "status": "poster",
+          "observedCommitMs": 44099.5181,
+          "notificationCursor": 76,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 77,
+          "ticketId": "benchmark-ticket-18",
+          "status": "ready",
+          "observedCommitMs": 44157.7737,
+          "notificationCursor": 77,
+          "notificationBatchSize": 1
+        }
+      ],
+      "expected": {
+        "title": "Safety Last!",
+        "cinema": "Aurora Cinema",
+        "hall": "5",
+        "seat": "G19",
+        "showtime": "2026-11-19T20:30"
+      },
+      "actual": {
+        "cinema": "Aurora Cinema",
+        "hall": "5",
+        "seat": "G19",
+        "showtime": "2026-11-19T20:30",
+        "title": "Safety Last!"
+      }
+    },
+    {
+      "ticketId": "benchmark-ticket-19",
+      "sha256": "af2d0d87a0605d60dfffa05610982a8f8b439394bc57ec19066b6a631cec4829",
+      "status": "ready",
+      "attempts": 1,
+      "retryCount": 0,
+      "admissionBatchWaitMs": 30.399200000000064,
+      "postConsumerToFirstClaimMs": 43385.0295,
+      "queuedToFirstClaimMs": 43415.4287,
+      "firstClaimToTerminalMs": 2208.344100000002,
+      "queuedToTerminalMs": 45623.7728,
+      "ocrAttempts": [
+        {
+          "sha256": "af2d0d87a0605d60dfffa05610982a8f8b439394bc57ec19066b6a631cec4829",
+          "startedMs": 44257.8098,
+          "success": true,
+          "finishedMs": 46361.3734,
+          "elapsedMs": 2103.563599999994
+        }
+      ],
+      "events": [
+        {
+          "cursor": 20,
+          "ticketId": "benchmark-ticket-19",
+          "status": "queued",
+          "observedCommitMs": 823.866,
+          "notificationCursor": 20,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 78,
+          "ticketId": "benchmark-ticket-19",
+          "status": "ocr",
+          "observedCommitMs": 44239.2947,
+          "notificationCursor": 78,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 79,
+          "ticketId": "benchmark-ticket-19",
+          "status": "poster",
+          "observedCommitMs": 46385.6162,
+          "notificationCursor": 79,
+          "notificationBatchSize": 1
+        },
+        {
+          "cursor": 80,
+          "ticketId": "benchmark-ticket-19",
+          "status": "ready",
+          "observedCommitMs": 46447.6388,
+          "notificationCursor": 80,
+          "notificationBatchSize": 1
+        }
+      ],
+      "expected": {
+        "title": "The Phantom of the Opera",
+        "cinema": "Aurora Cinema",
+        "hall": "6",
+        "seat": "G20",
+        "showtime": "2026-11-20T21:30"
+      },
+      "actual": {
+        "cinema": "Aurora Cinema",
+        "hall": "6",
+        "seat": "G20",
+        "showtime": "2026-11-20T21:30",
+        "title": "The Phantom of the Opera"
+      }
+    }
+  ],
+  "timings": {
+    "admissionBatchWaitMs": {
+      "count": 20,
+      "p50Ms": 151.07910000000004,
+      "p95Ms": 265.94720000000007,
+      "maxMs": 280.3112000000001
+    },
+    "postConsumerToFirstClaimMs": {
+      "count": 20,
+      "p50Ms": 22692.7613,
+      "p95Ms": 41127.3201,
+      "maxMs": 43385.0295
+    },
+    "queuedToFirstClaimMs": {
+      "count": 20,
+      "p50Ms": 22843.8404,
+      "p95Ms": 41170.0282,
+      "maxMs": 43415.4287
+    },
+    "firstClaimToTerminalMs": {
+      "count": 20,
+      "p50Ms": 2165.1026500000007,
+      "p95Ms": 2287.724400000001,
+      "maxMs": 3411.7508000000003
+    },
+    "queuedToTerminalMs": {
+      "count": 20,
+      "p50Ms": 25014.00575,
+      "p95Ms": 43346.2166,
+      "maxMs": 45623.7728
+    },
+    "ocrAttemptMs": {
+      "count": 20,
+      "p50Ms": 2067.1615500000007,
+      "p95Ms": 2213.1625999999997,
+      "maxMs": 3319.8644999999997
+    }
+  },
+  "statusCounts": {
+    "ready": 19,
+    "no_match": 1
+  },
+  "failureRate": 0.0,
+  "fieldAccuracy": {
+    "title": {
+      "expectedPresent": 20,
+      "exact": 19,
+      "wrongNonempty": 0,
+      "missed": 1
+    },
+    "cinema": {
+      "expectedPresent": 20,
+      "exact": 20,
+      "wrongNonempty": 0,
+      "missed": 0
+    },
+    "hall": {
+      "expectedPresent": 20,
+      "exact": 20,
+      "wrongNonempty": 0,
+      "missed": 0
+    },
+    "seat": {
+      "expectedPresent": 20,
+      "exact": 20,
+      "wrongNonempty": 0,
+      "missed": 0
+    },
+    "showtime": {
+      "expectedPresent": 20,
+      "exact": 20,
+      "wrongNonempty": 0,
+      "missed": 0
+    }
+  },
+  "checks": {
+    "completeJobCount": 20,
+    "durableChangesObserved": 80,
+    "observerOverflow": false,
+    "groundTruthNeverSubmitted": true,
+    "retries": 0,
+    "temporaryAccountRemoved": true,
+    "posterProviderClosed": true
+  },
+  "uploadsBeforeAdmission": [
+    {
+      "sha256": "131d79d4930211ccb96a55fe2a4d06c9778ec85ff2a6cdd111cd1a4c2b320936",
+      "bytes": 39388,
+      "elapsedMs": 21.5856
+    },
+    {
+      "sha256": "7789932ef116ee3602f5b37905d992d124a8aabac4e548e9c53507f28f3188a0",
+      "bytes": 42090,
+      "elapsedMs": 25.9747
+    },
+    {
+      "sha256": "006adc4da7dcb08ad7f22efea4412c01b9eea655842bd76a34e878cac8958d9e",
+      "bytes": 41357,
+      "elapsedMs": 21.4939
+    },
+    {
+      "sha256": "03e9ea48848f9594bbf167ea17844f99b80dd46bf06dcb9e2324f17ae39de3f0",
+      "bytes": 40992,
+      "elapsedMs": 22.0293
+    },
+    {
+      "sha256": "489ac68c254d432b71550784be0252f575780a178661f4437833725fc31fe730",
+      "bytes": 43326,
+      "elapsedMs": 22.1519
+    },
+    {
+      "sha256": "5d1f58769ca4e922006a3a1189e134795ca70465ceeba9d158c8f98d83bcdcd1",
+      "bytes": 47489,
+      "elapsedMs": 21.7247
+    },
+    {
+      "sha256": "438764b27751726c9b26f1088db926ad215df8a3e701ce04f9b6026a2e821fcf",
+      "bytes": 38091,
+      "elapsedMs": 22.5033
+    },
+    {
+      "sha256": "55463bf7e2b8f7395929f0559e7d30f04093803aaa94f743296b4883e8684def",
+      "bytes": 41236,
+      "elapsedMs": 21.289
+    },
+    {
+      "sha256": "360930d5f83604a1a801fa1ee2270d0847ea33b79c3a8e2b341e7b34462d9247",
+      "bytes": 43832,
+      "elapsedMs": 22.2192
+    },
+    {
+      "sha256": "a18f06054e682c6a30a2b1ed40bc819f3f3c8f458c8f2d1873256fde0d6d2fa8",
+      "bytes": 40019,
+      "elapsedMs": 20.8763
+    },
+    {
+      "sha256": "e2c1c12cdf47994d7549a98b1bc543c5c6a65b8a25b5f7357dd2c71fef307508",
+      "bytes": 37711,
+      "elapsedMs": 23.2561
+    },
+    {
+      "sha256": "edaf4fd40110da4f14bc22780f71737e281235ab284e86d1f5317d29c6acd277",
+      "bytes": 41018,
+      "elapsedMs": 20.2201
+    },
+    {
+      "sha256": "aaec699e40aef0306eac40a693c8337807da69d5d533a9cfb3148cecf5c13b43",
+      "bytes": 36919,
+      "elapsedMs": 20.6019
+    },
+    {
+      "sha256": "a159bcf84d4c28fa5251b209b2acd07add46ee55f05d62b883efa82fde72998c",
+      "bytes": 37820,
+      "elapsedMs": 20.656
+    },
+    {
+      "sha256": "163bc29c3dca5a936d59fb3924c29d3a4f7f524429a3823f6d2d1f164fc269fa",
+      "bytes": 40692,
+      "elapsedMs": 23.2617
+    },
+    {
+      "sha256": "510f70bdd452faebf40924cb2c9d04ec406282804dc74df38e2e512c7c9b8f22",
+      "bytes": 36785,
+      "elapsedMs": 21.3708
+    },
+    {
+      "sha256": "25362b6a2f2029244bb1900035967ba3aab2a399a466d3210e8286d5b28f977b",
+      "bytes": 39508,
+      "elapsedMs": 21.7862
+    },
+    {
+      "sha256": "72e00cc8e72e444603129f308263fcc305d10dacf903c068a4888c0d3628f357",
+      "bytes": 43141,
+      "elapsedMs": 21.3765
+    },
+    {
+      "sha256": "06a9685c3ce9af5fed2ecaa320221e29a9f2abd2dab15d1a889838d9cacb919a",
+      "bytes": 37703,
+      "elapsedMs": 20.1179
+    },
+    {
+      "sha256": "af2d0d87a0605d60dfffa05610982a8f8b439394bc57ec19066b6a631cec4829",
+      "bytes": 40777,
+      "elapsedMs": 20.4571
+    }
+  ],
+  "admissions": [
+    {
+      "ticketId": "benchmark-ticket-0",
+      "sha256": "131d79d4930211ccb96a55fe2a4d06c9778ec85ff2a6cdd111cd1a4c2b320936",
+      "committedCursor": 1,
+      "elapsedMs": 12.1388
+    },
+    {
+      "ticketId": "benchmark-ticket-1",
+      "sha256": "7789932ef116ee3602f5b37905d992d124a8aabac4e548e9c53507f28f3188a0",
+      "committedCursor": 2,
+      "elapsedMs": 14.3211
+    },
+    {
+      "ticketId": "benchmark-ticket-2",
+      "sha256": "006adc4da7dcb08ad7f22efea4412c01b9eea655842bd76a34e878cac8958d9e",
+      "committedCursor": 3,
+      "elapsedMs": 11.8551
+    },
+    {
+      "ticketId": "benchmark-ticket-3",
+      "sha256": "03e9ea48848f9594bbf167ea17844f99b80dd46bf06dcb9e2324f17ae39de3f0",
+      "committedCursor": 4,
+      "elapsedMs": 25.0948
+    },
+    {
+      "ticketId": "benchmark-ticket-4",
+      "sha256": "489ac68c254d432b71550784be0252f575780a178661f4437833725fc31fe730",
+      "committedCursor": 5,
+      "elapsedMs": 11.3005
+    },
+    {
+      "ticketId": "benchmark-ticket-5",
+      "sha256": "5d1f58769ca4e922006a3a1189e134795ca70465ceeba9d158c8f98d83bcdcd1",
+      "committedCursor": 6,
+      "elapsedMs": 12.3982
+    },
+    {
+      "ticketId": "benchmark-ticket-6",
+      "sha256": "438764b27751726c9b26f1088db926ad215df8a3e701ce04f9b6026a2e821fcf",
+      "committedCursor": 7,
+      "elapsedMs": 11.7112
+    },
+    {
+      "ticketId": "benchmark-ticket-7",
+      "sha256": "55463bf7e2b8f7395929f0559e7d30f04093803aaa94f743296b4883e8684def",
+      "committedCursor": 8,
+      "elapsedMs": 12.7835
+    },
+    {
+      "ticketId": "benchmark-ticket-8",
+      "sha256": "360930d5f83604a1a801fa1ee2270d0847ea33b79c3a8e2b341e7b34462d9247",
+      "committedCursor": 9,
+      "elapsedMs": 12.0883
+    },
+    {
+      "ticketId": "benchmark-ticket-9",
+      "sha256": "a18f06054e682c6a30a2b1ed40bc819f3f3c8f458c8f2d1873256fde0d6d2fa8",
+      "committedCursor": 10,
+      "elapsedMs": 11.3226
+    },
+    {
+      "ticketId": "benchmark-ticket-10",
+      "sha256": "e2c1c12cdf47994d7549a98b1bc543c5c6a65b8a25b5f7357dd2c71fef307508",
+      "committedCursor": 11,
+      "elapsedMs": 12.3881
+    },
+    {
+      "ticketId": "benchmark-ticket-11",
+      "sha256": "edaf4fd40110da4f14bc22780f71737e281235ab284e86d1f5317d29c6acd277",
+      "committedCursor": 12,
+      "elapsedMs": 12.5114
+    },
+    {
+      "ticketId": "benchmark-ticket-12",
+      "sha256": "aaec699e40aef0306eac40a693c8337807da69d5d533a9cfb3148cecf5c13b43",
+      "committedCursor": 13,
+      "elapsedMs": 12.2279
+    },
+    {
+      "ticketId": "benchmark-ticket-13",
+      "sha256": "a159bcf84d4c28fa5251b209b2acd07add46ee55f05d62b883efa82fde72998c",
+      "committedCursor": 14,
+      "elapsedMs": 12.9853
+    },
+    {
+      "ticketId": "benchmark-ticket-14",
+      "sha256": "163bc29c3dca5a936d59fb3924c29d3a4f7f524429a3823f6d2d1f164fc269fa",
+      "committedCursor": 15,
+      "elapsedMs": 13.1294
+    },
+    {
+      "ticketId": "benchmark-ticket-15",
+      "sha256": "510f70bdd452faebf40924cb2c9d04ec406282804dc74df38e2e512c7c9b8f22",
+      "committedCursor": 16,
+      "elapsedMs": 13.5391
+    },
+    {
+      "ticketId": "benchmark-ticket-16",
+      "sha256": "25362b6a2f2029244bb1900035967ba3aab2a399a466d3210e8286d5b28f977b",
+      "committedCursor": 17,
+      "elapsedMs": 12.4871
+    },
+    {
+      "ticketId": "benchmark-ticket-17",
+      "sha256": "72e00cc8e72e444603129f308263fcc305d10dacf903c068a4888c0d3628f357",
+      "committedCursor": 18,
+      "elapsedMs": 12.5129
+    },
+    {
+      "ticketId": "benchmark-ticket-18",
+      "sha256": "06a9685c3ce9af5fed2ecaa320221e29a9f2abd2dab15d1a889838d9cacb919a",
+      "committedCursor": 19,
+      "elapsedMs": 12.8449
+    },
+    {
+      "ticketId": "benchmark-ticket-19",
+      "sha256": "af2d0d87a0605d60dfffa05610982a8f8b439394bc57ec19066b6a631cec4829",
+      "committedCursor": 20,
+      "elapsedMs": 12.3602
+    }
+  ],
+  "memory": {
+    "baselineParentRssBytes": 111452160,
+    "peakSummedRssBytes": 295075840,
+    "samples": 981,
+    "maxProcessCount": 2,
+    "unreadableProcessSamples": 0,
+    "method": "20 ms sampling of this benchmark Python process and descendants during consumption; summed RSS can double-count shared pages"
+  },
+  "posterFixtureCalls": 19,
+  "syntheticObjectWrites": 21,
+  "ocrMode": "production-isolated-spawn-per-attempt",
+  "schemaVersion": 1,
+  "createdAt": "2026-10-22T10:45:39.371217+00:00",
+  "sourceHashes": {
+    "backend/__init__.py": "0c74f1baf74598afa0a12c029e5de47d74eeda4113fb4e373fce408d774ab68f",
+    "backend/accounts.py": "fa76f9a2d50b3936a6c8c3735b1e3f04819a0fe01750e793259c2ea2d16082bf",
+    "backend/api.py": "dd2e3279f305231f6166745548d2fce57ac9e51090ed248a4a3e3758fd3c7a26",
+    "backend/app.py": "da215d08748f8867f91d9e8c6ff6a756a32ade9d2b55fbd0d5585d9e3af9ec09",
+    "backend/auth.py": "0430dd05c3e11f130decb571eef6583dd0e22e5032f5e19e62b7ae6c7a327b71",
+    "backend/backups.py": "12fba6fc3ec3c6a8ec4d770781db6cd4767e3c698ae13eee3c4facc19c4404fd",
+    "backend/contracts.py": "a1487aa2da0d7c96fc53c4f4a6c1ec233f2231d11f8219d72da5c7395547e5f6",
+    "backend/media.py": "366375e32be92986f31ef6d270755259b2b305f57bfe61ce2df3079b551bb26a",
+    "backend/object_storage.py": "d15171d9e6882bbed693622c15c1aba16464f75a2be88c396cbb0b9aa1de8e92",
+    "backend/ocr-models.json": "c12f347e7fd2e847dffd7d53cfef9fd9cee78c647d324adcf26ac9cc3ea38cf6",
+    "backend/ocr.py": "e8f95488dddf1c221b2ed5e169815154531f210ed90b0da8800508079b62114f",
+    "backend/peer_contracts.py": "23bd09301f7d8c986b3c3e4dbe10c8c2608e31ca4c97da4e42096ada207a18ae",
+    "backend/peer_registry.py": "b154b6605d7d8228b80f472217c5ae0dc95318e34fb60fa7aaa2e11bac9b20bf",
+    "backend/peer_service.py": "441906c1fd254c8c56f25616eb353c1e341f2cf50f46e89c1180c478725ec426",
+    "backend/posters.py": "f1c71c58a20bffe1f52bbb52d6e942f53f231ec5fb621d6f79b06b67eb4899e1",
+    "backend/processing.py": "4b249f8173b139572cfda486d07a1645a39fc3dc96af62c7c803da721bda9418",
+    "backend/processing_repository.py": "3363148bdbe3f2077b74c67d7483627e5b6664623cd9681cc12b044b366d3b0b",
+    "backend/requirements-dev.txt": "29bb17ea40c53a957727d160dd2a21dc4c9dde397f07ca651426cbe3d3eabba9",
+    "backend/requirements-ocr.txt": "3b2e4e257d17fc89f18bb49ab02b7dc6d855f6c65abd02f1c23b8c9a58e72ce9",
+    "backend/requirements.txt": "6e6540ba625a2c01745517a09223b0f8251ffdf40a4dd95bce85c7b5d27ab385",
+    "backend/services/__init__.py": "a9f3fd625167dc778982b0c60ce1c97b010c90b76127c2711e61d4d4fa1271af",
+    "backend/services/tickets.py": "e058e0fd90a78a9d159bb859d481d3745f749043ec148e14f8469b86511f5e5f",
+    "backend/shared_state.py": "8b4e3d373593743f71eedee837af148c2c5c909f177da1e364e39739c0358620",
+    "backend/state.py": "34743899d52e36bfde1dd788cc6db76771662c40125524d2481a363196bc9ae3",
+    "backend/store.py": "b795c5021a0289fd2be21f70899d92ffba9462380ffe046cd750f38359529d0c",
+    "backend/sync_http.py": "ef2b0a277f6ea018f137328cf929e9ba477a09c99b65992e115448e41260a1eb",
+    "backend/sync_notifications.py": "58becdac238556441199942fa977f27b70e231c34c39a8cc989272b87c77514c",
+    "backend/sync_socket.py": "7c3e7935c19312816fd8fdbf9cd04bced10d924a306df6a10c1c2f18307dcab3",
+    "backend/tests/account_fixtures.py": "a505b2ddaa2406240d3156eb8b461ff71be3c754698a98c2af202804b4e01238",
+    "backend/tests/test_object_storage.py": "d0d68d6a1a9c5b65a9b2cb166d5a7f249fb2da635752f0d344e9830d80857274",
+    "scripts/benchmark-ocr.py": "58758b1876b2d93819efbffbfaa99649f5b222ace1138ec610fb025b65de4c31",
+    "scripts/benchmark-processing.py": "dcd4da69dbf093d010ffd643b0d842d05dee44dd5a3c35590cb76b489d016961"
+  },
+  "sourceHashMethod": "SHA-256 after CRLF-to-LF normalization",
+  "sourcesStable": true,
+  "dataset": [
+    {
+      "path": "ticket-00-clean.png",
+      "condition": "clean",
+      "split": "development",
+      "expected": {
+        "title": "流浪地球",
+        "cinema": "星光影城1店",
+        "hall": "1号厅",
+        "seat": "1排1座",
+        "showtime": "2026-11-01T18:30"
+      },
+      "sha256": "131d79d4930211ccb96a55fe2a4d06c9778ec85ff2a6cdd111cd1a4c2b320936"
+    },
+    {
+      "path": "ticket-01-clean.png",
+      "condition": "clean",
+      "split": "development",
+      "expected": {
+        "title": "星际穿越",
+        "cinema": "星光影城2店",
+        "hall": "2号厅",
+        "seat": "2排2座",
+        "showtime": "2026-11-02T19:30"
+      },
+      "sha256": "7789932ef116ee3602f5b37905d992d124a8aabac4e548e9c53507f28f3188a0"
+    },
+    {
+      "path": "ticket-02-clean.png",
+      "condition": "clean",
+      "split": "held_out",
+      "expected": {
+        "title": "千与千寻",
+        "cinema": "星光影城3店",
+        "hall": "3号厅",
+        "seat": "3排3座",
+        "showtime": "2026-11-03T20:30"
+      },
+      "sha256": "006adc4da7dcb08ad7f22efea4412c01b9eea655842bd76a34e878cac8958d9e"
+    },
+    {
+      "path": "ticket-03-clean.png",
+      "condition": "clean",
+      "split": "held_out",
+      "expected": {
+        "title": "哪吒之魔童降世",
+        "cinema": "星光影城4店",
+        "hall": "4号厅",
+        "seat": "4排4座",
+        "showtime": "2026-11-04T21:30"
+      },
+      "sha256": "03e9ea48848f9594bbf167ea17844f99b80dd46bf06dcb9e2324f17ae39de3f0"
+    },
+    {
+      "path": "ticket-04-clean.png",
+      "condition": "clean",
+      "split": "held_out",
+      "expected": {
+        "title": "寻梦环游记",
+        "cinema": "星光影城5店",
+        "hall": "5号厅",
+        "seat": "5排5座",
+        "showtime": "2026-11-05T18:30"
+      },
+      "sha256": "489ac68c254d432b71550784be0252f575780a178661f4437833725fc31fe730"
+    },
+    {
+      "path": "ticket-05-clean.png",
+      "condition": "clean",
+      "split": "held_out",
+      "expected": {
+        "title": "疯狂动物城",
+        "cinema": "星光影城6店",
+        "hall": "6号厅",
+        "seat": "6排6座",
+        "showtime": "2026-11-06T19:30"
+      },
+      "sha256": "5d1f58769ca4e922006a3a1189e134795ca70465ceeba9d158c8f98d83bcdcd1"
+    },
+    {
+      "path": "ticket-06-clean.png",
+      "condition": "clean",
+      "split": "held_out",
+      "expected": {
+        "title": "长安三万里",
+        "cinema": "星光影城7店",
+        "hall": "7号厅",
+        "seat": "7排7座",
+        "showtime": "2026-11-07T20:30"
+      },
+      "sha256": "438764b27751726c9b26f1088db926ad215df8a3e701ce04f9b6026a2e821fcf"
+    },
+    {
+      "path": "ticket-07-clean.png",
+      "condition": "clean",
+      "split": "held_out",
+      "expected": {
+        "title": "让子弹飞",
+        "cinema": "星光影城8店",
+        "hall": "1号厅",
+        "seat": "8排8座",
+        "showtime": "2026-11-08T21:30"
+      },
+      "sha256": "55463bf7e2b8f7395929f0559e7d30f04093803aaa94f743296b4883e8684def"
+    },
+    {
+      "path": "ticket-08-clean.png",
+      "condition": "clean",
+      "split": "held_out",
+      "expected": {
+        "title": "无间道",
+        "cinema": "星光影城9店",
+        "hall": "2号厅",
+        "seat": "9排9座",
+        "showtime": "2026-11-09T18:30"
+      },
+      "sha256": "360930d5f83604a1a801fa1ee2270d0847ea33b79c3a8e2b341e7b34462d9247"
+    },
+    {
+      "path": "ticket-09-clean.png",
+      "condition": "clean",
+      "split": "held_out",
+      "expected": {
+        "title": "大话西游",
+        "cinema": "星光影城10店",
+        "hall": "3号厅",
+        "seat": "1排10座",
+        "showtime": "2026-11-10T19:30"
+      },
+      "sha256": "a18f06054e682c6a30a2b1ed40bc819f3f3c8f458c8f2d1873256fde0d6d2fa8"
+    },
+    {
+      "path": "ticket-10-clean.png",
+      "condition": "clean",
+      "split": "development",
+      "expected": {
+        "title": "Metropolis",
+        "cinema": "Aurora Cinema",
+        "hall": "4",
+        "seat": "G11",
+        "showtime": "2026-11-11T20:30"
+      },
+      "sha256": "e2c1c12cdf47994d7549a98b1bc543c5c6a65b8a25b5f7357dd2c71fef307508"
+    },
+    {
+      "path": "ticket-11-clean.png",
+      "condition": "clean",
+      "split": "development",
+      "expected": {
+        "title": "Nosferatu",
+        "cinema": "Aurora Cinema",
+        "hall": "5",
+        "seat": "G12",
+        "showtime": "2026-11-12T21:30"
+      },
+      "sha256": "edaf4fd40110da4f14bc22780f71737e281235ab284e86d1f5317d29c6acd277"
+    },
+    {
+      "path": "ticket-12-clean.png",
+      "condition": "clean",
+      "split": "held_out",
+      "expected": {
+        "title": "The General",
+        "cinema": "Aurora Cinema",
+        "hall": "6",
+        "seat": "G13",
+        "showtime": "2026-11-13T18:30"
+      },
+      "sha256": "aaec699e40aef0306eac40a693c8337807da69d5d533a9cfb3148cecf5c13b43"
+    },
+    {
+      "path": "ticket-13-clean.png",
+      "condition": "clean",
+      "split": "held_out",
+      "expected": {
+        "title": "The Kid",
+        "cinema": "Aurora Cinema",
+        "hall": "7",
+        "seat": "G14",
+        "showtime": "2026-11-14T19:30"
+      },
+      "sha256": "a159bcf84d4c28fa5251b209b2acd07add46ee55f05d62b883efa82fde72998c"
+    },
+    {
+      "path": "ticket-14-clean.png",
+      "condition": "clean",
+      "split": "held_out",
+      "expected": {
+        "title": "Sherlock Jr.",
+        "cinema": "Aurora Cinema",
+        "hall": "1",
+        "seat": "G15",
+        "showtime": "2026-11-15T20:30"
+      },
+      "sha256": "163bc29c3dca5a936d59fb3924c29d3a4f7f524429a3823f6d2d1f164fc269fa"
+    },
+    {
+      "path": "ticket-15-clean.png",
+      "condition": "clean",
+      "split": "held_out",
+      "expected": {
+        "title": "City Lights",
+        "cinema": "Aurora Cinema",
+        "hall": "2",
+        "seat": "G16",
+        "showtime": "2026-11-16T21:30"
+      },
+      "sha256": "510f70bdd452faebf40924cb2c9d04ec406282804dc74df38e2e512c7c9b8f22"
+    },
+    {
+      "path": "ticket-16-clean.png",
+      "condition": "clean",
+      "split": "held_out",
+      "expected": {
+        "title": "Modern Times",
+        "cinema": "Aurora Cinema",
+        "hall": "3",
+        "seat": "G17",
+        "showtime": "2026-11-17T18:30"
+      },
+      "sha256": "25362b6a2f2029244bb1900035967ba3aab2a399a466d3210e8286d5b28f977b"
+    },
+    {
+      "path": "ticket-17-clean.png",
+      "condition": "clean",
+      "split": "held_out",
+      "expected": {
+        "title": "The Gold Rush",
+        "cinema": "Aurora Cinema",
+        "hall": "4",
+        "seat": "G18",
+        "showtime": "2026-11-18T19:30"
+      },
+      "sha256": "72e00cc8e72e444603129f308263fcc305d10dacf903c068a4888c0d3628f357"
+    },
+    {
+      "path": "ticket-18-clean.png",
+      "condition": "clean",
+      "split": "held_out",
+      "expected": {
+        "title": "Safety Last!",
+        "cinema": "Aurora Cinema",
+        "hall": "5",
+        "seat": "G19",
+        "showtime": "2026-11-19T20:30"
+      },
+      "sha256": "06a9685c3ce9af5fed2ecaa320221e29a9f2abd2dab15d1a889838d9cacb919a"
+    },
+    {
+      "path": "ticket-19-clean.png",
+      "condition": "clean",
+      "split": "held_out",
+      "expected": {
+        "title": "The Phantom of the Opera",
+        "cinema": "Aurora Cinema",
+        "hall": "6",
+        "seat": "G20",
+        "showtime": "2026-11-20T21:30"
+      },
+      "sha256": "af2d0d87a0605d60dfffa05610982a8f8b439394bc57ec19066b6a631cec4829"
+    }
+  ],
+  "environment": {
+    "python": "3.13.11 | packaged by Anaconda, Inc. | (main, Dec 10 2025, 21:21:58) [MSC v.1929 64 bit (AMD64)]",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "cpuCount": 24,
+    "processor": "Intel64 Family 6 Model 151 Stepping 2, GenuineIntel",
+    "fontName": "msyh.ttc",
+    "fontSha256": "d79c55e68b1131eea0cc1c47be4f572d964f28c682e143db2ad09c1e4cb07a3f",
+    "modelManifest": {
+      "family": "PP-OCRv6 tiny",
+      "source": "https://github.com/RapidAI/RapidOCR/blob/v3.10.0/python/rapidocr/default_models.yaml",
+      "license": "Apache-2.0",
+      "dictionary": {
+        "filename": "ppocrv6-tiny-characters.txt",
+        "sha256": "c5cbe34ef40c29c4df07ed012bf96569cb69a2d2a01a07027e9f13cb832bd9cd"
+      },
+      "models": {
+        "det": {
+          "filename": "PP-OCRv6_det_tiny.onnx",
+          "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv6/det/PP-OCRv6_det_tiny.onnx",
+          "sha256": "f42c0fbd294d95eac1a550e131b277dac97462c8025fa4b6c3cec1b7894bd3d5"
+        },
+        "rec": {
+          "filename": "PP-OCRv6_rec_tiny.onnx",
+          "url": "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.10.0/onnx/PP-OCRv6/rec/PP-OCRv6_rec_tiny.onnx",
+          "sha256": "e16e242de5937ad92609223f19bc2aff3727ee40b095f996907c24749bad251b"
+        }
+      }
+    },
+    "gitBaseHead": "0a2a8738bf98e4c750d68116e02b741fe3e790ba",
+    "installedVersions": {
+      "rapidocr": "3.10.0",
+      "onnxruntime": "1.31.0",
+      "numpy": "2.3.5",
+      "opencv-python-headless": "5.0.0.93",
+      "Pillow": "12.1.0",
+      "psutil": "7.2.2",
+      "fastapi": "0.135.3",
+      "starlette": "1.0.0",
+      "pydantic": "2.12.4",
+      "redis": "8.1.0",
+      "fakeredis": "2.40.0",
+      "httpx": "0.28.1"
+    }
+  },
+  "method": {
+    "sampleCount": 20,
+    "consumerCount": 1,
+    "admission": "All originals uploaded, then 20 empty-field tickets admitted serially before consumer starts",
+    "timing": "perf_counter_ns in Store post-commit notifications; one callback's final cursor covers every change in that transaction; observer overhead included",
+    "queueWait": "Initial queued commit to first durable claim; includes remaining batch admission, reconciliation, Redis delivery and SQL claim, not pure Redis queue latency",
+    "ocr": "Production spawn per attempt, including process startup, model verification/load, inference and child cleanup; not warm inference time",
+    "percentiles": "Empirical median p50 and nearest-rank ceil(0.95*n) p95; single local run, no confidence or capacity claim",
+    "fixtures": "In-process authenticated ASGI HTTP, fakeredis Streams, S3ObjectStore with in-memory FakeS3Client, local generated poster with fixture metadata",
+    "limits": "No network/TLS, real Cognito, S3, Redis server, Commons retrieval, upload-network time, physical devices or EC2 capacity measured"
+  }
+}

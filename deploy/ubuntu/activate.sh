@@ -70,15 +70,13 @@ for line in Path(sys.argv[1]).read_text().splitlines():
     values[key] = value
 required = ['MEMOVERSE_COGNITO_REGION', 'MEMOVERSE_COGNITO_USER_POOL_ID',
             'MEMOVERSE_COGNITO_CLIENT_ID', 'MEMOVERSE_COGNITO_DOMAIN',
-            'MEMOVERSE_PUBLIC_URL', 'MEMOVERSE_SESSION_KEY', 'MEMOVERSE_TEMPLATE_DIR']
+            'MEMOVERSE_PUBLIC_URL', 'MEMOVERSE_SESSION_KEY']
 if any(not values.get(key) for key in required):
-    raise SystemExit('Authentication/template configuration is incomplete')
-if values.get('MEMOVERSE_DATA_DIR') != '/var/lib/memoverse-v2':
-    raise SystemExit('New application must use the separate schema-2 data directory')
+    raise SystemExit('Authentication configuration is incomplete')
+if values.get('MEMOVERSE_DATA_DIR') != '/var/lib/memoverse-v3':
+    raise SystemExit('New application must use the separate schema-3 data directory')
 if values.get('MEMOVERSE_STORAGE') != 's3' or not values.get('MEMOVERSE_S3_BUCKET') or not values.get('AWS_REGION'):
     raise SystemExit('Private S3 configuration is incomplete')
-if values.get('ANYIMAGE_PYTHON') not in (None, '', sys.argv[2] + '/backend/.venv/bin/python'):
-    raise SystemExit('ANYIMAGE_PYTHON must be omitted or point to this release interpreter')
 for key in ('MEMOVERSE_PUBLIC_URL', 'MEMOVERSE_COGNITO_DOMAIN'):
     parsed = urlsplit(values[key])
     if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('', '/'):

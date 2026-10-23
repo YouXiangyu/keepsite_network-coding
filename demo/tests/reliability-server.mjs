@@ -1,32 +1,36 @@
 import { createServer } from 'node:http';
+import { createHash, randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sampleData } from './web-fixtures.mjs';
-import { glb } from './glb-fixture.mjs';
+import { sampleData, sampleItem, media, pngHash, otherHash, otherPng } from './web-fixtures.mjs';
 
 const root = path.resolve(fileURLToPath(new URL('../dist/client/', import.meta.url)));
-const model = glb();
 const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=', 'base64');
-const backup = Buffer.from('504b0506000000000000000000000000000000000000', 'hex');
 let accounts = new Map();
+let csrfTokens = new Map();
+let uploads = new Map();
 let createFingerprints = new Map();
 let requests = [];
 let stalls = [];
 let hang;
+let rejectNext;
+let views = new Map();
+const peers = new Set();
+const capabilities = { processing: true, processingUnavailableReason: null, deviceSync: false, cloudStorage: true };
+function send(peer, value) { const bytes = Buffer.from(JSON.stringify(value)); const header = bytes.length < 126 ? Buffer.from([129, bytes.length]) : Buffer.from([129, 126, bytes.length >> 8, bytes.length & 255]); peer.socket.write(Buffer.concat([header, bytes])); }
+function notify(user) { for (const peer of peers) if (peer.user === user) send(peer, { v: 1, type: 'sync.hint', serverId: 'reliability', userId: user, cursor: account(user).revision }); }
 
 function account(user) {
   if (!accounts.has(user)) {
     const data = sampleData();
-    data.collections[0].title = `${user.toUpperCase()} 的海边`;
-    data.collections.push({ ...data.collections[0], id: 'item-2', title: '第二件收藏', modelUrl: '/api/models/item-2/model.glb' });
-    accounts.set(user, { revision: 1, data, generationRecovery: [] });
+    data.tickets[0].fields.title = `${user.toUpperCase()} 的电影票`;
+    accounts.set(user, { revision: 1, data, changes: [] });
   }
   return accounts.get(user);
 }
-const snapshot = user => ({ initialized: true, serverId: 'reliability', userId: user, ...account(user), generationEngine: { available: true } });
 const session = user => ({ authenticated: !!user, configured: true, providers: { email: true, google: false },
-  ...(user ? { user: { id: user, email: `${user}@example.test`, name: user }, csrfToken: `csrf-${user}` } : {}) });
+  ...(user ? { user: { id: user, email: `${user}@example.test`, name: user }, csrfToken: csrfTokens.get(user) ?? `csrf-${user}` } : {}) });
 
 async function bodyOf(request) {
   const buffers = [];
@@ -58,7 +62,15 @@ const server = createServer(async (request, response) => {
     const body = ['POST', 'PATCH', 'PUT', 'DELETE'].includes(method) ? await bodyOf(request) : undefined;
     if (pathname === '/__test/reset' && method === 'POST') {
       for (const stalled of stalls) stalled.response.destroy();
-      accounts = new Map(); createFingerprints = new Map(); requests = []; stalls = []; hang = undefined;
+      accounts = new Map(); csrfTokens = new Map(); uploads = new Map(); createFingerprints = new Map(); requests = []; stalls = []; hang = undefined; rejectNext = undefined; views = new Map();
+      return respond(response, pathname, method, { ok: true });
+    }
+    if (pathname === '/__test/reject' && method === 'POST') {
+      rejectNext = body;
+      return respond(response, pathname, method, { ok: true });
+    }
+    if (pathname === '/__test/renew' && method === 'POST') {
+      csrfTokens.set(body.user ?? 'a', 'csrf-renewed');
       return respond(response, pathname, method, { ok: true });
     }
     if (pathname === '/__test/hang' && method === 'POST') {
@@ -75,7 +87,7 @@ const server = createServer(async (request, response) => {
     if (pathname.startsWith('/api/')) {
       const cookie = request.headers.cookie?.match(/(?:^|;\s*)test-user=([^;]*)/)?.[1];
       const user = cookie === 'signed-out' ? '' : cookie || 'a';
-      requests.push({ path: pathname, method, body: Buffer.isBuffer(body) ? undefined : body });
+      requests.push({ path: pathname, method, body: Buffer.isBuffer(body) ? { uploadId: /name="uploadId"\r\n\r\n([^\r]+)/.exec(body.toString())?.[1] } : body });
       if (pathname === '/api/auth/session') return respond(response, pathname, method, session(user));
       if (pathname === '/api/auth/login') {
         const next = body.email.startsWith('b') ? 'b' : 'a';
@@ -87,32 +99,77 @@ const server = createServer(async (request, response) => {
         return respond(response, pathname, method, { ok: true });
       }
       if (!user) return respond(response, pathname, method, { detail: '请登录。' }, 401);
-      if (method !== 'GET' && request.headers['x-csrf-token'] !== `csrf-${user}`) return respond(response, pathname, method, { detail: 'CSRF' }, 403);
-      if (pathname === '/api/state') return respond(response, pathname, method, snapshot(user));
-      if (pathname.startsWith('/api/models/')) return respond(response, pathname, method, model, 200, 'model/gltf-binary');
-      if (pathname.startsWith('/api/media/')) return respond(response, pathname, method, image, 200, 'image/png');
-      if (pathname === '/api/backup') return respond(response, pathname, method, backup, 200, 'application/zip');
-      if (pathname === '/api/media') return respond(response, pathname, method, { assetId: 'uploaded', url: '/api/media/uploaded' });
+      if (method !== 'GET' && request.headers['x-csrf-token'] !== (csrfTokens.get(user) ?? `csrf-${user}`)) return respond(response, pathname, method, { detail: 'CSRF' }, 403);
+      if (pathname === '/api/sync/snapshot') {
+        const token = new URL(request.url, 'http://127.0.0.1').searchParams.get('pageToken');
+        const data = account(user); let view = token ? views.get(token) : { serverId: 'reliability', userId: user, snapshotId: randomUUID(), cursor: data.revision, tickets: structuredClone(data.data.tickets.filter(item => item.deletedAt === null)), offset: 0, expiresAt: Date.now() + 600000, capabilities };
+        if (!view || view.userId !== user) return respond(response, pathname, method, { detail: { code: 'snapshot_expired', message: '快照过期' } }, 410);
+        const total = view.tickets.length, end = Math.min(total, view.offset + 100), nextPageToken = end < total ? view.snapshotId + '-' + end : null;
+        if (nextPageToken) views.set(nextPageToken, { ...view, offset: end });
+        return respond(response, pathname, method, { ...view, total, tickets: view.tickets.slice(view.offset, end), nextPageToken });
+      }
+      if (pathname === '/api/sync/changes') {
+        const after = Number(new URL(request.url, 'http://127.0.0.1').searchParams.get('after')), data = account(user);
+        const changes = data.changes.filter(change => change.cursor > after).slice(0, 100), nextCursor = changes.at(-1)?.cursor ?? after;
+        return respond(response, pathname, method, { serverId: 'reliability', userId: user, fromCursor: after, nextCursor, headCursor: data.revision, hasMore: nextCursor < data.revision, changes, capabilities });
+      }
+      if (pathname.startsWith('/api/operations/')) {
+        const operationId = pathname.split('/')[3];
+        return respond(response, pathname, method, { serverId: 'reliability', operationId, applied: createFingerprints.has(`${user}/${operationId}`), committedCursor: createFingerprints.has(`${user}/${operationId}`) ? account(user).revision : null });
+      }
+      if (pathname.startsWith('/api/uploads/')) {
+        const upload = uploads.get(`${user}/${pathname.split('/')[3]}`);
+        return respond(response, pathname, method, upload ?? { detail: '上传不存在' }, upload ? 200 : 404);
+      }
+      if (pathname.endsWith('/download')) {
+        const hash = pathname.split('/')[3];
+        return respond(response, pathname, method, { ...media(), assetId: hash, sha256: hash, url: '/api/media/' + hash, size: hash === otherHash ? otherPng.length : image.length, transport: 'server', expiresAt: Date.now() + 60000 });
+      }
+      if (pathname.startsWith('/api/media/')) return respond(response, pathname, method, pathname.endsWith(otherHash) ? otherPng : image, 200, 'image/png');
+      if (pathname === '/api/media') {
+        const uploadId = /name="uploadId"\r\n\r\n([^\r]+)/.exec(body.toString())?.[1];
+        if (!uploadId) return respond(response, pathname, method, { detail: 'uploadId required' }, 422);
+        uploads.set(`${user}/${uploadId}`, { uploadId, status: 'stored', asset: media() });
+        return respond(response, pathname, method, { ...media(), uploadId });
+      }
+      if (rejectNext?.path === pathname && rejectNext.method === method) {
+        rejectNext = undefined;
+        return respond(response, pathname, method, { detail: '暂时无法提交，请核对后重试。' }, 503);
+      }
       const workspace = account(user);
-      if (pathname === '/api/collections' && method === 'POST') {
-        const key = `${user}/${body.id}`;
-        const fingerprint = JSON.stringify(body);
-        if (workspace.data.collections.some(item => item.id === body.id)) {
-          if (createFingerprints.get(key) !== fingerprint) return respond(response, pathname, method, { detail: '这件收藏已创建且内容不同，请刷新后编辑。' }, 409);
-        } else {
-          createFingerprints.set(key, fingerprint);
-          workspace.data.collections.push({
-            ...body, tags: body.tags ?? [], addedAt: 100, source: 'mine', version: 1,
-            generation: 'queued', generationJobId: 'job-new', customImage: '/api/media/uploaded',
-          });
-        }
-      } else if (pathname.startsWith('/api/collections/') && method === 'PATCH') {
-        const item = workspace.data.collections.find(item => item.id === pathname.split('/')[3]);
-        if (item.version !== body.version) return respond(response, pathname, method, { detail: '版本已更新，草稿仍保留。' }, 409);
-        Object.assign(item, body, { version: item.version + 1 });
+      const key = `${user}/${body?.operationId}`;
+      const fingerprint = JSON.stringify({ pathname, method, body });
+      if (createFingerprints.has(key)) {
+        if (createFingerprints.get(key) !== fingerprint) return respond(response, pathname, method, { detail: '操作标识已使用且内容不同。' }, 409);
+        return respond(response, pathname, method, { serverId: 'reliability', operationId: body.operationId, committedCursor: account(user).revision });
+      }
+      if (pathname.endsWith('/process') && method === 'POST') {
+        const item = workspace.data.tickets.find(item => item.id === pathname.split('/')[3]);
+        if (!item || item.deletedAt !== null) return respond(response, pathname, method, { detail: '票根不存在。' }, 404);
+        item.processing = { status: 'queued', error: null }; item.version += 1;
+      } else if (pathname === '/api/tickets' && method === 'POST') {
+        if (workspace.data.tickets.some(item => item.id === body.id)) return respond(response, pathname, method, { detail: '票根已创建，请核对后编辑。' }, 409);
+        const ticket = sampleItem(body.id);
+        ticket.processing = { status: 'queued', error: null };
+        ticket.fields = { title: '', cinema: '', hall: '', seat: '', showtime: '', ...body.fields };
+        workspace.data.tickets.push(ticket);
+      } else if (pathname.startsWith('/api/tickets/') && method === 'PATCH') {
+        const item = workspace.data.tickets.find(item => item.id === pathname.split('/')[3]);
+        if (!item || item.deletedAt !== null) return respond(response, pathname, method, { detail: '票根不存在。' }, 404);
+        Object.assign(item.fields, body.fields);
+        if (body.originalAssetId) item.media.original = { ...media(), assetId: body.originalAssetId, sha256: body.originalAssetId, url: '/api/media/' + body.originalAssetId, size: body.originalAssetId === otherHash ? otherPng.length : image.length };
+        item.version += 1;
+      } else if (pathname.startsWith('/api/tickets/') && method === 'DELETE') {
+        const item = workspace.data.tickets.find(item => item.id === pathname.split('/')[3]);
+        if (item) { item.deletedAt = Date.now(); item.version++; }
       } else return respond(response, pathname, method, { detail: 'Not found' }, 404);
+      if (body.originalAssetId) for (const [uploadKey, upload] of uploads) if (uploadKey.startsWith(user + '/') && upload.asset.assetId === body.originalAssetId) upload.status = 'attached';
+      createFingerprints.set(key, fingerprint);
       workspace.revision += 1;
-      return respond(response, pathname, method, snapshot(user));
+      const changed = workspace.data.tickets.find(item => item.id === (body.id ?? pathname.split('/')[3]));
+      workspace.changes.push(changed.deletedAt !== null ? { cursor: workspace.revision, type: 'delete', id: changed.id, version: changed.version, deletedAt: changed.deletedAt } : { cursor: workspace.revision, type: 'upsert', ticket: structuredClone(changed) });
+      notify(user);
+      return respond(response, pathname, method, { serverId: 'reliability', operationId: body.operationId, committedCursor: account(user).revision });
     }
     let filename = path.resolve(root, '.' + pathname);
     if (filename !== root && !filename.startsWith(root + path.sep)) return response.writeHead(404).end();
@@ -127,5 +184,16 @@ const server = createServer(async (request, response) => {
     if (!response.headersSent) response.writeHead(500);
     response.end();
   }
+});
+server.on('upgrade', (request, socket) => {
+  const cookie = request.headers.cookie?.match(/(?:^|;\s*)test-user=([^;]*)/)?.[1];
+  const user = cookie === 'signed-out' ? '' : cookie || 'a';
+  if (!user || request.url !== '/api/sync/events') { socket.end('HTTP/1.1 401 Unauthorized\r\n\r\n'); return; }
+  const accept = createHash('sha1').update(request.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+  socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
+  const peer = { user, socket }; peers.add(peer);
+  socket.on('error', () => peers.delete(peer)); socket.on('close', () => peers.delete(peer));
+  socket.on('data', bytes => { if ((bytes[0] & 15) === 8) socket.end(Buffer.from([136, 0])); });
+  send(peer, { v: 1, type: 'sync.ready', serverId: 'reliability', userId: user, cursor: account(user).revision });
 });
 server.listen(4176, '127.0.0.1');

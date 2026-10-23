@@ -20,8 +20,8 @@ cat <<PLAN
 Plan for Ubuntu 24.04:
   Host initialization requested: $INITIALIZE_HOST (apt/user/global logs only when 1).
   Prepare memoverse service user and $RELEASE Python 3.12 venv.
-  Link release .cache to /opt/memoverse/shared/cache; prepare separate account data at /var/lib/memoverse-v2; preserve old /var/lib/memoverse.
-  Install pinned CPU inference dependencies and verify/download one MoGe2 model.
+  Link release .cache to /opt/memoverse/shared/cache; prepare separate account data at /var/lib/memoverse-v3; preserve old /var/lib/memoverse and /var/lib/memoverse-v2.
+  Install pinned application and CPU OCR dependencies. Models require a separate explicit preparation; this installer does not download them.
   Initial host setup writes log limits; no environment or authentication defaults are created.
   Do NOT change current symlink, start application, enable a public Nginx site,
   create credentials/TLS/swap, or modify DNS. Planned origin: https://$DOMAIN
@@ -31,7 +31,7 @@ if (( ! EXECUTE )); then printf 'No changes made. Add --execute to perform this 
 source /etc/os-release
 [[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == 24.04 ]] || { printf 'This installer targets Ubuntu 24.04 only.\n' >&2; exit 1; }
 [[ -d "$RELEASE" && "$(realpath "$RELEASE")" == "$RELEASE" ]] || { printf 'Upload a real release directory first; symlink releases are rejected.\n' >&2; exit 1; }
-for file in backend/requirements.txt scripts/setup-anyimage.sh deploy/ubuntu/memoverse.service deploy/ubuntu/nginx.conf.template demo/dist/client/index.html; do
+for file in backend/requirements.txt deploy/ubuntu/memoverse.service deploy/ubuntu/nginx.conf.template demo/dist/client/index.html; do
   [[ -f "$RELEASE/$file" ]] || { printf 'Release missing %s\n' "$file" >&2; exit 1; }
 done
 if (( INITIALIZE_HOST )); then
@@ -52,7 +52,7 @@ if (( INITIALIZE_HOST )); then
   cleanup_policy
   POLICY_CREATED=0
   if ! id memoverse >/dev/null 2>&1; then
-    useradd --system --user-group --home-dir /var/lib/memoverse-v2 --shell /usr/sbin/nologin memoverse
+    useradd --system --user-group --home-dir /var/lib/memoverse-v3 --shell /usr/sbin/nologin memoverse
   fi
   install -d -o memoverse -g memoverse -m 0755 /opt/memoverse/shared /opt/memoverse/shared/cache
   install -d -o memoverse -g memoverse -m 0750 /opt/memoverse/shared/cache/tmp /opt/memoverse/shared/cache/pip
@@ -64,8 +64,8 @@ else
   command -v nginx >/dev/null
   [[ -d /opt/memoverse/shared/cache ]] || { echo "Host paths/environment are incomplete." >&2; exit 1; }
 fi
-[[ ! -L /var/lib/memoverse-v2 ]] || { echo "Account data directory cannot be a symlink." >&2; exit 1; }
-install -d -o memoverse -g memoverse -m 0700 /var/lib/memoverse-v2
+[[ ! -L /var/lib/memoverse-v3 ]] || { echo "Account data directory cannot be a symlink." >&2; exit 1; }
+install -d -o memoverse -g memoverse -m 0700 /var/lib/memoverse-v3
 if [[ -e "$RELEASE/.cache" || -L "$RELEASE/.cache" ]]; then
   [[ -L "$RELEASE/.cache" && "$(realpath "$RELEASE/.cache")" == /opt/memoverse/shared/cache ]] || { printf 'Release .cache exists and is not the expected shared link; nothing removed.\n' >&2; exit 1; }
 else
@@ -77,7 +77,6 @@ if [[ ! -x "$RELEASE/backend/.venv/bin/python" ]]; then
 fi
 runuser -u memoverse -- env PIP_CACHE_DIR=/opt/memoverse/shared/cache/pip TMPDIR=/opt/memoverse/shared/cache/tmp \
   "$RELEASE/backend/.venv/bin/python" -B -m pip install --only-binary=:all: -r "$RELEASE/backend/requirements.txt"
-runuser -u memoverse -- bash "$RELEASE/scripts/setup-anyimage.sh" --execute --python "$RELEASE/backend/.venv/bin/python"
 if (( INITIALIZE_HOST )); then
   install -d -o root -g root -m 0755 /etc/systemd/journald.conf.d
   cat > /etc/systemd/journald.conf.d/60-memoverse-limits.conf <<'JOURNAL'
