@@ -22,7 +22,7 @@ interface Transfer {
   candidates: (RTCIceCandidateInit | null)[]; localCandidates: (RTCIceCandidateInit | null)[]; localDescriptionQueued: boolean;
   iceCount: number; remoteIceCount: number; signalBytes: number; signals: Promise<void>; outgoing: Promise<void>;
   tick?: ReturnType<typeof setInterval>; renewAt: number; renewing: boolean; closed: boolean; noRetry: boolean; retryable: boolean; started: number; record: TransferRecord;
-  routeAt: number; routeTask?: Promise<void>; verified: boolean;
+  routeAt: number; routeTask?: Promise<void>; verified: boolean; sourceCompleted?: boolean; sourceComplete?: () => void;
 }
 export class PeerMedia implements PeerMediaPort {
   private port: AccountEventPort;
@@ -213,9 +213,10 @@ export class PeerMedia implements PeerMediaPort {
     if (message.type === 'peer.signal' && transfer) {
       transfer.signals = transfer.signals.then(() => this.signal(transfer, message)).catch(error => { transfer.noRetry = true; this.closeTransfer(transfer, error instanceof Error ? error.message : '信令失败'); });
     } else if (message.type === 'peer.cancelled' && transfer) {
-      // The receiver has already verified the bytes; a normal sender completion
-      // does not invalidate the local verification/metrics handoff in progress.
-      if (message.reason === 'complete' && transfer.role === 'receive' && transfer.verified) return;
+      // Only the source can confirm it consumed our DataChannel verified message.
+      if (message.reason === 'complete' && transfer.role === 'receive' && transfer.verified) {
+        transfer.sourceCompleted = true; transfer.sourceComplete?.(); return;
+      }
       transfer.noRetry = message.reason !== 'transport_error';
       this.closeTransfer(transfer, message.reason === 'transport_error' ? '设备连接中断' : message.reason || '对端取消传输', false, message.reason === 'transport_error');
     }
@@ -276,7 +277,12 @@ export class PeerMedia implements PeerMediaPort {
       if (!transfer.localDescriptionQueued) transfer.localCandidates.push(payload); else this.sendSignal(transfer, 'ice', payload);
     };
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'failed' || pc.connectionState === 'closed' || pc.connectionState === 'disconnected') this.closeTransfer(transfer, '设备连接中断', true, true);
+      if (pc.connectionState === 'failed' || pc.connectionState === 'closed' || pc.connectionState === 'disconnected') {
+        // The source may close SCTP before its WebSocket completion arrives.
+        // After local verification, retain the original stall/lease/deadline bounds while awaiting that signal.
+        if (transfer.role === 'receive' && transfer.verified) return;
+        this.closeTransfer(transfer, '设备连接中断', true, true);
+      }
       else if (pc.connectionState === 'connected') void this.route(transfer);
     };
     return pc;
@@ -325,6 +331,17 @@ export class PeerMedia implements PeerMediaPort {
     await pc.setRemoteDescription(description); this.guardTransfer(transfer);
     for (const candidate of transfer.candidates.splice(0)) { await pc.addIceCandidate(candidate ?? undefined); this.guardTransfer(transfer); }
     if (transfer.role === 'send') { const answer = await pc.createAnswer(); this.guardTransfer(transfer); await pc.setLocalDescription(answer); this.guardTransfer(transfer); await this.sendDescription(transfer, 'answer', { type: 'answer', sdp: answer.sdp }); }
+  }
+  private waitForSourceCompletion(transfer: Transfer): Promise<void> {
+    this.guardTransfer(transfer);
+    if (transfer.sourceCompleted) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const cleanup = () => { transfer.sourceComplete = undefined; transfer.controller.signal.removeEventListener('abort', abort); };
+      const abort = () => { cleanup(); reject(abortError()); };
+      transfer.sourceComplete = () => { cleanup(); resolve(); };
+      transfer.controller.signal.addEventListener('abort', abort, { once: true });
+      if (transfer.controller.signal.aborted) abort();
+    });
   }
   private closeTransfer(transfer: Transfer, reason: string, notify = true, retryable = false) {
     if (transfer.closed) return; transfer.closed = true; transfer.retryable = retryable; clearInterval(transfer.tick);
@@ -429,7 +446,8 @@ export class PeerMedia implements PeerMediaPort {
           }); void receiving.catch(() => {});
           const offer = await pc.createOffer(); this.guardTransfer(transfer); await pc.setLocalDescription(offer); this.guardTransfer(transfer);
           await this.sendDescription(transfer, 'offer', { type: 'offer', sdp: offer.sdp });
-          const blob = await receiving; this.guardTransfer(transfer); await this.route(transfer); this.guardTransfer(transfer); this.closeTransfer(transfer, 'complete');
+          const blob = await receiving; this.guardTransfer(transfer); await this.route(transfer); await this.waitForSourceCompletion(transfer);
+          this.guardTransfer(transfer); this.closeTransfer(transfer, 'complete', false);
           succeeded = true; return { blob, transport: 'peer' };
         } catch (error) {
           const retryable = transfer?.retryable || transportFailure(error);

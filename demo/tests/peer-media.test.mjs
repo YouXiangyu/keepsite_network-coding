@@ -191,3 +191,61 @@ test('expiration while awaiting post-verification connection statistics cannot r
   await settle(); assert.equal(await h.peer.tryDownload(media(), new AbortController().signal), null); assert.equal(statsStarted, true);
   assert.equal(h.messages.filter(message => message.type === 'peer.open').length, 1);
 });
+
+for (const outcome of ['source-complete', 'source-early', 'cancel', 'deadline', 'deadline-closed', 'expired']) {
+  test(`verified receiver waits for delayed source completion and handles ${outcome}`, async context => {
+    context.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+    let clock = 0, channel, pc, verifiedResolve, releaseStats;
+    context.mock.method(performance, 'now', () => clock);
+    const verifiedSent = new Promise(resolve => { verifiedResolve = resolve; });
+    const h = setup({ respond(message, emit) {
+      if (message.type === 'peer.find') { emit({ type: 'peer.sources', requestId: message.requestId, assetId: message.assetId, peers: [{ peerId: 'source', name: 'source' }] }); return false; }
+      if (message.type === 'peer.open') { emit({ type: 'peer.pending', requestId: message.requestId, transferId: 'delayed-transfer' }); setImmediate(() => emit({ type: 'peer.authorized', transferId: 'delayed-transfer', media: media(), requesterPeerId: 'peer', sourcePeerId: 'source', offererPeerId: 'peer', leaseMs: 10000 })); return false; }
+      if (message.type === 'peer.signal') { emit({ type: 'peer.signalled', requestId: message.requestId, transferId: 'delayed-transfer' }); setImmediate(() => { channel.readyState = 'open'; channel.dispatchEvent(new Event('open')); }); return false; }
+    } });
+    class Channel extends EventTarget {
+      readyState = 'connecting'; bufferedAmount = 0;
+      send(raw) {
+        const value = JSON.parse(raw);
+        if (value.type === 'verified') { this.bufferedAmount = raw.length; verifiedResolve(); return; }
+        if (value.type !== 'get') return;
+        queueMicrotask(() => {
+          const frame = new ArrayBuffer(png.length + 8); new DataView(frame).setUint32(4, png.length); new Uint8Array(frame, 8).set(png);
+          this.dispatchEvent(new MessageEvent('message', { data: frame }));
+          this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ v: 1, type: 'end', size: png.length }) }));
+        });
+      }
+    }
+    globalThis.RTCPeerConnection = class {
+      connectionState = 'new'; sctp = { maxMessageSize: 16384 }; closed = false;
+      constructor() { pc = this; }
+      close() { this.closed = true; }
+      createDataChannel() { channel = new Channel(); return channel; }
+      async createOffer() { return { type: 'offer', sdp: 'synthetic offer' }; }
+      async setLocalDescription() {}
+      async getStats() { return outcome === 'source-early' ? new Promise(resolve => { releaseStats = resolve; }) : new Map(); }
+    };
+    await settle(); const controller = new AbortController(); let settled = false;
+    const pending = h.peer.tryDownload(media(), controller.signal).then(result => { settled = true; return result; });
+    await verifiedSent; await settle();
+    assert.equal(settled, false); assert.equal(pc.closed, false);
+    assert.equal(h.messages.some(message => message.type === 'peer.cancel' && message.reason === 'complete'), false);
+    if (outcome === 'source-complete' || outcome === 'source-early') {
+      channel.bufferedAmount = 0; await settle(); assert.equal(settled, false, 'Local drain alone is not remote consumption');
+      pc.connectionState = 'disconnected'; pc.onconnectionstatechange();
+      h.emit({ type: 'peer.cancelled', transferId: 'delayed-transfer', reason: 'complete' });
+      if (outcome === 'source-early') releaseStats(new Map());
+      assert.equal((await pending)?.transport, 'peer');
+    } else {
+      if (outcome === 'cancel') controller.abort();
+      else if (outcome === 'expired') h.emit({ type: 'peer.cancelled', transferId: 'delayed-transfer', reason: 'expired' });
+      else {
+        if (outcome === 'deadline-closed') { channel.readyState = 'closed'; pc.connectionState = 'disconnected'; pc.onconnectionstatechange(); }
+        clock = 12001; context.mock.timers.tick(12001);
+      }
+      assert.equal(await pending, null);
+    }
+    assert.equal(pc.closed, true); assert.equal(h.peer.snapshot().receiving, 0);
+    assert.equal(h.peer.transfers.size, 0);
+  });
+}
