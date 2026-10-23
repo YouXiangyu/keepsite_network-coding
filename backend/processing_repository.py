@@ -20,6 +20,12 @@ def emit(store, db, user_id, ticket_id):
     store.record_ticket_change(db, user_id, present_ticket(store, db, user_id, row))
 
 
+def clear_poster(db, user_id, ticket_id):
+    """Withdraw a current terminal job's cover; stored objects remain recoverable."""
+    db.execute("UPDATE tickets SET poster_asset_id=NULL WHERE user_id=? AND id=?", (user_id, ticket_id))
+    db.execute("DELETE FROM poster_sources WHERE user_id=? AND ticket_id=?", (user_id, ticket_id))
+
+
 def cancel_current(db, user_id, ticket_id):
     db.execute("UPDATE processing_jobs SET status='cancelled',lease_until=0,updated_at=? WHERE id IN (SELECT job_id FROM ticket_processing WHERE user_id=? AND ticket_id=?) AND status IN ('queued','ocr','poster')",
                (now_ms(), user_id, ticket_id))
@@ -72,6 +78,7 @@ def claim(store, identifier, owner):
         if row["attempts"] >= MAX_ATTEMPTS or row["deadline_at"] <= stamp:
             db.execute("UPDATE processing_jobs SET status='failed',error=?,lease_until=0,updated_at=? WHERE id=?",
                        ("处理重试已结束，原票已保留，请手动重试。", stamp, identifier))
+            clear_poster(db, row["user_id"], row["ticket_id"])
             emit(store, db, row["user_id"], row["ticket_id"])
             return None
         state = "poster" if row["ocr_fields"] is not None else "ocr"
@@ -146,6 +153,8 @@ def finish(store, job, prepared=None):
                        (descriptor["id"], job["user_id"], job["ticket_id"]))
             db.execute("INSERT INTO poster_sources VALUES (?,?,?,?) ON CONFLICT(user_id,ticket_id) DO UPDATE SET asset_id=excluded.asset_id,source=excluded.source",
                        (job["user_id"], job["ticket_id"], descriptor["id"], encode(source)))
+        else:
+            clear_poster(db, job["user_id"], job["ticket_id"])
         db.execute("UPDATE processing_jobs SET status=?,error=NULL,lease_until=0,updated_at=? WHERE id=?",
                    ("ready" if prepared else "no_match", stamp, job["id"]))
         emit(store, db, job["user_id"], job["ticket_id"])
@@ -168,6 +177,8 @@ def fail(store, job, *, interrupted=False):
         stamp = now_ms()
         db.execute("UPDATE processing_jobs SET status=?,error=?,lease_until=0,next_attempt_at=?,last_enqueued_at=0,updated_at=? WHERE id=?",
                    ("queued" if retry else "failed", message, stamp + min(30_000, 2 ** persisted["attempts"] * 1000), stamp, job["id"]))
+        if not retry:
+            clear_poster(db, job["user_id"], job["ticket_id"])
         emit(store, db, job["user_id"], job["ticket_id"])
         return True
 
@@ -202,6 +213,7 @@ def expire_jobs(store, limit=50):
             db.execute("UPDATE processing_jobs SET status=?,error=?,lease_until=0,updated_at=? WHERE id=?",
                        ("failed" if ticket else "cancelled", "处理等待已超时，原票已保留，请手动重试。", now_ms(), identifier))
             if ticket:
+                clear_poster(db, job["user_id"], job["ticket_id"])
                 emit(store, db, job["user_id"], job["ticket_id"])
             expired += 1
     return expired

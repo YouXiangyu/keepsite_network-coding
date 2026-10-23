@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import sqlite3
 
@@ -166,3 +167,56 @@ def test_initialization_interruption_never_publishes_startable_destination(legac
     assert not destination.exists()
     staging = next(tmp_path.glob(".never-published.migration-*"))
     assert (staging / "RESTORE_INCOMPLETE").is_file()
+
+
+@pytest.mark.parametrize("kind", ["empty-directory", "directory", "file", "dangling-link"])
+def test_destination_appearing_at_publication_is_never_replaced(legacy, tmp_path, monkeypatch, kind):
+    from backend import filesystem
+    from backend.object_storage import LocalObjectStore
+    from backend.store import Store
+
+    source, media, asset_id, raw = legacy
+    before = migration.digest(source)
+    destination = tmp_path / "competing-v3"
+    sentinel = b"another owner's data"
+    publish = filesystem.publish_directory_noreplace
+    identity = []
+
+    def race(staging, target):
+        assert target == destination and not os.path.lexists(target)
+        assert (staging / "RESTORE_INCOMPLETE").is_file()
+        if kind in {"empty-directory", "directory"}:
+            target.mkdir()
+            if kind == "directory":
+                (target / "keep").write_bytes(sentinel)
+        elif kind == "file":
+            target.write_bytes(sentinel)
+        else:
+            try:
+                target.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+            except OSError as error:
+                pytest.skip(f"Creating a test symlink is not permitted: {error}")
+        identity.append(target.lstat().st_ino)
+        publish(staging, target)
+
+    monkeypatch.setattr(filesystem, "publish_directory_noreplace", race)
+    with pytest.raises(OSError):
+        migration.migrate(source, media, destination)
+    assert os.path.lexists(destination) and destination.lstat().st_ino == identity[0]
+    if kind == "directory":
+        assert list(destination.iterdir()) == [destination / "keep"]
+        assert (destination / "keep").read_bytes() == sentinel
+    elif kind == "file":
+        assert destination.read_bytes() == sentinel
+    elif kind == "empty-directory":
+        assert list(destination.iterdir()) == []
+    else:
+        assert destination.is_symlink() and not (tmp_path / "missing-target").exists()
+    staging = next(tmp_path.glob(".competing-v3.migration-*"))
+    assert (staging / "RESTORE_INCOMPLETE").is_file()
+    assert migration.digest(staging / "migration/source-schema2.sqlite3") == before
+    assert (staging / "objects/media" / f"{asset_id}.png").read_bytes() == raw
+    assert migration.digest(source) == before
+    assert (media / "media" / f"{asset_id}.png").read_bytes() == raw
+    with pytest.raises(RuntimeError, match="[Ii]ncomplete"):
+        Store(staging, storage=LocalObjectStore(staging / "objects"))

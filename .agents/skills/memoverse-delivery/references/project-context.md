@@ -2,9 +2,9 @@
 
 云资源核验基准：2026-10-18，北京时间；Git 状态、文档结构与本机开发进度更新于 2026-10-23，本次未重新核验云资源。以下是定位信息，不能替代操作前的实时查询。
 
-2026-10-23 Git 交付整理：`codex/movie-ticket-web@ff341c2` 已完成 Web M1—M6 并推送，包含 300 条记录的 540 个主读取任务、20 张合成票据的真实 OCR 流水线及独立审查；该提交原三项 CI 均成功。本次创建 Web PR #4，合并必须等待其当前 head 的最新检查与 GitHub Codex 审查，不将“PR 已创建”写成“已合并”。文档分支 `docs/spec-and-dev-plan@df53192` 是 Web 分支的完整祖先，Web 保留历史合并后可清理。旧浮雕分支 `codex/subject-relief-prototype@0594620` 有 10 个独有提交，不合入新版；未取得单独的归档删除确认前保留。
+2026-10-23 Git 交付整理：Web PR #4 已按用户明确授权以保留历史的 merge commit `6126bf50e5b2bf96e3bef1d2e842328cb7d7e0a8` 合入 `main`，本地与 GitHub 主线已读回核对。合并前最新 head `2ebd2b09959280c5d721e9a1503a6d1d392800c0` 的 `Backend tests`、`Frontend tests`、`deployment-recovery` 均成功，Codex 对该提交的审查已完成且无未解决问题。旧海报残留、恢复保护标记与迁移并发覆盖三项修复均有回归测试；最新 Linux 后端 CI 为 477 项及 11 子测试通过、无跳过。本次主线交付范围为文档与 Web M1—M6，包含 300 条记录的 540 个主读取任务及 20 张合成票据的真实 OCR 流水线。已验证文档分支 `docs/spec-and-dev-plan@df53192` 与 Web head 均为主线祖先，随后删除这两个本地/远端分支并清理专用测试工作树。旧浮雕分支的 10 个独有提交按用户另行授权保存在已推送标签 `archive/subject-relief-prototype-20261023`（指向 `0594620`），PR #3 已关闭、分支已删除，未合入新版。
 
-原生 Android 工作保存在独立 `codex/android-native-progress` 的 M7 WIP 检查点，不作为已验收交付。当前两个 4180 测试 APK、34 项 JVM 测试与 Lint 通过；后台闲置连接 EOF 已修复并通过相同 6000ms 场景复测。完整 UI 矩阵、原生 CRUD、Android↔Web 双向传图、默认 HTTPS 验收包和两台真机验收尚未完成。全量本地后端 472 项及 11 子测试通过、5 项明确跳过；随后测试夹具定点 4 项通过。准确边界见开发计划、Android README 与 `docs/evidence/android-m7-checkpoint-20261023.json`。本次 Git 整理不恢复大规模功能联调；临时模拟器、本机夹具和自建 ADB 已关闭，个人新增的 `docs/UI_example/` 和既有 `output/pdf/` 保留、不夹带进代码提交。
+原生 Android 工作继续保存在独立 `codex/android-native-progress` 的 M7 WIP 检查点，本次同步已合入主线的审查修复，不作为已验收交付。此前两个 4180 测试 APK、34 项 JVM 测试与 Lint 通过；后台闲置连接 EOF 已修复并通过相同 6000ms 场景复测。完整 UI 矩阵、原生 CRUD、Android↔Web 双向传图、默认 HTTPS 验收包和两台真机验收尚未完成。全量本地后端 472 项及 11 子测试通过、5 项明确跳过；随后测试夹具定点 4 项通过。准确边界见开发计划、Android README 与 `docs/evidence/android-m7-checkpoint-20261023.json`。`a2cb349` 的 Android、后端及部署恢复 CI 通过，前端任务因依赖准备耗时而触及 20 分钟上限，未报告为通过；同步后的验证以进度分支最新提交为准，Web PR 的检查不能代替 M7 验收。本次 Git 整理不恢复大规模功能联调；临时模拟器、本机夹具和自建 ADB 已关闭，个人新增的 `docs/UI_example/` 和既有 `output/pdf/` 保留、不夹带进代码提交。
 
 产品方向仍为私有 S3 长期保存原票与海报、账号缓存、P2P 加速和服务器回退，服务端使用轻量 CPU OCR。以上本机结果使用合成数据、fakeredis 与本机/内存对象存储，不证明真实 S3、TURN、Cognito、跨网络或物理设备验收；免费 TURN 保持关闭。这些改动均未发布到 EC2。下列云资源位置仅供后续明确授权操作定位；旧模型、用户数据和回滚文件不得因文档或分支整理清理。EC2 非常驻时的信令与鉴权可用性仍按用户要求暂缓决定，本次不改变 58 分钟定时器、不启动或部署云资源。
 
@@ -97,7 +97,7 @@ HTTPS 由源站 Nginx 使用 Let's Encrypt 证书提供，`certbot.timer` 续期
 
 ## 现有约束与文档
 
-- 2026-10-21 GitHub API 核验：可靠性 PR #1 与观测能力 PR #2 已合并；“增加本地浮雕调参实验台及跨平台实验 CI”（PR #3，head `0594620`）仍开放。该 head 的五项 CI 均成功，Codex 审查已完成但汇总仍标记存在未解决意见。浮雕已退出新范围；本轮未合并或关闭该 PR，不能沿用它的检查结果验收新方案。
+- 2026-10-23 GitHub API 核验：可靠性 PR #1、观测能力 PR #2 与电影票 Web PR #4 已合并。旧浮雕 PR #3 已关闭但未合并，代码以归档标签保留；其历史检查结果不用于验收新版。
 
 - 2026-10-18 合并流程核验：`main` 已包含 PR #1 的解耦、可靠性修复及前后端 CI。当时 PR 和 main push 自动运行 `Backend tests`、`Frontend tests` 与 `deployment-recovery`；2026-10-22 的 M2 同时将分支触发扩至 `codex/**`，`f1e2039` 的三项检查均成功。Codex 仓库自动代码审查已设置为“所有 PR”“每次推送时”；这不自动批准或合并 PR。
 - 同日读取 GitHub 设置：当前私有仓库没有 classic branch protection 或 ruleset；两类设置页面均提示当前套餐不会强制执行私有仓库保护规则。未创建无效规则，未改变仓库可见性或账户套餐。因此当前是代理遵循的合并检查流程，不能宣称平台已强制拦截；后续套餐或配置变化须重新核验。

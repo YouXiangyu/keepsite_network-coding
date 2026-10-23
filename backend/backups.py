@@ -13,6 +13,7 @@ import zipfile
 from fastapi import HTTPException
 from pydantic import TypeAdapter, ValidationError
 
+from . import filesystem
 from .contracts import FIELD_NAMES, Identifier, TicketFields
 from .media import image_info, MAX_IMAGE_BYTES
 from .object_storage import LocalObjectStore, StorageError
@@ -279,12 +280,16 @@ def restore_account_backup(archive: Path, destination: Path, *, user_id: str):
             with closing(store.connect()) as db:
                 db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 db.execute("PRAGMA journal_mode=DELETE")
-            destination.mkdir()
-            marker = destination / "RESTORE_INCOMPLETE"
-            marker.write_text("Restoration did not finish. Do not run this directory.\n", encoding="utf-8")
-            for child in root.iterdir():
-                os.rename(child, destination / child.name)
-            marker.unlink()
+            # The chosen destination remains absent while the guard is written.
+            # A crash after publication exposes a complete, guarded tree; no
+            # directory can become visible between mkdir and marker creation.
+            marker = root / "RESTORE_INCOMPLETE"
+            with marker.open("x", encoding="utf-8", newline="\n") as output:
+                output.write("Restoration did not finish. Do not run this directory.\n")
+                output.flush()
+                os.fsync(output.fileno())
+            filesystem.publish_directory_noreplace(root, destination)
+            (destination / "RESTORE_INCOMPLETE").unlink()
         return {"verified": True, "userId": user_id, "destination": str(destination),
                 "tickets": len(manifest["tickets"]), "files": len(live_assets)}
     except (KeyError, TypeError, UnicodeError, ValueError, zipfile.BadZipFile, StorageError, HTTPException, ValidationError) as error:

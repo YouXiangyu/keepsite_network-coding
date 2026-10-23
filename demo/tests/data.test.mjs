@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { validateData, validPosterSource } from '../src/data.ts';
+import { processingActive, processingDescription } from '../src/features/tickets/processing.ts';
 import { sampleData, media, posterSource } from './web-fixtures.mjs';
 
 test('empty ticket libraries and unprocessed saved originals are valid', () => {
@@ -34,6 +35,18 @@ test('processing stages and published poster provenance are validated together',
   assert.throws(() => validateData(data));
   data.tickets[0].media.poster = { ...media(), source: posterSource() }; validateData(data);
   data.tickets[0].media.poster.cloudStatus = 'not_configured'; assert.throws(() => validateData(data));
+});
+test('no-match explains original-ticket fallback while active processing retains the current image', () => {
+  assert.equal(processingActive('no_match'), false);
+  assert.match(processingDescription('no_match'), /原票作为封面/);
+  assert.doesNotMatch(processingDescription('no_match'), /已有封面|已有海报|旧封面/);
+  for (const status of ['queued', 'ocr', 'poster']) assert.equal(processingActive(status), true);
+  assert.match(processingDescription('poster'), /新封面发布前保留当前图片/);
+});
+test('failure description stays accurate when backup restoration retains a verified poster', () => {
+  assert.equal(processingActive('failed'), false);
+  assert.match(processingDescription('failed'), /原票照片仍被保留/);
+  assert.doesNotMatch(processingDescription('failed'), /封面|海报|显示/);
 });
 test('poster links only accept approved Commons and matching license URLs', () => {
   assert.equal(validPosterSource(posterSource()), true);

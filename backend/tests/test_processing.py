@@ -213,7 +213,7 @@ def test_user_fields_are_not_overwritten_and_no_match_is_terminal(tmp_path):
         assert result["media"]["poster"] is None and len(fake.objects) == 1
 
 
-def test_original_change_clears_only_old_ocr_fields_and_preserves_prior_poster(tmp_path):
+def test_original_change_preserves_poster_while_pending_then_no_match_uses_original(tmp_path):
     results = iter([{"title": "Old OCR", "cinema": "Old OCR cinema"}, {}])
     with pipeline(tmp_path, runner=lambda *args, **kwargs: next(results)) as (client, app, worker, fake, provider, _):
         create(client, fields={"seat": "User seat"})
@@ -231,7 +231,127 @@ def test_original_change_clears_only_old_ocr_fields_and_preserves_prior_poster(t
         result = ticket(client)
         assert result["processing"]["status"] == "no_match"
         assert result["fields"]["title"] == result["fields"]["cinema"] == ""
-        assert result["media"]["poster"] == first["media"]["poster"]
+        assert result["media"]["poster"] is None
+        assert result["media"]["original"]["assetId"] == replacement["assetId"]
+        assert client.get(first["media"]["poster"]["url"]).status_code == 404
+        assert client.get(replacement["url"]).status_code == 200
+        with app.state.store.transaction() as db:
+            assert db.execute("SELECT COUNT(*) FROM poster_sources WHERE user_id=? AND ticket_id='ticket-1'", (OWNER,)).fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("ending", ["no_match", "fail", "claim_attempts", "claim_deadline", "expire"])
+def test_terminal_reprocessing_withdraws_old_cover_atomically_and_notifies(ending, tmp_path):
+    with pipeline(tmp_path) as (client, app, worker, fake, *_):
+        create(client)
+        worker.run_once()
+        first = ticket(client)
+        old_poster, original = first["media"]["poster"], first["media"]["original"]
+        objects_before = dict(fake.objects)
+        assert client.post("/api/tickets/ticket-1/process", headers=WRITE_HEADERS,
+                           json={"operationId": "process-again"}).status_code == 200
+        assert ticket(client)["media"]["poster"] == old_poster
+        identifier = current_job(app.state.store)["id"]
+        job = None
+        if ending in ("no_match", "fail"):
+            job = repository.claim(app.state.store, identifier, worker.owner)
+            assert repository.save_ocr(app.state.store, job, {}) is not None
+            assert ticket(client)["media"]["poster"] == old_poster
+        if ending == "fail":
+            assert repository.fail(app.state.store, job)
+            retrying = ticket(client)
+            assert retrying["processing"]["status"] == "queued" and retrying["media"]["poster"] == old_poster
+            assert client.get(old_poster["url"]).status_code == 200
+            force_due(app.state.store, identifier)
+            job = repository.claim(app.state.store, identifier, worker.owner)
+        with app.state.store.transaction(True) as db:
+            if ending in ("fail", "claim_attempts"):
+                db.execute("UPDATE processing_jobs SET attempts=? WHERE id=?", (repository.MAX_ATTEMPTS, identifier))
+            elif ending in ("claim_deadline", "expire"):
+                db.execute("UPDATE processing_jobs SET deadline_at=0 WHERE id=?", (identifier,))
+            assert db.execute("SELECT COUNT(*) FROM poster_sources WHERE user_id=? AND ticket_id='ticket-1'", (OWNER,)).fetchone()[0] == 1
+        before = account_snapshot(client)
+        observed = []
+        unsubscribe = app.state.store.subscribe_changes(lambda user, cursor: observed.append((user, cursor)))
+        try:
+            if ending == "no_match":
+                assert repository.finish(app.state.store, job)
+            elif ending == "fail":
+                assert repository.fail(app.state.store, job)
+            elif ending.startswith("claim_"):
+                assert repository.claim(app.state.store, identifier, worker.owner) is None
+            else:
+                assert repository.expire_jobs(app.state.store) == 1
+        finally:
+            unsubscribe()
+        after = account_snapshot(client)
+        result = after["tickets"][0]
+        assert result["processing"]["status"] == ("no_match" if ending == "no_match" else "failed")
+        assert result["media"] == {"original": original, "poster": None}
+        assert result["version"] == before["tickets"][0]["version"] + 1
+        assert after["cursor"] == before["cursor"] + 1
+        assert observed == [(OWNER, after["cursor"])]
+        response = client.get("/api/sync/changes", params={"serverId": before["serverId"], "after": before["cursor"]})
+        assert response.status_code == 200
+        assert response.json()["changes"] == [{"type": "upsert", "cursor": after["cursor"], "ticket": result}]
+        with app.state.store.transaction() as db:
+            assert db.execute("SELECT COUNT(*) FROM poster_sources WHERE user_id=? AND ticket_id='ticket-1'", (OWNER,)).fetchone()[0] == 0
+        assert client.get(old_poster["url"]).status_code == 404
+        assert client.get(original["url"]).status_code == 200
+        assert fake.objects == objects_before  # Reference withdrawal never deletes stored image bytes.
+
+
+def test_terminal_cover_withdrawal_rolls_back_with_the_state_and_change_log(tmp_path, monkeypatch):
+    with pipeline(tmp_path) as (client, app, worker, *_):
+        create(client)
+        worker.run_once()
+        client.post("/api/tickets/ticket-1/process", headers=WRITE_HEADERS, json={"operationId": "process-again"})
+        job = repository.claim(app.state.store, current_job(app.state.store)["id"], worker.owner)
+        before = account_snapshot(client)
+        observed = []
+        unsubscribe = app.state.store.subscribe_changes(lambda user, cursor: observed.append((user, cursor)))
+        original_record = app.state.store.record_ticket_change
+        def broken_record(*args):
+            original_record(*args)
+            raise RuntimeError("injected publication rollback")
+        monkeypatch.setattr(app.state.store, "record_ticket_change", broken_record)
+        try:
+            with pytest.raises(RuntimeError, match="publication rollback"):
+                repository.finish(app.state.store, job)
+        finally:
+            unsubscribe()
+        assert account_snapshot(client) == before and observed == []
+        with app.state.store.transaction() as db:
+            assert db.execute("SELECT COUNT(*) FROM poster_sources WHERE user_id=? AND ticket_id='ticket-1'", (OWNER,)).fetchone()[0] == 1
+        assert client.get(before["tickets"][0]["media"]["poster"]["url"]).status_code == 200
+
+
+@pytest.mark.parametrize("superseded", ["lease", "input", "deleted"])
+def test_obsolete_processing_cannot_withdraw_a_current_cover(superseded, tmp_path):
+    with pipeline(tmp_path) as (client, app, worker, *_):
+        create(client)
+        worker.run_once()
+        client.post("/api/tickets/ticket-1/process", headers=WRITE_HEADERS, json={"operationId": "process-again"})
+        old = repository.claim(app.state.store, current_job(app.state.store)["id"], "old-worker")
+        if superseded == "lease":
+            force_due(app.state.store, old["id"])
+            newer = repository.claim(app.state.store, old["id"], "new-worker")
+            assert newer["lease_token"] > old["lease_token"]
+        elif superseded == "input":
+            assert patch(client, {"title": "Corrected title"}, "corrected").status_code == 200
+            worker.run_once()
+            assert ticket(client)["processing"]["status"] == "ready"
+        else:
+            assert delete(client).status_code == 200
+        before = account_snapshot(client)
+        with app.state.store.transaction() as db:
+            source = tuple(db.execute("SELECT asset_id,source FROM poster_sources WHERE user_id=? AND ticket_id='ticket-1'", (OWNER,)).fetchone())
+        assert repository.finish(app.state.store, old) is False
+        assert repository.fail(app.state.store, old) is False
+        assert repository.claim(app.state.store, old["id"], "old-worker") is None
+        assert repository.expire_jobs(app.state.store) == 0
+        assert account_snapshot(client) == before
+        with app.state.store.transaction() as db:
+            assert tuple(db.execute("SELECT asset_id,source FROM poster_sources WHERE user_id=? AND ticket_id='ticket-1'", (OWNER,)).fetchone()) == source
 
 
 def test_correction_during_fetch_discards_old_job_and_keeps_user_input(tmp_path):

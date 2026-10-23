@@ -707,27 +707,54 @@ for (const recovery of ['focus', 'metadata'] as const) {
     }
   });
 }
-test('old poster stays through processing and no-match, then changes only with the published reference', async ({ page }) => {
+test('old posters stay while processing and fall back on no-match or failure', async ({ page }) => {
   const api = await mockApi(page, { user: 'a', processing: true }); const oldPoster = imageFixture(201), nextPoster = imageFixture(202);
+  const coverHash = () => page.locator('.ticket-image img').first().evaluate(async image => {
+    const bytes = await (await fetch((image as HTMLImageElement).src)).arrayBuffer();
+    return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), byte => byte.toString(16).padStart(2, '0')).join('');
+  });
   const ticket = sampleItem(); ticket.media.poster = { ...oldPoster.asset, source: posterSource('Old_poster.png') }; ticket.processing.status = 'queued'; api.data.set('a', { tickets: [ticket] });
   // WebSocket pushes each update; keep real time for asynchronous IndexedDB work.
   await servePoster(page, oldPoster); await servePoster(page, nextPoster); await page.goto('/tickets/item-1');
   await expect(page.locator('.ticket-image img').first()).toBeVisible(); const oldUrl = await page.locator('.ticket-image img').first().getAttribute('src');
   ticket.processing.status = 'poster'; ticket.version++; api.revision++;
   await expect(page.getByText('正在查找海报', { exact: true })).toBeVisible(); await expect(page.locator('.ticket-image img').first()).toHaveAttribute('src', oldUrl!);
-  ticket.processing.status = 'no_match'; ticket.version++; api.revision++;
-  await expect(page.getByText('本次没有找到可靠海报，继续保留已有封面。')).toBeVisible();
+  ticket.media.poster = null; ticket.processing.status = 'no_match'; ticket.version++; api.revision++;
+  await expect(page.getByText('没有找到可靠海报，使用原票作为封面。可以纠正片名后重试。')).toBeVisible();
+  await expect(page.locator('.ticket-image img').first()).not.toHaveAttribute('src', oldUrl!);
+  await expect(page.locator('.ticket-image img').first()).toHaveAttribute('src', /^blob:/);
+  await expect(page.locator('.media-availability').first()).toContainText('已校验');
+  const originalUrl = await page.locator('.ticket-image img').first().getAttribute('src');
+  expect(await coverHash()).toBe(pngHash);
+  await expect(page.locator('.poster-attribution')).toHaveCount(0);
+  await expect.poll(async () => (await cacheEntries(page)).map(entry => entry.sha256)).toEqual([pngHash]);
   await page.getByRole('button', { name: '重试处理', exact: true }).click();
+  await expect(page.getByText('等待处理', { exact: true })).toBeVisible();
+  await expect(page.locator('.ticket-image img').first()).toHaveAttribute('src', originalUrl!);
   ticket.media.poster = { ...nextPoster.asset, source: { ...posterSource('New_poster.png'), author: '合成作者 <b>纯文本</b>' } };
   ticket.processing.status = 'ready'; ticket.version++; api.revision++;
   await expect(page.getByText('处理完成', { exact: true })).toBeVisible();
   await expect(page.locator('.ticket-image img').first()).not.toHaveAttribute('src', oldUrl!);
+  await expect(page.locator('.ticket-image img').first()).not.toHaveAttribute('src', originalUrl!);
   await expect(page.locator('.ticket-image img').first()).toHaveAttribute('src', /^blob:/);
   await expect(page.getByRole('link', { name: 'Wikimedia Commons 来源页' })).toHaveAttribute('href', ticket.media.poster.source.sourcePage);
   await expect(page.getByRole('link', { name: 'CC BY-SA 4.0' })).toHaveAttribute('href', 'https://creativecommons.org/licenses/by-sa/4.0/');
   await expect(page.getByText('作者：合成作者 <b>纯文本</b>', { exact: true })).toBeVisible();
   await expect(page.locator('.poster-attribution b')).toHaveCount(0);
-  await expect.poll(async () => (await cacheEntries(page)).map(entry => entry.sha256)).toEqual([nextPoster.asset.sha256]);
+  await expect.poll(async () => (await cacheEntries(page)).map(entry => entry.sha256).sort()).toEqual([pngHash, nextPoster.asset.sha256].sort());
+  const nextUrl = await page.locator('.ticket-image img').first().getAttribute('src');
+  await page.getByRole('button', { name: '重新处理', exact: true }).click();
+  await expect(page.getByText('等待处理', { exact: true })).toBeVisible();
+  await expect(page.locator('.ticket-image img').first()).toHaveAttribute('src', nextUrl!);
+  ticket.media.poster = null; ticket.processing = { status: 'failed', error: '合成海报处理失败' }; ticket.version++; api.revision++;
+  await expect(page.getByText('处理失败', { exact: true })).toBeVisible();
+  await expect(page.getByText('处理失败，原票照片仍被保留，可以稍后重试。')).toBeVisible();
+  await expect(page.locator('.ticket-image img').first()).not.toHaveAttribute('src', nextUrl!);
+  await expect(page.locator('.ticket-image img').first()).toHaveAttribute('src', /^blob:/);
+  await expect(page.locator('.media-availability').first()).toContainText('已校验');
+  expect(await coverHash()).toBe(pngHash);
+  await expect(page.locator('.poster-attribution')).toHaveCount(0);
+  await expect.poll(async () => (await cacheEntries(page)).map(entry => entry.sha256)).toEqual([pngHash]);
 });
 for (const width of [360, 390, 768, 1280, 1440]) {
   test(`processing and poster attribution remain readable at ${width}px`, async ({ page }, info) => {
