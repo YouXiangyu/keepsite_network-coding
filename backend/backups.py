@@ -1,11 +1,14 @@
 """Validated schema-3 account backup and isolated local restoration."""
 from contextlib import closing
+import ctypes
+import errno
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import stat
+import sys
 import tempfile
 import uuid
 import zipfile
@@ -220,6 +223,29 @@ def _insert(db, name, records):
         db.execute(f"INSERT INTO {name} ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})", tuple(row[key] for key in columns))
 
 
+def _publish_restore(source: Path, destination: Path):
+    """Atomically expose the whole marked tree, never replace a competing destination."""
+    if any(parent.is_symlink() or (hasattr(parent, "is_junction") and parent.is_junction()) for parent in destination.parents):
+        raise OSError(errno.ELOOP, "Destination ancestors must not contain links", str(destination))
+    if os.name == "nt":
+        # Windows rename fails if any destination entry already exists.
+        os.rename(source, destination)
+        return
+    if sys.platform != "linux":
+        raise OSError(errno.ENOTSUP, "Atomic non-replacing restore publication is unavailable", str(destination))
+    # POSIX rename alone can replace another caller's empty directory. Do not
+    # fall back to a check-then-rename race on unsupported kernels/filesystems.
+    library = ctypes.CDLL(None, use_errno=True)
+    rename = getattr(library, "renameat2", None)
+    if rename is None:
+        raise OSError(errno.ENOTSUP, "renameat2 is required for restore publication", str(destination))
+    rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    rename.restype = ctypes.c_int
+    if rename(-100, os.fsencode(source), -100, os.fsencode(destination), 1) != 0:  # AT_FDCWD, RENAME_NOREPLACE
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), str(destination))
+
+
 def restore_account_backup(archive: Path, destination: Path, *, user_id: str):
     if not destination.is_absolute() or os.path.lexists(destination) or not destination.parent.is_dir():
         raise BackupError("Destination must be a new absolute directory with an existing parent")
@@ -279,12 +305,16 @@ def restore_account_backup(archive: Path, destination: Path, *, user_id: str):
             with closing(store.connect()) as db:
                 db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 db.execute("PRAGMA journal_mode=DELETE")
-            destination.mkdir()
-            marker = destination / "RESTORE_INCOMPLETE"
-            marker.write_text("Restoration did not finish. Do not run this directory.\n", encoding="utf-8")
-            for child in root.iterdir():
-                os.rename(child, destination / child.name)
-            marker.unlink()
+            # The chosen destination remains absent while the guard is written.
+            # A crash after publication exposes a complete, guarded tree; no
+            # directory can become visible between mkdir and marker creation.
+            marker = root / "RESTORE_INCOMPLETE"
+            with marker.open("x", encoding="utf-8", newline="\n") as output:
+                output.write("Restoration did not finish. Do not run this directory.\n")
+                output.flush()
+                os.fsync(output.fileno())
+            _publish_restore(root, destination)
+            (destination / "RESTORE_INCOMPLETE").unlink()
         return {"verified": True, "userId": user_id, "destination": str(destination),
                 "tickets": len(manifest["tickets"]), "files": len(live_assets)}
     except (KeyError, TypeError, UnicodeError, ValueError, zipfile.BadZipFile, StorageError, HTTPException, ValidationError) as error:

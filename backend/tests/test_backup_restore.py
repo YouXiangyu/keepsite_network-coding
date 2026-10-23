@@ -1,6 +1,8 @@
 """Account backup preserves schema-3 semantics without reviving deleted media."""
 import io
 import json
+import os
+from pathlib import Path
 import stat
 import zipfile
 
@@ -178,17 +180,117 @@ def test_export_stops_oversized_stream_and_closes_reader(exported, monkeypatch):
     assert body.closed
 
 
-def test_interrupted_publication_is_marked_and_app_refuses_it(exported, tmp_path, monkeypatch):
+def test_failed_marker_creation_never_exposes_an_empty_destination(exported, tmp_path, monkeypatch):
     _, archive, _, _ = exported
-    def fail(*args):
+    destination = tmp_path / "marker-failed"
+    original = Path.open
+    def fail(path, *args, **kwargs):
+        if path.name == "RESTORE_INCOMPLETE":
+            assert not destination.exists()
+            raise PermissionError("injected marker write denied")
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "open", fail)
+    with pytest.raises(PermissionError, match="injected"):
+        restore_account_backup(archive, destination, user_id=USERS["alice"]["id"])
+    assert not os.path.lexists(destination)
+    assert not list(tmp_path.glob(".account-restore-*"))
+    assert archive.is_file()
+
+
+def test_interrupted_publication_never_exposes_a_partial_destination(exported, tmp_path, monkeypatch):
+    _, archive, _, _ = exported
+    destination = tmp_path / "not-published"
+    def fail(source, target):
+        assert target == destination and not target.exists()
+        assert source.parent.parent == destination.parent
+        assert (source / "RESTORE_INCOMPLETE").is_file()
+        assert (source / "memoverse.sqlite3").is_file()
+        assert (source / "objects/media").is_dir()
         raise OSError("injected publication failure")
-    monkeypatch.setattr(backups.os, "rename", fail)
-    destination = tmp_path / "interrupted"
+    monkeypatch.setattr(backups, "_publish_restore", fail)
     with pytest.raises(OSError, match="injected"):
         restore_account_backup(archive, destination, user_id=USERS["alice"]["id"])
+    assert not os.path.lexists(destination)
+    assert not list(tmp_path.glob(".account-restore-*"))
+
+
+def test_interruption_after_atomic_publication_keeps_guarded_destination(exported, tmp_path, monkeypatch):
+    _, archive, _, _ = exported
+    destination = tmp_path / "interrupted"
+    publish = backups._publish_restore
+    def interrupt(source, target):
+        assert not target.exists()
+        publish(source, target)
+        assert not source.exists()
+        assert (target / "RESTORE_INCOMPLETE").is_file()
+        assert (target / "memoverse.sqlite3").is_file()
+        raise KeyboardInterrupt("injected post-publication interruption")
+    monkeypatch.setattr(backups, "_publish_restore", interrupt)
+    with pytest.raises(KeyboardInterrupt, match="injected"):
+        restore_account_backup(archive, destination, user_id=USERS["alice"]["id"])
     assert (destination / "RESTORE_INCOMPLETE").exists()
+    assert not list(tmp_path.glob(".account-restore-*"))
     with pytest.raises(RuntimeError, match="Incomplete"):
         create_app(destination, object_store=object())
+
+
+def test_marker_removal_failure_keeps_guard_and_all_restored_files(exported, tmp_path, monkeypatch):
+    _, archive, payload, _ = exported
+    destination = tmp_path / "guard-retained"
+    original = Path.unlink
+    def fail(path, *args, **kwargs):
+        if path == destination / "RESTORE_INCOMPLETE":
+            raise PermissionError("injected guard removal denied")
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, "unlink", fail)
+    with pytest.raises(PermissionError, match="injected"):
+        restore_account_backup(archive, destination, user_id=USERS["alice"]["id"])
+    assert (destination / "RESTORE_INCOMPLETE").is_file()
+    assert (destination / "memoverse.sqlite3").is_file()
+    assert next((destination / "objects/media").glob(payload["originalAssetId"] + ".*")).is_file()
+    with pytest.raises(RuntimeError, match="Incomplete"):
+        create_app(destination, object_store=object())
+
+
+@pytest.mark.parametrize("kind", ["empty-directory", "directory", "file", "dangling-link"])
+def test_destination_appearing_at_publication_is_never_replaced(exported, tmp_path, monkeypatch, kind):
+    _, archive, _, _ = exported
+    destination = tmp_path / "competing-owner"
+    sentinel = b"another owner's data"
+    publish = backups._publish_restore
+    identity = []
+    def race(source, target):
+        if kind in {"empty-directory", "directory"}:
+            target.mkdir()
+            if kind == "directory": (target / "keep").write_bytes(sentinel)
+        elif kind == "file":
+            target.write_bytes(sentinel)
+        else:
+            try: target.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+            except OSError as error: pytest.skip(f"Creating a test symlink is not permitted: {error}")
+        identity.append(target.lstat().st_ino)
+        publish(source, target)
+    monkeypatch.setattr(backups, "_publish_restore", race)
+    with pytest.raises(OSError):
+        restore_account_backup(archive, destination, user_id=USERS["alice"]["id"])
+    assert os.path.lexists(destination) and destination.lstat().st_ino == identity[0]
+    assert not list(tmp_path.glob(".account-restore-*"))
+    if kind == "directory": assert (destination / "keep").read_bytes() == sentinel
+    elif kind == "file": assert destination.read_bytes() == sentinel
+    elif kind == "empty-directory": assert list(destination.iterdir()) == []
+    else: assert destination.is_symlink() and not (tmp_path / "missing-target").exists()
+
+
+def test_linked_destination_parent_is_rejected_before_staging(exported, tmp_path):
+    _, archive, _, _ = exported
+    actual = tmp_path / "actual-parent"
+    actual.mkdir()
+    linked = tmp_path / "linked-parent"
+    try: linked.symlink_to(actual, target_is_directory=True)
+    except OSError as error: pytest.skip(f"Creating a test symlink is not permitted: {error}")
+    with pytest.raises(BackupError, match="links"):
+        restore_account_backup(archive, linked / "restored", user_id=USERS["alice"]["id"])
+    assert list(actual.iterdir()) == []
 
 
 def test_restored_tombstone_grants_do_not_authorize_attaching_missing_media(exported, tmp_path):
