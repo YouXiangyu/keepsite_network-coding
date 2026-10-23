@@ -3,8 +3,8 @@
     android:id="@+id/root" android:layout_width="match_parent" android:layout_height="match_parent"
     android:orientation="vertical">
     <TextView android:id="@+id/brand" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:paddingHorizontal="20dp" android:paddingVertical="12dp" android:text="@string/app_name" android:textSize="18sp" android:textStyle="bold"
-        android:textColor="@color/mv_ink" />
+        android:paddingHorizontal="18dp" android:paddingVertical="8dp" android:text="我的票夹" android:textSize="14sp"
+        android:textColor="@color/mv_muted" />
     <TextView android:id="@+id/connection" android:layout_width="match_parent" android:layout_height="wrap_content"
         android:paddingHorizontal="20dp" android:paddingVertical="8dp" android:textColor="@color/mv_muted" android:textSize="13sp" />
     <TextView android:id="@+id/notice" android:layout_width="match_parent" android:layout_height="wrap_content"
@@ -13,6 +13,6 @@
         android:layout_width="match_parent" android:layout_height="3dp" android:indeterminate="true" />
     <FrameLayout android:id="@+id/content" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
     <LinearLayout android:id="@+id/navigation" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:orientation="horizontal" android:paddingHorizontal="12dp" android:paddingVertical="8dp"
-        android:background="@android:color/white" android:elevation="6dp" />
+        android:orientation="horizontal" android:gravity="center_vertical" android:paddingHorizontal="18dp" android:paddingVertical="4dp"
+        android:background="@drawable/navigation_background" />
 </LinearLayout>

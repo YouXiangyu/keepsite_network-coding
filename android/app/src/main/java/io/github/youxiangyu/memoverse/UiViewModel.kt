@@ -14,5 +14,8 @@ class UiViewModel(application: Application) : AndroidViewModel(application) {
     var awaitingDraft = false
     var editorWasOpen = false
     var afterDraftRoute = "library"
+    var libraryAccount: String? = null
+    var libraryQuery = ""
+    var libraryOldestFirst = false
     override fun onCleared() { controller.close() }
 }

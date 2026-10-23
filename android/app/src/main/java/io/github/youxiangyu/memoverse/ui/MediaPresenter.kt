@@ -19,29 +19,36 @@ class MediaPresenter(
     private val executor: ExecutorService,
     private val image: ImageView,
     private val caption: TextView,
+    private val compact: Boolean = false,
 ) : Closeable {
     private val main = Handler(Looper.getMainLooper())
     private var lease: Closeable? = null
     private var decode: Future<*>? = null
     private var generation = 0
     private var key: String? = null
+    private var failed = false
     fun bind(ref: MediaRef) {
         if (key == ref.assetId + ref.sha256) return
         close(); key = ref.assetId + ref.sha256
         val expected = generation
         lease = controller.loadMedia(ref) { result ->
             if (generation != expected) return@loadMedia
-            caption.text = if (result.status == "error") result.error.ifBlank { Presentation.media(result.status, result.source) }
-                else Presentation.media(result.status, result.source)
+            failed = result.status == "error"
+            status(if (result.status == "error") result.error.ifBlank { Presentation.media(result.status, result.source) }
+                else Presentation.media(result.status, result.source), compact && result.status == "cached")
             if (result.file != null) showFile(result.file, expected)
             else result.bytes?.let { bytes -> decodeImage(expected) { options -> BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) } }
         }
     }
+    fun retryFailed(ref: MediaRef) {
+        if (!failed) return
+        close(); bind(ref)
+    }
     fun local(file: File?) {
-        if (file == null) { close(); caption.text = "尚未选择票面"; return }
+        if (file == null) { close(); status("尚未选择票面"); return }
         if (key == file.absolutePath) return
         close(); key = file.absolutePath
-        caption.text = "已选择票面，尚未保存"
+        status("已选择票面，尚未保存")
         showFile(file, generation)
     }
     private fun showFile(file: File, expected: Int) {
@@ -60,12 +67,17 @@ class MediaPresenter(
             }.getOrNull()
             main.post {
                 if (generation != expected) { bitmap?.recycle(); return@post }
-                if (bitmap == null) caption.text = "图片无法解码" else image.setImageBitmap(bitmap)
+                if (bitmap == null) { failed = true; status("图片无法解码") }
+                else { failed = false; image.setImageBitmap(bitmap) }
             }
         }
     }
+    private fun status(text: String, hidden: Boolean = false) {
+        caption.text = text
+        caption.visibility = if (hidden) android.view.View.GONE else android.view.View.VISIBLE
+    }
     override fun close() {
-        generation++; key = null; decode?.cancel(true); decode = null
+        generation++; key = null; failed = false; decode?.cancel(true); decode = null
         lease?.close(); lease = null; image.setImageDrawable(null)
     }
 }

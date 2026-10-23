@@ -2,8 +2,8 @@
 <resources>
     <color name="mv_background">#FFFFFF</color>
     <color name="mv_ink">#202124</color>
-    <color name="mv_muted">#6D716D</color>
-    <color name="mv_soft">#F5F5F3</color>
+    <color name="mv_muted">#656B76</color>
+    <color name="mv_soft">#F3F3F4</color>
     <color name="mv_primary">#262925</color>
     <color name="mv_accent">#58695D</color>
     <color name="mv_error">#A6343C</color>

@@ -5,8 +5,12 @@ import android.app.TimePickerDialog
 import android.content.Intent
 import android.net.Uri
 import android.graphics.Rect
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.text.InputType
+import android.text.TextUtils
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.*
@@ -24,8 +28,8 @@ import androidx.core.view.isVisible
 import androidx.core.view.doOnLayout
 import androidx.core.net.toUri
 import androidx.core.widget.doAfterTextChanged
-import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import androidx.recyclerview.widget.StaggeredGridLayoutManager
 import io.github.youxiangyu.memoverse.core.*
 import io.github.youxiangyu.memoverse.databinding.ActivityMainBinding
 import io.github.youxiangyu.memoverse.ui.*
@@ -45,6 +49,9 @@ class MainActivity : AppCompatActivity() {
     private var account: String? = null
     private var screenKey: Any? = null
     private var adapter: TicketAdapter? = null
+    private var libraryCount: TextView? = null
+    private var libraryEmpty: TextView? = null
+    private var libraryDraft: Button? = null
     private var editorFields = listOf<EditText>()
     private var editorDate: Button? = null
     private var editorPhoto: MediaPresenter? = null
@@ -109,12 +116,16 @@ class MainActivity : AppCompatActivity() {
         adapter?.close(); adapter = null; media.forEach { it.close() }; media.clear()
         editorPhoto = null; editorFields = emptyList(); editorDate = null
         editorSave = null; editorStatus = null; editorPhotoButton = null
+        libraryCount = null; libraryEmpty = null; libraryDraft = null
     }
     private fun navigate(route: String) { model.route = route; screenKey = null; render(controller.snapshot()) }
     private fun redraw() { screenKey = null; render(controller.snapshot()) }
     private fun render(state: AppState) {
         if (!active) return
         val nextAccount = state.session?.userId
+        if (model.libraryAccount != nextAccount) {
+            model.libraryAccount = nextAccount; model.libraryQuery = ""; model.libraryOldestFirst = false
+        }
         if (nextAccount != account) {
             account = nextAccount; model.route = "library"; model.detailId = null
             model.awaitingDraft = false; model.editorWasOpen = false; screenKey = null; releaseScreen()
@@ -137,27 +148,20 @@ class MainActivity : AppCompatActivity() {
         val authenticated = state.session?.authenticated == true
         if (binding.navigation.isEmpty()) {
             listOf("票夹" to "library", "录入电影票" to "editor", "设备" to "devices").forEach { (label, route) ->
-                binding.navigation.addView(action(label) {
+                binding.navigation.addView(navigationItem(label, route) {
                     if (route == "editor") {
                         if (controller.snapshot().draft != null) navigate("editor")
                         else { model.awaitingDraft = true; controller.newDraft() }
                     } else if (model.route == "editor") leaveDraft(route) else navigate(route)
-                }.apply {
-                    tag = route; textSize = 12f; minWidth = 0; minimumWidth = 0
-                    stateListAnimator = null; elevation = 0f
-                    setPadding(dp(4), dp(6), dp(4), dp(6))
-                    val icon = androidx.appcompat.content.res.AppCompatResources.getDrawable(this@MainActivity,
-                        when (route) { "editor" -> R.drawable.ic_add; "devices" -> R.drawable.ic_devices; else -> R.drawable.ic_ticket })!!
-                    icon.setBounds(0, 0, dp(24), dp(24))
-                    setCompoundDrawables(null, icon, null, null); compoundDrawablePadding = dp(4)
                 }, LinearLayout.LayoutParams(0, -2, 1f))
             }
         }
         for (index in 0 until binding.navigation.childCount) {
-            val item = binding.navigation.getChildAt(index) as Button
+            val item = binding.navigation.getChildAt(index) as LinearLayout
             item.isSelected = item.tag == model.route || item.tag == "library" && model.route == "detail"
-            item.backgroundTintList = android.content.res.ColorStateList.valueOf(getColor(if (item.isSelected) R.color.mv_soft else android.R.color.white))
-            item.setTextColor(getColor(if (item.isSelected) R.color.mv_ink else R.color.mv_muted))
+            val color = getColor(if (item.isSelected || item.tag == "editor") R.color.mv_ink else R.color.mv_muted)
+            (item.getChildAt(0) as ImageView).setColorFilter(color)
+            (item.getChildAt(1) as TextView).setTextColor(color)
         }
         updateChromeVisibility()
         val key: Any = when {
@@ -166,7 +170,7 @@ class MainActivity : AppCompatActivity() {
             model.route == "editor" -> listOf("editor", state.draft?.operationId)
             model.route == "detail" -> listOf("detail", state.tickets.find { it.id == model.detailId })
             model.route == "devices" -> listOf("devices", state.cache, state.peer, state.session.email)
-            else -> listOf("library", state.tickets, state.ready, state.draft != null)
+            else -> "library"
         }
         if (key != screenKey) {
             val oldScroll = (binding.content.getChildAt(0) as? ScrollView)?.scrollY ?: 0
@@ -180,14 +184,35 @@ class MainActivity : AppCompatActivity() {
                 model.route == "editor" -> editorScreen(state)
                 model.route == "detail" -> detailScreen(state)
                 model.route == "devices" -> devicesScreen(state)
-                else -> libraryScreen(state)
+                else -> libraryScreen()
             }
             if (preserveScroll) (binding.content.getChildAt(0) as? ScrollView)?.let { scroll -> scroll.post { scroll.scrollTo(0, oldScroll) } }
         }
         if (model.route == "editor" && authenticated) updateEditor(state)
+        if (model.route == "library" && authenticated) updateLibrary(state)
+    }
+    private fun navigationItem(title: String, route: String, clicked: () -> Unit): LinearLayout = column().apply {
+        tag = route; gravity = Gravity.CENTER; isClickable = true; isFocusable = true
+        contentDescription = title; minimumHeight = dp(52); setPadding(dp(4), dp(2), dp(4), dp(2))
+        setOnClickListener { clicked() }
+        addView(ImageView(this@MainActivity).apply {
+            setImageResource(when (route) { "editor" -> R.drawable.ic_add; "devices" -> R.drawable.ic_devices; else -> R.drawable.ic_ticket })
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            if (route == "editor") {
+                background = roundedBackground(R.color.mv_soft, 30)
+                setPadding(dp(12), dp(12), dp(12), dp(12))
+            } else setPadding(dp(8), dp(8), dp(8), dp(8))
+        }, LinearLayout.LayoutParams(dp(if (route == "editor") 44 else 36), dp(if (route == "editor") 44 else 36)))
+        addView(label(if (route == "editor") "录入" else title, 11f).apply {
+            setPadding(0, dp(2), 0, 0); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            isVisible = route != "editor"
+        })
+    }
+    private fun roundedBackground(color: Int, radius: Int): GradientDrawable = GradientDrawable().apply {
+        setColor(getColor(color)); cornerRadius = dp(radius).toFloat()
     }
     private fun updateChromeVisibility() {
-        binding.brand.isVisible = !keyboardVisible
+        binding.brand.isVisible = !keyboardVisible && (controller.snapshot().session?.authenticated != true || model.route != "library")
         binding.connection.isVisible = !keyboardVisible && !controller.snapshot().connected
         binding.navigation.isVisible = !keyboardVisible && controller.snapshot().session?.authenticated == true
     }
@@ -232,46 +257,119 @@ class MainActivity : AppCompatActivity() {
         }
         if (session.googleEnabled) body.add(action("使用 Google 登录") { controller.startGoogle(::openUrl) })
     }
-    private fun libraryScreen(state: AppState) {
-        val box = column().apply { setPadding(dp(16), 0, dp(16), 0) }
-        box.add(label("我的票夹", 32f, true))
-        val summary = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL }
-        summary.addView(label("${state.tickets.size} 张电影票", 14f).apply { setTextColor(getColor(R.color.mv_muted)) }, LinearLayout.LayoutParams(0, -2, 1f))
-        summary.addView(action("刷新票夹") { controller.refresh(); redraw() }.apply { textSize = 13f; backgroundTintList = android.content.res.ColorStateList.valueOf(getColor(android.R.color.white)) })
-        box.add(summary)
-        if (state.draft != null) box.add(action("继续未完成的录入") { navigate("editor") })
-        if (state.tickets.isEmpty()) box.add(label(if (state.ready) "还没有电影票。选择一张票面，记录这次观影。" else "正在同步票夹…"))
-        val grid = RecyclerView(this)
-        val manager = GridLayoutManager(this, 1); grid.layoutManager = manager
+    private fun libraryScreen() {
+        val box = column().apply { setPadding(dp(18), 0, dp(18), 0) }
+        val heading = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        heading.addView(label("电影", 30f, true).apply { setPadding(0, dp(6), 0, dp(4)) }, LinearLayout.LayoutParams(0, -2, 1f))
+        libraryCount = label("", 14f).apply { setTextColor(getColor(R.color.mv_muted)); setPadding(0, dp(6), 0, 0) }
+        heading.addView(libraryCount); box.add(heading)
+        val tools = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val sort = action(if (model.libraryOldestFirst) "最早添加⌄" else "最近添加⌄") {}.apply {
+            textSize = 14f; background = null; backgroundTintList = null; setPadding(0, 0, dp(8), 0)
+            minWidth = 0; minimumWidth = 0; gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            contentDescription = "电影票排序"
+            setOnClickListener {
+                AlertDialog.Builder(this@MainActivity).setTitle("排序方式")
+                    .setSingleChoiceItems(arrayOf("最近添加", "最早添加"), if (model.libraryOldestFirst) 1 else 0) { dialog, selected ->
+                        model.libraryOldestFirst = selected == 1
+                        text = if (model.libraryOldestFirst) "最早添加⌄" else "最近添加⌄"
+                        updateLibrary(controller.snapshot()); dialog.dismiss()
+                    }.setNegativeButton("取消", null).show()
+            }
+        }
+        tools.addView(sort, LinearLayout.LayoutParams(0, dp(48), 1f))
+        tools.addView(action("↻") { controller.refresh(); adapter?.retryFailedImages() }.apply {
+            contentDescription = "刷新票夹"; textSize = 24f; minWidth = 0; minimumWidth = 0
+            background = null; backgroundTintList = null; setPadding(0, 0, 0, 0)
+        }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        box.add(tools)
+        box.add(input("搜索电影票", 200).apply {
+            setText(model.libraryQuery); textSize = 15f; setTextColor(getColor(R.color.mv_ink)); setHintTextColor(getColor(R.color.mv_muted))
+            background = roundedBackground(R.color.mv_soft, 28); backgroundTintList = null
+            setPadding(dp(16), 0, dp(16), 0); compoundDrawablePadding = dp(10)
+            setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_search, 0, 0, 0)
+            inputType = InputType.TYPE_CLASS_TEXT; imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH or android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
+            minimumHeight = dp(48)
+            doAfterTextChanged { model.libraryQuery = it.toString(); updateLibrary(controller.snapshot()) }
+        })
+        libraryDraft = action("继续未完成的录入") { navigate("editor") }.also(box::add)
+        libraryEmpty = label("", 14f).apply { setPadding(0, dp(20), 0, dp(16)); setTextColor(getColor(R.color.mv_muted)) }.also(box::add)
+        val grid = RecyclerView(this).apply { setPadding(0, dp(14), 0, 0); clipToPadding = false; itemAnimator = null }
+        val manager = StaggeredGridLayoutManager(2, StaggeredGridLayoutManager.VERTICAL); grid.layoutManager = manager
+        grid.addItemDecoration(object : RecyclerView.ItemDecoration() {
+            override fun getItemOffsets(outRect: Rect, view: View, parent: RecyclerView, state: RecyclerView.State) {
+                val gap = dp(14); val columns = manager.spanCount
+                val span = ((view.layoutParams as? StaggeredGridLayoutManager.LayoutParams)?.spanIndex ?: 0).coerceIn(0, columns - 1)
+                outRect.set(gap * span / columns, 0, gap - gap * (span + 1) / columns, dp(12))
+            }
+        })
         grid.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             val minimum = dp((156 * resources.configuration.fontScale.coerceAtLeast(1f)).toInt())
             val columns = (grid.width / minimum).coerceIn(1, 4)
-            if (manager.spanCount != columns) manager.spanCount = columns
+            if (manager.spanCount != columns) { manager.spanCount = columns; grid.invalidateItemDecorations() }
         }
-        adapter = TicketAdapter(state.tickets); grid.adapter = adapter
+        adapter = TicketAdapter(); grid.adapter = adapter
         box.addView(grid, LinearLayout.LayoutParams(-1, 0, 1f)); binding.content.addView(box, ViewGroup.LayoutParams(-1, -1))
     }
-    private inner class TicketAdapter(private val tickets: List<Ticket>) : RecyclerView.Adapter<TicketAdapter.Holder>(), Closeable {
+    private fun updateLibrary(state: AppState) {
+        val query = model.libraryQuery.trim()
+        val filtered = state.tickets.filter { query.isBlank() || it.fields.title.contains(query, true) || it.fields.cinema.contains(query, true) }
+        val ordered = if (model.libraryOldestFirst) filtered.sortedWith(compareBy<Ticket> { it.createdAt }.thenBy { it.id })
+            else filtered.sortedWith(compareByDescending<Ticket> { it.createdAt }.thenBy { it.id })
+        libraryCount?.text = "${state.tickets.size} 张"
+        libraryDraft?.isVisible = state.draft != null
+        libraryEmpty?.apply {
+            isVisible = ordered.isEmpty()
+            text = when {
+                !state.ready -> "正在同步票夹…"
+                state.tickets.isEmpty() -> "还没有电影票。选择一张票面，记录这次观影。"
+                else -> "没有匹配的电影票"
+            }
+        }
+        adapter?.submitTickets(ordered)
+    }
+    private inner class TicketAdapter : RecyclerView.Adapter<TicketAdapter.Holder>(), Closeable {
+        private var tickets = emptyList<Ticket>()
         private val bound = mutableSetOf<Holder>()
-        inner class Holder(val box: LinearLayout, val image: ImageView, val title: TextView, val caption: TextView, val meta: TextView) : RecyclerView.ViewHolder(box) {
-            val presenter = MediaPresenter(controller, imageExecutor, image, caption)
+        fun submitTickets(value: List<Ticket>) {
+            if (tickets == value) return
+            tickets = value; notifyDataSetChanged()
+        }
+        fun retryFailedImages() {
+            bound.filter { it.box.isAttachedToWindow }.forEach { holder ->
+                tickets.getOrNull(holder.bindingAdapterPosition)?.let { holder.presenter.retryFailed(it.cover) }
+            }
+        }
+        inner class Holder(val box: LinearLayout, val image: ImageView, val title: TextView, val caption: TextView, val date: TextView, val meta: TextView) : RecyclerView.ViewHolder(box) {
+            val presenter = MediaPresenter(controller, imageExecutor, image, caption, compact = true)
         }
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
-            val box = column().apply { setPadding(dp(8), dp(8), dp(8), dp(20)); isFocusable = true; isClickable = true }
+            val box = column().apply { isFocusable = true; isClickable = true }
             val image = TicketCoverView(this@MainActivity).apply { scaleType = ImageView.ScaleType.FIT_CENTER
-                background = android.graphics.drawable.GradientDrawable().apply { setColor(getColor(R.color.mv_soft)); cornerRadius = dp(9).toFloat() }; clipToOutline = true }
+                background = roundedBackground(R.color.mv_soft, 6); clipToOutline = true }
             box.addView(image, LinearLayout.LayoutParams(-1, -2))
-            val title = label("", 17f, true); val caption = label("", 12f); val meta = label("", 12f).apply { setTextColor(getColor(R.color.mv_muted)) }
-            box.add(title); box.add(meta); box.add(caption)
+            val title = label("", 15f).apply {
+                typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL); setPadding(0, dp(4), 0, 0)
+                maxLines = 2; ellipsize = TextUtils.TruncateAt.END
+            }
+            fun secondaryLabel() = label("", 12f).apply { setTextColor(getColor(R.color.mv_muted)); setPadding(0, dp(2), 0, 0) }
+            val date = secondaryLabel(); val caption = secondaryLabel(); val meta = secondaryLabel()
+            box.add(title); box.add(date); box.add(meta); box.add(caption)
             box.layoutParams = RecyclerView.LayoutParams(-1, -2)
-            return Holder(box, image, title, caption, meta)
+            return Holder(box, image, title, caption, date, meta)
         }
         override fun onBindViewHolder(holder: Holder, position: Int) {
             val ticket = tickets[position]; bound.add(holder)
             holder.title.text = ticket.fields.title.ifBlank { "未命名电影票" }
             holder.image.contentDescription = "${holder.title.text}封面"
             (holder.image as TicketCoverView).setRatio(ticket.cover.width, ticket.cover.height)
-            holder.meta.text = listOf(ticket.fields.showtime.replace('T', ' '), if (ticket.processingStatus == "ready") "" else Presentation.processing(ticket.processingStatus), if (ticket.original.cloudStatus == "saved") "" else "原票尚未云存").filter { it.isNotBlank() }.joinToString("\n")
+            holder.date.text = ticket.fields.showtime.take(10).replace('-', '.').ifBlank { "日期待补充" }
+            holder.meta.text = listOf(
+                if (ticket.processingStatus in listOf("ready", "not_started")) "" else Presentation.processing(ticket.processingStatus),
+                if (ticket.original.cloudStatus == "saved") "" else "原票尚未云存",
+                if (ticket.poster != null && ticket.poster.cloudStatus != "saved") "海报尚未云存" else "",
+            ).filter { it.isNotBlank() }.joinToString(" · ")
+            holder.meta.isVisible = holder.meta.text.isNotBlank()
             holder.box.contentDescription = "打开${holder.title.text}详情"
             holder.box.setOnClickListener { model.detailId = ticket.id; navigate("detail") }
             holder.presenter.bind(ticket.cover)
