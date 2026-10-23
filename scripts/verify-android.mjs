@@ -2,7 +2,7 @@
 // Real Android JNI/WebRTC and production Web UI against the owned loopback fixture.
 import { createRequire } from 'node:module';
 import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -13,8 +13,9 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const args = process.argv.slice(2);
 const prepare = args.includes('--prepare');
 const execute = args.includes('--execute');
+const physical = args.includes('--physical');
 if (!prepare && !execute) {
-  console.log('Plan: use the owned 4180 fixture, warm a real Chromium source, run the installed Android instrumentation, then verify the reverse transfer in a fresh Chromium process. No cloud calls. Pass --prepare to seed two synthetic tickets, or --execute --serial emulator-5560 --output <new directory> after installing the loopback-only test APKs.');
+  console.log('Plan: use the owned 4180 fixture, warm a real Chromium source, run the installed Android instrumentation, then verify the reverse transfer in a fresh Chromium process. No cloud calls. Pass --prepare to seed two synthetic tickets, or --execute --serial emulator-5560 --output <new directory> after installing the loopback-only test APKs. For an explicitly authorized physical device containing only owned test data, also pass --physical and its exact serial.');
   process.exit(0);
 }
 assert(!(prepare && execute), 'Choose exactly one mode');
@@ -64,7 +65,7 @@ if (prepare) {
   process.exit(0);
 }
 const serial = option('--serial');
-assert.match(serial || '', /^emulator-\d{4}$/);
+assert.match(serial || '', physical ? /^[A-Za-z0-9]{8,64}$/ : /^emulator-\d{4}$/);
 const output = await checkedNewOutput(option('--output') || '');
 assert(output.startsWith(resolve(root, '.cache') + '\\') || output.startsWith(resolve(root, '.cache') + '/'), 'Output must be a new directory inside this workspace cache');
 await mkdir(output);
@@ -89,15 +90,26 @@ function command(arguments_, { timeout = 180000 } = {}) {
   });
   return { child, result };
 }
-assert.match((await command(['emu', 'avd', 'name']).result).stdout, /^MemoVerseM7\r?\n/);
+assert.equal((await command(['get-state']).result).stdout.trim(), 'device');
+if (physical) {
+  assert.notEqual((await command(['shell', 'getprop', 'ro.kernel.qemu']).result).stdout.trim(), '1', 'Physical mode must select a physical device');
+} else {
+  const avdName = (await command(['emu', 'avd', 'name']).result).stdout.split('\n')[0].replaceAll('\r', '');
+  assert.equal(avdName, 'MemoVerseM7');
+}
 const { chromium } = createRequire(resolve(root, 'demo/package.json'))('playwright');
 const selected = { userId: manifest.userId, media: manifest.items[0].media };
 let source, target, instrumentation, instrumentFinished = false, instrumentSucceeded = false;
-const report = { scope: 'One owned API 36.1 emulator and separate Chromium processes; real JNI/DataChannel; real BFF SID/JWT validation with synthetic provider, fake Redis and local objects. Not physical Android, Cognito, S3, TURN, WAN or performance evidence.',
-  media: selected.media, startedAt: new Date().toISOString(), passed: false, browserMdnsDisabledForEmulatorRouting: true };
+const report = { scope: `${physical ? 'One explicitly selected physical Android' : 'One owned API 36.1 emulator'} and separate Chromium processes; real JNI/DataChannel; real BFF SID/JWT validation with synthetic provider, fake Redis and local objects. Not Cognito, S3, TURN, WAN, a second physical Android or performance evidence.`,
+  media: selected.media, startedAt: new Date().toISOString(), passed: false, browserMdnsDisabled: true };
+function apkPath(flag, fallback) {
+  const path = relative(root, resolve(root, option(flag) || fallback)).replaceAll('\\', '/');
+  assert(!isAbsolute(path) && !path.startsWith('../') && path.endsWith('.apk'), 'APK must be inside this workspace');
+  return path;
+}
 const apkFiles = {
-  'io.github.youxiangyu.memoverse': 'android/app/build/outputs/apk/debug/app-debug.apk',
-  'io.github.youxiangyu.memoverse.test': 'android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk',
+  'io.github.youxiangyu.memoverse': apkPath('--apk', 'android/app/build/outputs/apk/debug/app-debug.apk'),
+  'io.github.youxiangyu.memoverse.test': apkPath('--test-apk', 'android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk'),
 };
 async function hashes() {
   const files = new Map();

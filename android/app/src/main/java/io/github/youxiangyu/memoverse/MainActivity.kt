@@ -136,15 +136,28 @@ class MainActivity : AppCompatActivity() {
         binding.notice.setTextColor(getColor(if (state.error.isBlank()) R.color.mv_muted else R.color.mv_error))
         val authenticated = state.session?.authenticated == true
         if (binding.navigation.isEmpty()) {
-            listOf("票夹" to "library", "设备" to "devices").forEach { (label, route) ->
+            listOf("票夹" to "library", "录入电影票" to "editor", "设备" to "devices").forEach { (label, route) ->
                 binding.navigation.addView(action(label) {
-                    if (model.route == "editor") leaveDraft(route) else navigate(route)
+                    if (route == "editor") {
+                        if (controller.snapshot().draft != null) navigate("editor")
+                        else { model.awaitingDraft = true; controller.newDraft() }
+                    } else if (model.route == "editor") leaveDraft(route) else navigate(route)
+                }.apply {
+                    tag = route; textSize = 12f; minWidth = 0; minimumWidth = 0
+                    stateListAnimator = null; elevation = 0f
+                    setPadding(dp(4), dp(6), dp(4), dp(6))
+                    val icon = androidx.appcompat.content.res.AppCompatResources.getDrawable(this@MainActivity,
+                        when (route) { "editor" -> R.drawable.ic_add; "devices" -> R.drawable.ic_devices; else -> R.drawable.ic_ticket })!!
+                    icon.setBounds(0, 0, dp(24), dp(24))
+                    setCompoundDrawables(null, icon, null, null); compoundDrawablePadding = dp(4)
                 }, LinearLayout.LayoutParams(0, -2, 1f))
             }
-            binding.navigation.addView(action("退出") {
-                AlertDialog.Builder(this).setTitle("退出登录？").setMessage("退出后停止同步与传输；云端记录和本机文件保留。").setNegativeButton("取消", null)
-                    .setPositiveButton("退出") { _, _ -> controller.logout() }.show()
-            }, LinearLayout.LayoutParams(0, -2, 1f))
+        }
+        for (index in 0 until binding.navigation.childCount) {
+            val item = binding.navigation.getChildAt(index) as Button
+            item.isSelected = item.tag == model.route || item.tag == "library" && model.route == "detail"
+            item.backgroundTintList = android.content.res.ColorStateList.valueOf(getColor(if (item.isSelected) R.color.mv_soft else android.R.color.white))
+            item.setTextColor(getColor(if (item.isSelected) R.color.mv_ink else R.color.mv_muted))
         }
         updateChromeVisibility()
         val key: Any = when {
@@ -175,7 +188,7 @@ class MainActivity : AppCompatActivity() {
     }
     private fun updateChromeVisibility() {
         binding.brand.isVisible = !keyboardVisible
-        binding.connection.isVisible = !keyboardVisible
+        binding.connection.isVisible = !keyboardVisible && !controller.snapshot().connected
         binding.navigation.isVisible = !keyboardVisible && controller.snapshot().session?.authenticated == true
     }
     private fun scrollColumn(): LinearLayout {
@@ -221,17 +234,17 @@ class MainActivity : AppCompatActivity() {
     }
     private fun libraryScreen(state: AppState) {
         val box = column().apply { setPadding(dp(16), 0, dp(16), 0) }
-        box.add(label("我的票夹", 26f, true))
-        box.add(action(if (state.draft == null) "录入电影票" else "继续未完成的录入") {
-            if (controller.snapshot().draft != null) navigate("editor")
-            else { model.awaitingDraft = true; controller.newDraft() }
-        })
-        box.add(action("刷新票夹") { controller.refresh(); redraw() })
+        box.add(label("我的票夹", 32f, true))
+        val summary = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = android.view.Gravity.CENTER_VERTICAL }
+        summary.addView(label("${state.tickets.size} 张电影票", 14f).apply { setTextColor(getColor(R.color.mv_muted)) }, LinearLayout.LayoutParams(0, -2, 1f))
+        summary.addView(action("刷新票夹") { controller.refresh(); redraw() }.apply { textSize = 13f; backgroundTintList = android.content.res.ColorStateList.valueOf(getColor(android.R.color.white)) })
+        box.add(summary)
+        if (state.draft != null) box.add(action("继续未完成的录入") { navigate("editor") })
         if (state.tickets.isEmpty()) box.add(label(if (state.ready) "还没有电影票。选择一张票面，记录这次观影。" else "正在同步票夹…"))
         val grid = RecyclerView(this)
         val manager = GridLayoutManager(this, 1); grid.layoutManager = manager
         grid.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-            val minimum = dp((260 * resources.configuration.fontScale.coerceAtLeast(1f)).toInt())
+            val minimum = dp((156 * resources.configuration.fontScale.coerceAtLeast(1f)).toInt())
             val columns = (grid.width / minimum).coerceIn(1, 4)
             if (manager.spanCount != columns) manager.spanCount = columns
         }
@@ -245,9 +258,10 @@ class MainActivity : AppCompatActivity() {
         }
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder {
             val box = column().apply { setPadding(dp(8), dp(8), dp(8), dp(20)); isFocusable = true; isClickable = true }
-            val image = ImageView(this@MainActivity).apply { scaleType = ImageView.ScaleType.FIT_CENTER; setBackgroundColor(getColor(R.color.mv_soft)) }
-            box.addView(image, LinearLayout.LayoutParams(-1, dp(220)))
-            val title = label("", 20f, true); val caption = label("", 12f); val meta = label("", 14f)
+            val image = TicketCoverView(this@MainActivity).apply { scaleType = ImageView.ScaleType.FIT_CENTER
+                background = android.graphics.drawable.GradientDrawable().apply { setColor(getColor(R.color.mv_soft)); cornerRadius = dp(9).toFloat() }; clipToOutline = true }
+            box.addView(image, LinearLayout.LayoutParams(-1, -2))
+            val title = label("", 17f, true); val caption = label("", 12f); val meta = label("", 12f).apply { setTextColor(getColor(R.color.mv_muted)) }
             box.add(title); box.add(meta); box.add(caption)
             box.layoutParams = RecyclerView.LayoutParams(-1, -2)
             return Holder(box, image, title, caption, meta)
@@ -256,7 +270,8 @@ class MainActivity : AppCompatActivity() {
             val ticket = tickets[position]; bound.add(holder)
             holder.title.text = ticket.fields.title.ifBlank { "未命名电影票" }
             holder.image.contentDescription = "${holder.title.text}封面"
-            holder.meta.text = listOf(ticket.fields.cinema, ticket.fields.showtime.replace('T', ' '), Presentation.processing(ticket.processingStatus)).filter { it.isNotBlank() }.joinToString("\n")
+            (holder.image as TicketCoverView).setRatio(ticket.cover.width, ticket.cover.height)
+            holder.meta.text = listOf(ticket.fields.showtime.replace('T', ' '), if (ticket.processingStatus == "ready") "" else Presentation.processing(ticket.processingStatus), if (ticket.original.cloudStatus == "saved") "" else "原票尚未云存").filter { it.isNotBlank() }.joinToString("\n")
             holder.box.contentDescription = "打开${holder.title.text}详情"
             holder.box.setOnClickListener { model.detailId = ticket.id; navigate("detail") }
             holder.presenter.bind(ticket.cover)
@@ -398,6 +413,10 @@ class MainActivity : AppCompatActivity() {
             body.add(label("${if (transfer.direction == "send") "发送" else "接收"} · ${Presentation.transfer(transfer.status)} · ${Presentation.bytes(transfer.bytes)}\n${Presentation.route(transfer.route)}${if (transfer.error.isBlank()) "" else "\n${transfer.error}"}"))
         }
         body.add(action("刷新状态", controller::refresh))
+        body.add(action("退出") {
+            AlertDialog.Builder(this).setTitle("退出登录？").setMessage("退出后停止同步与传输；云端记录和本机文件保留。").setNegativeButton("取消", null)
+                .setPositiveButton("退出") { _, _ -> controller.logout() }.show()
+        })
     }
     private fun openUrl(url: String) {
         if (!Presentation.safeExternalUrl(url)) return

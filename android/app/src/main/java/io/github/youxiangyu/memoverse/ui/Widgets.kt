@@ -24,9 +24,10 @@ fun Context.action(value: String, clicked: () -> Unit): Button = Button(this).ap
     setOnClickListener { clicked() }
 }
 private class FormInput(context: Context) : AppCompatEditText(context) {
-    // Keep the entire field above the keyboard when TextView scrolls to its caret.
+    // View subtracts its own scroll offset while mapping this rect to ancestors.
+    // Include TextView's internal offset so the whole field, not just its caret, stays visible.
     override fun requestRectangleOnScreen(rectangle: Rect, immediate: Boolean): Boolean =
-        super.requestRectangleOnScreen(Rect(0, 0, width, height + context.dp(8)), immediate)
+        super.requestRectangleOnScreen(Rect(scrollX, scrollY, scrollX + width, scrollY + height + context.dp(8)), immediate)
 }
 
 fun Context.input(title: String, max: Int = 200): EditText = FormInput(this).apply {
@@ -35,3 +36,17 @@ fun Context.input(title: String, max: Int = 200): EditText = FormInput(this).app
     filters = arrayOf(InputFilter.LengthFilter(max)); isSaveEnabled = false
 }
 fun LinearLayout.add(view: View) { addView(view, LinearLayout.LayoutParams(-1, -2)) }
+
+/** Reserves the cover's proportions before async decoding, without cropping ticket text. */
+class TicketCoverView(context: Context) : androidx.appcompat.widget.AppCompatImageView(context) {
+    private var ratio = 1f
+    fun setRatio(width: Int, height: Int) {
+        ratio = width.coerceAtLeast(1).toFloat() / height.coerceAtLeast(1)
+        requestLayout()
+    }
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val width = View.MeasureSpec.getSize(widthMeasureSpec)
+        val height = (width / ratio).toInt().coerceIn(context.dp(80), context.dp(420))
+        super.onMeasure(widthMeasureSpec, View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY))
+    }
+}
