@@ -1,4 +1,6 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { sampleItem, media, pngHash, otherHash, otherPng, imageFixture, posterSource } from '../tests/web-fixtures.mjs';
 const password = 'ExamplePassword123!';
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=', 'base64');
@@ -367,10 +369,66 @@ test('mobile collection preserves image proportions, searches and keeps its bott
   expect(saveBox.y + saveBox.height).toBeLessThanOrEqual((await page.getByRole('navigation').boundingBox())!.y);
 });
 
+test('six mixed-aspect covers form a masonry library and preserve sort and resize behavior', async ({ page }) => {
+  const api = await mockApi(page, { user: 'a' });
+  const shapes = [[180, 270], [180, 270], [270, 126], [250, 200], [290, 200], [300, 145]];
+  const images = shapes.map(([width, height], index) => imageFixture(100 + index, width, height));
+  api.data.set('a', { tickets: images.map((image, index) => ({ ...sampleItem(`masonry-${index}`), createdAt: 600 - index, fields: { ...sampleItem().fields, title: `电影 ${index + 1}` }, media: { original: image.asset, poster: null } })) });
+  for (const image of images) await page.route(`**/api/media/${image.asset.sha256}`, route => route.fulfill({ contentType: 'image/png', body: image.bytes }));
+  await page.setViewportSize({ width: 390, height: 844 }); await page.goto('/tickets');
+  await expect(page.locator('.ticket-card img')).toHaveCount(6);
+  const contrasts = await page.evaluate(() => {
+    const luminance = (color: string) => {
+      const parts = color.match(/[\d.]+/g)!.slice(0, 3).map(Number).map(value => value / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+      return parts[0] * 0.2126 + parts[1] * 0.7152 + parts[2] * 0.0722;
+    };
+    const ratio = (foreground: string, background: string) => { const a = luminance(foreground), b = luminance(background); return (Math.max(a, b) + .05) / (Math.min(a, b) + .05); };
+    return [ratio(getComputedStyle(document.querySelector('.ticket-date')!).color, 'rgb(255,255,255)'),
+      ratio(getComputedStyle(document.querySelector('.collection-search input')!, '::placeholder').color, getComputedStyle(document.querySelector('.collection-search')!).backgroundColor)];
+  });
+  expect(Math.min(...contrasts)).toBeGreaterThanOrEqual(4.5);
+  await expect.poll(async () => page.locator('.ticket-card > a').evaluateAll(nodes => {
+    const boxes = nodes.map(node => node.getBoundingClientRect());
+    return boxes[4].top < boxes[3].bottom && boxes[4].top >= boxes[2].bottom;
+  })).toBe(true);
+  await expect(page.locator('.ticket-card h2')).toHaveText(['电影 1', '电影 2', '电影 3', '电影 4', '电影 5', '电影 6']);
+  await page.getByRole('combobox', { name: '电影票排序' }).selectOption('oldest');
+  await expect(page.locator('.ticket-card h2').first()).toHaveText('电影 6');
+  await page.getByRole('searchbox').fill('电影 4'); await expect(page.locator('.ticket-card')).toHaveCount(1);
+  await page.getByRole('searchbox').fill(''); await expect(page.locator('.ticket-card')).toHaveCount(6);
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await expect.poll(() => page.locator('.ticket-card > a').evaluateAll(nodes => {
+      const boxes = nodes.map(node => node.getBoundingClientRect());
+      return boxes.every((box, i) => boxes.every((other, j) => i === j || box.right <= other.left + 1 || other.right <= box.left + 1 || box.bottom <= other.top + 1 || other.bottom <= box.top + 1));
+    })).toBe(true);
+  }
+});
+
+test('authorized reference covers render in the real mobile collection', async ({ page }, info) => {
+  test.skip(!process.env.MEMOVERSE_VISUAL_ASSETS, 'Local user-authorized reference crops are not committed.');
+  const directory = process.env.MEMOVERSE_VISUAL_ASSETS!;
+  const manifest = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8'));
+  const api = await mockApi(page, { user: 'a' });
+  const tickets = [];
+  for (const [index, item] of manifest.entries()) {
+    const bytes = await readFile(join(directory, item.file));
+    const asset = { assetId: item.sha256, sha256: item.sha256, url: `/api/media/${item.sha256}`, mimeType: 'image/png', size: bytes.length, width: item.width, height: item.height, cloudStatus: 'saved' };
+    tickets.push({ ...sampleItem(`reference-${index}`), createdAt: 600 - index, fields: { ...sampleItem().fields, title: item.title, showtime: item.showtime }, media: { original: asset, poster: null } });
+    await page.route(`**/api/media/${asset.sha256}`, route => route.fulfill({ contentType: 'image/png', body: bytes }));
+  }
+  api.data.set('a', { tickets });
+  await page.setViewportSize({ width: 390, height: 844 }); await page.goto('/tickets');
+  await expect(page.locator('.ticket-card [data-media-status="cached"]')).toHaveCount(6);
+  await expect(page.getByRole('heading', { name: '电影', exact: true })).toBeVisible();
+  await page.screenshot({ path: info.outputPath('reference-mobile.png') });
+});
+
 for (const width of [360, 390, 768, 1280, 1440]) {
   test(`ticket library and native editor fit ${width}px`, async ({ page }, info) => {
     await mockApi(page, { user: 'a' }); await page.setViewportSize({ width, height: 900 }); await page.goto('/tickets');
-    await expect(page.getByRole('heading', { name: '我的票夹', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: width <= 760 ? '电影' : '我的票夹', exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
     if (width >= 768) await expect(page.getByRole('navigation', { name: '主导航' })).not.toHaveCSS('position', 'fixed');
     await page.screenshot({ path: info.outputPath(`tickets-${width}.png`), fullPage: true });
