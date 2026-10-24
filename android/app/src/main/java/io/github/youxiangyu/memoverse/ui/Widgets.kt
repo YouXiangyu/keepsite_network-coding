@@ -11,6 +11,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.inputmethod.EditorInfo
+import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.ImageView
@@ -18,7 +19,9 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.content.res.AppCompatResources
 import androidx.appcompat.widget.AppCompatEditText
+import androidx.core.view.AccessibilityDelegateCompat
 import androidx.core.view.ViewCompat
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import com.google.android.material.button.MaterialButton
 import io.github.youxiangyu.memoverse.R
 import io.github.youxiangyu.memoverse.ui.Design.Radius
@@ -47,7 +50,7 @@ fun Context.label(value: String, type: Type = Type.Body, color: Int = R.color.mv
     if (heading) ViewCompat.setAccessibilityHeading(this, true)
 }
 
-enum class ButtonKind { Primary, Secondary, Text, Danger }
+enum class ButtonKind { Primary, Secondary, Text, Quiet, Danger }
 
 private class ActionButton(context: Context) : MaterialButton(context) {
     override fun setEnabled(enabled: Boolean) { super.setEnabled(enabled); alpha = if (enabled) 1f else Size.DISABLED_ALPHA }
@@ -57,16 +60,17 @@ fun Context.action(value: String, kind: ButtonKind = ButtonKind.Secondary, click
         ButtonKind.Primary -> R.color.mv_ink to R.color.mv_background
         ButtonKind.Secondary -> R.color.mv_soft to R.color.mv_ink
         ButtonKind.Text -> android.R.color.transparent to R.color.mv_ink
+        ButtonKind.Quiet -> android.R.color.transparent to R.color.mv_muted
         ButtonKind.Danger -> R.color.mv_error_soft to R.color.mv_error
     }
-    text = value; isAllCaps = false; letterSpacing = 0f; style(Type.Button)
-    if (kind == ButtonKind.Text) textSize = 15f
+    val textual = kind == ButtonKind.Text || kind == ButtonKind.Quiet
+    text = value; isAllCaps = false; letterSpacing = 0f; style(if (textual) Type.TextButton else Type.Button)
     insetTop = 0; insetBottom = 0; elevation = 0f; stateListAnimator = null
     cornerRadius = dp(Radius.CONTROL)
     backgroundTintList = ColorStateList.valueOf(getColor(fill)); setTextColor(getColor(ink))
     rippleColor = ColorStateList.valueOf(getColor(if (kind == ButtonKind.Primary) R.color.mv_muted else R.color.mv_line))
     iconTint = ColorStateList.valueOf(getColor(ink)); iconPadding = dp(Space.S)
-    minHeight = dp(if (kind == ButtonKind.Text) Size.TOUCH else Size.BUTTON); minimumHeight = minHeight
+    minHeight = dp(if (textual) Size.TOUCH else Size.BUTTON); minimumHeight = minHeight
     minWidth = dp(Size.TOUCH); minimumWidth = minWidth
     setPadding(dp(Space.L), 0, dp(Space.L), 0)
     setOnClickListener { clicked() }
@@ -82,6 +86,7 @@ private class FormInput(context: Context) : AppCompatEditText(context) {
     // Include TextView's internal offset so the whole field, not just its caret, stays visible.
     override fun requestRectangleOnScreen(rectangle: Rect, immediate: Boolean): Boolean =
         super.requestRectangleOnScreen(Rect(scrollX, scrollY, scrollX + width, scrollY + height + context.dp(8)), immediate)
+    override fun setEnabled(enabled: Boolean) { super.setEnabled(enabled); alpha = if (enabled) 1f else Size.DISABLED_ALPHA }
 }
 
 fun Context.input(title: String, max: Int = 200): EditText = FormInput(this).apply {
@@ -116,6 +121,11 @@ fun Context.listRow(icon: Int, title: String, danger: Boolean = false, clicked: 
     val ink = if (danger) R.color.mv_error else R.color.mv_ink
     minimumHeight = dp(Size.BUTTON); isClickable = true; isFocusable = true; background = ripple()
     setOnClickListener { clicked() }
+    ViewCompat.setAccessibilityDelegate(this, object : AccessibilityDelegateCompat() {
+        override fun onInitializeAccessibilityNodeInfo(host: View, info: AccessibilityNodeInfoCompat) {
+            super.onInitializeAccessibilityNodeInfo(host, info); info.className = Button::class.java.name
+        }
+    })
     addView(ImageView(context).apply {
         setImageResource(icon); setColorFilter(getColor(ink)); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
     }, LinearLayout.LayoutParams(dp(Size.ICON), dp(Size.ICON)))
@@ -123,7 +133,7 @@ fun Context.listRow(icon: Int, title: String, danger: Boolean = false, clicked: 
     addView(ImageView(context).apply {
         setImageResource(R.drawable.ic_chevron_right); setColorFilter(getColor(R.color.mv_muted))
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-    }, LinearLayout.LayoutParams(dp(20), dp(20)))
+    }, LinearLayout.LayoutParams(dp(Size.INDICATOR), dp(Size.INDICATOR)))
 }
 fun Context.avatar(name: String): TextView = label(name.trim().take(1).uppercase().ifBlank { "?" }, Type.Title).apply {
     gravity = Gravity.CENTER; background = pill(R.color.mv_soft); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO

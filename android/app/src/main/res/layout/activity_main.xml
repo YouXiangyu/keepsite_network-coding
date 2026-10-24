@@ -11,6 +11,6 @@
         android:layout_width="match_parent" android:layout_height="3dp" android:indeterminate="true" />
     <FrameLayout android:id="@+id/content" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
     <LinearLayout android:id="@+id/navigation" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:orientation="horizontal" android:gravity="center_vertical" android:paddingHorizontal="12dp" android:paddingTop="6dp"
+        android:orientation="horizontal" android:gravity="center_vertical" android:paddingHorizontal="12dp" android:paddingTop="8dp"
         android:paddingBottom="4dp" android:elevation="12dp" android:background="@drawable/navigation_background" />
 </LinearLayout>

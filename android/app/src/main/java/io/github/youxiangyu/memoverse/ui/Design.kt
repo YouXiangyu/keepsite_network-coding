@@ -13,6 +13,7 @@ object Design {
         Label(13f, Weight.Medium, 1.3f),
         Caption(12f, Weight.Regular, 1.3f),
         Button(16f, Weight.Medium, 1f),
+        TextButton(15f, Weight.Medium, 1f),
         Nav(11f, Weight.Medium, 1f),
     }
     /** Derived from the system default so CJK fallback fonts receive the same weight as Latin text. */
@@ -42,7 +43,12 @@ object Design {
         const val INPUT = 52
         const val BUTTON = 52
         const val ICON = 24
+        const val INDICATOR = 20
+        const val PLACEHOLDER_ICON = 36
+        const val NAV_ITEM = 56
         const val NAV_ADD = 48
+        const val PREVIEW = 220
+        const val PROGRESS = 6
         const val AVATAR = 56
         const val INFO_LABEL = 72
         const val CONTENT_MAX = 640

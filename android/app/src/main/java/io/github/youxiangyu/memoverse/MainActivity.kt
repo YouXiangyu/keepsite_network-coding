@@ -69,6 +69,8 @@ class MainActivity : AppCompatActivity() {
     private var updatingFields = false
     private var keyboardVisible = false
     private var editorDateValue = ""
+    private val noticeSurface by lazy { rounded(R.color.mv_soft, Radius.CONTROL) }
+    private val errorSurface by lazy { rounded(R.color.mv_error_soft, Radius.CONTROL) }
     private val picker = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null && controller.snapshot().draft != null) controller.selectPhoto(uri)
     }
@@ -147,7 +149,7 @@ class MainActivity : AppCompatActivity() {
         binding.notice.text = state.error.ifBlank { state.busy.ifBlank { state.message } }
         binding.notice.visibility = if (binding.notice.text.isBlank()) View.GONE else View.VISIBLE
         binding.notice.setTextColor(getColor(if (state.error.isBlank()) R.color.mv_muted else R.color.mv_error))
-        binding.notice.background = rounded(if (state.error.isBlank()) R.color.mv_soft else R.color.mv_error_soft, Radius.CONTROL)
+        binding.notice.background = if (state.error.isBlank()) noticeSurface else errorSurface
         val authenticated = state.session?.authenticated == true
         if (binding.navigation.isEmpty()) {
             listOf("票夹" to "library", "录入电影票" to "editor", "设备" to "devices").forEach { (label, route) ->
@@ -200,7 +202,7 @@ class MainActivity : AppCompatActivity() {
     }
     private fun navigationItem(title: String, route: String, clicked: () -> Unit): LinearLayout = column().apply {
         tag = route; gravity = Gravity.CENTER; isClickable = true; isFocusable = true
-        contentDescription = title; minimumHeight = dp(56); background = ripple(borderless = true)
+        contentDescription = title; minimumHeight = dp(Size.NAV_ITEM); background = ripple(borderless = true)
         setOnClickListener { clicked() }
         val add = route == "editor"
         addView(ImageView(this@MainActivity).apply {
@@ -221,8 +223,8 @@ class MainActivity : AppCompatActivity() {
         }
         listOf(binding.connection, binding.notice).forEach { banner ->
             banner.style(Type.Label); banner.setTextColor(getColor(R.color.mv_muted))
-            banner.background = rounded(R.color.mv_soft, Radius.CONTROL)
-            banner.setPadding(dp(Space.M), dp(Space.S + 2), dp(Space.M), dp(Space.S + 2))
+            banner.background = noticeSurface
+            banner.setPadding(dp(Space.M), dp(Space.S), dp(Space.M), dp(Space.S))
             (banner.layoutParams as ViewGroup.MarginLayoutParams).setMargins(dp(Space.PAGE), dp(Space.S), dp(Space.PAGE), 0)
         }
         binding.connection.text = "连接暂不可用 · 已载入内容保留"
@@ -250,11 +252,11 @@ class MainActivity : AppCompatActivity() {
         val hints = mapOf("login" to "登录后查看你的电影票", "register" to "用邮箱创建账号，开始记录每一次观影", "verify" to "输入邮件中的验证码完成验证",
             "forgot" to "输入注册邮箱，我们会发送重置码", "reset" to "输入重置码并设置新密码")
         body.add(pageTitle(titles[model.authMode] ?: "登录"), Space.L)
-        body.add(label(hints[model.authMode].orEmpty(), color = R.color.mv_muted), Space.S)
         if (!session.configured) {
-            body.add(label("服务器尚未配置身份验证，请稍后重试。"), Space.XL)
-            body.add(action("重新连接", clicked = controller::refresh), Space.L); return
+            body.add(label("服务器尚未配置身份验证，请稍后重试。", color = R.color.mv_muted), Space.S)
+            body.add(action("重新连接", clicked = controller::refresh), Space.XL); return
         }
+        body.add(label(hints[model.authMode].orEmpty(), color = R.color.mv_muted), Space.S)
         val email = input("邮箱", 254).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
             setText(model.authEmail); doAfterTextChanged { model.authEmail = it.toString() }
@@ -296,7 +298,7 @@ class MainActivity : AppCompatActivity() {
             links.chunked(2).forEachIndexed { index, pair ->
                 body.add(row().apply {
                     pair.forEach { (text, mode) ->
-                        addView(action(text, ButtonKind.Text) { model.authMode = mode; redraw() }.apply { setTextColor(getColor(R.color.mv_muted)) },
+                        addView(action(text, ButtonKind.Quiet) { model.authMode = mode; redraw() },
                             LinearLayout.LayoutParams(0, -2, 1f))
                     }
                     if (pair.size == 1) addView(View(this@MainActivity), LinearLayout.LayoutParams(0, 0, 1f))
@@ -331,7 +333,7 @@ class MainActivity : AppCompatActivity() {
         box.add(tools, Space.XS)
         box.add(input("搜索电影票", 200).apply {
             setText(model.libraryQuery)
-            background = pill(R.color.mv_soft); compoundDrawablePadding = dp(Space.M - 2)
+            background = pill(R.color.mv_soft); compoundDrawablePadding = dp(Space.S)
             setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_search, 0, 0, 0)
             inputType = InputType.TYPE_CLASS_TEXT; imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH or android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
             minHeight = dp(Size.SEARCH); minimumHeight = minHeight
@@ -396,7 +398,7 @@ class MainActivity : AppCompatActivity() {
             val title = label("", Type.Subtitle).apply { maxLines = 2; ellipsize = TextUtils.TruncateAt.END }
             fun secondaryLabel() = label("", Type.Caption, R.color.mv_muted)
             val date = secondaryLabel(); val caption = secondaryLabel(); val meta = secondaryLabel()
-            box.add(title, Space.S); box.add(date, Space.XS - 2); box.add(meta, Space.XS - 2); box.add(caption, Space.XS - 2)
+            box.add(title, Space.S); box.add(date, Space.XS); box.add(meta, Space.XS); box.add(caption, Space.XS)
             box.layoutParams = RecyclerView.LayoutParams(-1, -2)
             return Holder(box, image, title, caption, date, meta)
         }
@@ -431,9 +433,9 @@ class MainActivity : AppCompatActivity() {
             contentDescription = description; scaleType = ImageView.ScaleType.FIT_CENTER; clipToOutline = true
             background = if (size != null) surface else LayerDrawable(arrayOf(surface, AppCompatResources.getDrawable(this@MainActivity, R.drawable.ic_image)!!.mutate().apply {
                 setTint(getColor(R.color.mv_muted))
-            })).apply { setLayerGravity(1, Gravity.CENTER); setLayerSize(1, dp(36), dp(36)) }
+            })).apply { setLayerGravity(1, Gravity.CENTER); setLayerSize(1, dp(Size.PLACEHOLDER_ICON), dp(Size.PLACEHOLDER_ICON)) }
         }
-        body.addView(image, LinearLayout.LayoutParams(-1, if (size != null) -2 else dp(220)).apply { topMargin = dp(top) })
+        body.addView(image, LinearLayout.LayoutParams(-1, if (size != null) -2 else dp(Size.PREVIEW)).apply { topMargin = dp(top) })
         val caption = label("", Type.Caption, R.color.mv_muted)
         val status = row().apply { addView(caption, LinearLayout.LayoutParams(0, -2, 1f)) }
         body.add(status, Space.XS)
@@ -458,15 +460,15 @@ class MainActivity : AppCompatActivity() {
     }
     private fun detailScreen(state: AppState) {
         val body = scrollColumn()
-        body.addWrapped(action("票夹", ButtonKind.Text) { navigate("library") }.apply {
+        body.addWrapped(action("票夹", ButtonKind.Quiet) { navigate("library") }.apply {
             contentDescription = "返回票夹"; setIconResource(R.drawable.ic_chevron_left); iconPadding = dp(Space.XS)
-            setPadding(0, 0, dp(Space.S), 0); setTextColor(getColor(R.color.mv_muted))
+            setPadding(0, 0, dp(Space.S), 0)
         })
         val ticket = state.tickets.find { it.id == model.detailId }
         if (ticket == null) { body.add(label("这张电影票已不存在。", color = R.color.mv_muted), Space.XL); return }
         body.add(pageTitle(ticket.fields.title.ifBlank { "未命名电影票" }), Space.XS)
         picture(body, "电影封面", ticket.cover)
-        infoPanel(body, "票面信息", listOf("电影", "影院", "影厅", "座位", "放映时间").zip(ticket.fields.values().map { it.replace('T', ' ') }))
+        infoPanel(body, "票面信息", listOf("电影", "影院", "影厅", "座位", "放映时间").zip(ticket.fields.copy(showtime = ticket.fields.showtime.replace('T', ' ')).values()))
         val saved = infoPanel(body, "保存状态", listOfNotNull("自动处理" to Presentation.processing(ticket.processingStatus),
             "原票" to Presentation.cloud(ticket.original.cloudStatus), ticket.poster?.let { "海报" to Presentation.cloud(it.cloudStatus) }))
         ticket.processingError?.takeIf { it.isNotBlank() }?.let { saved.addDivider(); saved.add(label(it, color = R.color.mv_error).apply { setPadding(0, dp(Space.M), 0, dp(Space.M)) }) }
@@ -505,8 +507,8 @@ class MainActivity : AppCompatActivity() {
         }
         val dateHeader = row().apply {
             addView(fieldName("放映时间"), LinearLayout.LayoutParams(0, -2, 1f))
-            addView(action("清除放映时间", ButtonKind.Text) { if (controller.snapshot().draft?.pendingConfirmation != true) { editorDateValue = ""; saveFields() } }.apply {
-                style(Type.Label); setTextColor(getColor(R.color.mv_muted)); setPadding(dp(Space.S), 0, 0, 0)
+            addView(action("清除放映时间", ButtonKind.Quiet) { if (controller.snapshot().draft?.pendingConfirmation != true) { editorDateValue = ""; saveFields() } }.apply {
+                style(Type.Label); setPadding(dp(Space.S), 0, 0, 0)
             })
         }
         body.add(dateHeader, Space.S)
@@ -583,7 +585,7 @@ class MainActivity : AppCompatActivity() {
                 add(label("${Presentation.bytes(state.cache.bytes)} / ${Presentation.bytes(state.cache.limit)}", Type.Caption, R.color.mv_muted), Space.XS)
                 add(LinearProgressIndicator(this@MainActivity).apply {
                     max = 1000; progress = if (state.cache.limit > 0) (state.cache.bytes * 1000 / state.cache.limit).toInt().coerceIn(0, 1000) else 0
-                    trackThickness = dp(Space.S - 2); trackCornerRadius = dp(Space.XS - 1)
+                    trackThickness = dp(Size.PROGRESS); trackCornerRadius = dp(Size.PROGRESS) / 2
                     setIndicatorColor(getColor(R.color.mv_ink)); trackColor = getColor(R.color.mv_soft)
                     importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                 }, Space.M)
@@ -607,7 +609,7 @@ class MainActivity : AppCompatActivity() {
             add(label(when { !state.peer.enabled -> "设备间传输已关闭"; state.peer.registered -> "本机已在线，可与同账号设备交换图片"; else -> "等待连接" }), Space.M)
             add(label("发送中 ${state.peer.sending} · 接收中 ${state.peer.receiving}", Type.Caption, R.color.mv_muted), Space.XS)
             if (state.peer.error.isNotBlank()) add(label(state.peer.error, color = R.color.mv_error), Space.S)
-            if (state.peer.devices.isEmpty())                 add(label("暂无在线设备。", Type.Caption, R.color.mv_muted), Space.S)
+            if (state.peer.devices.isEmpty()) add(label("暂无在线设备。", Type.Caption, R.color.mv_muted), Space.S)
             state.peer.devices.forEach { device ->
                 addDivider(Space.M)
                 add(label(device.label.ifBlank { device.peerId } + if (device.peerId == state.peer.peerId) "（本机）" else "", Type.Subtitle), Space.M)
