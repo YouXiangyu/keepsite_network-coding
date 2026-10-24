@@ -6,9 +6,27 @@
         <item name="colorOnPrimary">@color/mv_background</item>
         <item name="colorSecondary">@color/mv_accent</item>
         <item name="android:colorBackground">@color/mv_background</item>
+        <item name="android:windowBackground">@color/mv_background</item>
         <item name="android:textColorPrimary">@color/mv_ink</item>
         <item name="android:textColorSecondary">@color/mv_muted</item>
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">true</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.MemoVerse.Dialog</item>
+    </style>
+    <style name="ThemeOverlay.MemoVerse.Dialog" parent="ThemeOverlay.MaterialComponents.MaterialAlertDialog">
+        <item name="shapeAppearanceOverlay">@style/ShapeAppearance.MemoVerse.Dialog</item>
+        <item name="colorPrimary">@color/mv_ink</item>
+        <item name="colorSecondary">@color/mv_ink</item>
+        <item name="buttonBarPositiveButtonStyle">@style/MemoVerse.DialogButton</item>
+        <item name="buttonBarNegativeButtonStyle">@style/MemoVerse.DialogButton</item>
+    </style>
+    <style name="ShapeAppearance.MemoVerse.Dialog" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">16dp</item>
+    </style>
+    <style name="MemoVerse.DialogButton" parent="Widget.MaterialComponents.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/mv_ink</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:textSize">15sp</item>
     </style>
 </resources>
