@@ -1,5 +1,18 @@
 # keepsite 项目运行信息
-## 2026-10-24 名称迁移状态
+## 2026-10-24 最新主线发布与实际迁移
+
+用户明确授权合并 PR #6 并发布最新 main。最新 head `f55dc6d` 的 Backend、Frontend、Android、deployment-recovery 均成功（一次 PowerShell 测试超时已定点重跑通过），Codex 对同一 head 完成审查且无发现。合并后的 `main@810f900cd6f3d664cf96af3095b44a5bbea197ff` 已正式运行；`current` 与实际 MainPID cwd 核验一致，重启次数 0。
+
+本次实例 `i-0e9ba9bc6f4b1c019` 已开机，公网 IP `52.196.89.220`；这是本次核验值，后续操作仍须实时查询。`keepsite.service`、Nginx、Redis、`keepsite-ddns.service` 均 active。新 `keepsite-auto-stop.timer` 已启用并核对与旧 timer 完全相同的本次开机期限：北京时间 2026-10-24 23:53:26，未延长或重置。旧应用、DDNS 与旧 timer 已停用自启动。
+
+实际运行目录已切为 `/opt/keepsite/current`、`/var/lib/keepsite-v3` 与 `/etc/keepsite.env`。原 `/var/lib/memoverse-v3`、原发布与配置保留。迁移前的 1 个账户、1 张票据及原图引用核对保留，S3 原对象通过校验，认证库完整迁移，账户 ID 未变化。备份位于 `/opt/memoverse/predeploy-backups/keepsite-810f900-20261024T1455`，激活回滚记录位于 `/opt/keepsite/activation-backups/activation-Xbu3i4ae`。新系统接受写入后不得直接回退到过时的旧数据库。
+
+TMDB 只读令牌已从本机 `.cache/server/keepsite-tmdb.env` 安全配置到服务器 `/etc/keepsite.env`（root:root 0600），实际进程已确认启用 TMDB。以 keepsite 服务身份完成真实电影检索和 780×1170 海报下载/解码、OCR 模型检查、Redis ping 及原图对象校验；未把 AWS 本机 root 登录凭据上传到服务器，应用继续使用实例角色。Cognito/S3/Cloudflare 原凭据及资源 ID 保留，未创建或重命名云资源。
+
+源站和服务器公网 HTTPS 200、证书校验通过、HTTP 跳转正常；匿名 session 显示邮箱/Google 均启用，票夹及账户绑定接口拒绝匿名访问。实际用户登录、双登录方式绑定和旧票据重新处理仍待用户验收。手机尚未安装新包，旧包使用旧协议，测试新版原生功能需要安装 keepsite 包；保留旧应用和未同步草稿。候选端口已关闭，本次候选数据副本及上传临时密钥已清理；正式数据、模型、release 和回滚备份保留。机器剩余磁盘约 1.4 GB。
+
+本机详细发布证据 `.cache/server/deploy-keepsite-20261024.json`；以下旧名称与状态是历史定位，不得替代本节与实时核验。
+## 2026-10-24 改名前的迁移计划（历史）
 
 用户明确要求软件及技术标识统一为小写 `keepsite`，并确认执行显式完整迁移。当前源码目标：Android `io.github.youxiangyu.keepsite`、`KEEPSITE_*` 环境变量、`keepsite.sqlite3`、`keepsite.service`、`keepsite-auto-stop.timer`、`/opt/keepsite`、`/var/lib/keepsite-v3`、`/etc/keepsite.env`。数据复制与验证工具为 `scripts/migrate-keepsite.py`，迁移步骤见 `docs/keepsite迁移.md`。
 
