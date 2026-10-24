@@ -16,7 +16,11 @@ M1 将应用收窄为个人电影票，M2 补充上传核对、持久变更日�
 
 首次同步分批获取同一游标的完整快照，再补拉其后的持久变更；新增、纠错、删除和处理结果均走增量。WebSocket 的状态同步消息只发水位提示，同一连接另承载设备登记与 P2P 信令；丢通知或重连后仍按 SQL 游标校准。写操作回执返回同步空间 `serverId` 与确认游标，客户端补齐同一空间的全部变化才确认保存；过期游标重取快照，期间保留页面数据与编辑草稿。旧生产 `/api/state` 接口已移除。
 
-缺少 S3、Redis 或固定模型时明确显示处理不可用。图片按有效本机缓存、本人在线页面 P2P、授权云端恢复的顺序获取；P2P 有并发、授权、超时和一次续传边界。免费 TURN 的额度边界未确认，保持关闭并标记强制中继未验收；Android 按 M7 实施。测试与测量的具体范围见开发计划，合成票根和两部公版电影的海报验证不代表真实票据准确率或现代电影覆盖率。
+缺少 S3、Redis 或固定模型时明确显示处理不可用。图片按有效本机缓存、本人在线设备 P2P、授权云端恢复的顺序获取；P2P 有并发、授权、超时和一次续传边界。免费 TURN 的额度边界未确认，保持关闭并标记强制中继未验收。测试与测量的具体范围见开发计划，合成票根和两部公版电影的海报验证不代表真实票据准确率或现代电影覆盖率。
+
+独立 Kotlin 原生客户端位于 `android/`，复用既有账号、票根、同步和媒体协议，使用系统照片选择器、按账号缓存和前台 WebRTC 传输。邮箱认证使用服务端会话；Google 通过系统浏览器、短效一次性票据与 S256 校验返回原生应用，提供商令牌留在服务端。切后台、退出和换账号会取消当前请求与传输；恢复前台重新校准服务端状态。构建、权限与验收边界见 [Android 说明](android/README.md)。
+
+Android 当前为 `codex/android-native-progress` 上的 **M7 WIP 检查点**。已完成的构建、34 项 JVM 测试与一项后台恢复回归不等于原生阶段全部验收；完整 UI 矩阵、原生 CRUD 与 Android↔Web 双向联调仍待完成。Web 的 M1—M6 单独提交合并，不以此进度检查点作为可发布版本。
 
 浮雕、分类标签、分享、社区及旧模板调用链已退出新版。历史实现与资料可从 Git 检查点 `d7945d8` 追溯；实际数据库、照片、模型缓存、S3 对象和回滚文件保持原样。
 
@@ -33,6 +37,7 @@ M1 将应用收窄为个人电影票，M2 补充上传核对、持久变更日�
 | 响应式 Web | `demo/src/Prototype.tsx`、`app/`、`features/tickets/` | 运行时契约、单测、浏览器测试和生产构建 |
 | 本机媒体缓存 | `demo/src/mediaCache.ts`、`MediaProvider.tsx` | 账号隔离、全量清理后恢复、空间不足、完整性与按需加载 |
 | 本人设备传输 | `backend/peer_service.py`、`peer_registry.py`、`demo/src/media/` | 授权信令、实际 DataChannel、校验与续传、服务器回退和资源回收 |
+| Kotlin Android | `android/app/src/main/`、`backend/native_auth.py` | JVM 协议/缓存测试、原生仪器测试及 Web 双向联调；真机验收由用户执行 |
 | 综合测量 | `scripts/benchmark-browser.mjs`、`scripts/benchmark-processing.py` | 300 条元数据的浏览器矩阵、完整任务采样与真实隔离 OCR 流水线；环境和限制见报告 |
 | 账号备份、隔离恢复 | `backend/backups.py`、`scripts/restore-account-backup.py` | 资源限制、ZIP 安全、归属、墓碑和完整性验证 |
 | 旧数据迁移 | `scripts/migrate-movie-tickets.py` | `scripts/tests/test_ticket_migration.py` |
@@ -65,7 +70,7 @@ python -B -m pytest deploy/ubuntu/tests -q
 
 在 `demo/` 运行 `npm run check:runtime`、`npm run test:unit`、`npm run build`、`npm run test:web` 和生产构建故障测试。测试使用隔离数据和测试身份；真实 Redis、固定 OCR 模型由专门测试验证，真实 Google/邮箱、S3、实际票据、TURN 和真机另行验收。
 
-GitHub PR 与 `codex/**` 分支推送运行 `Backend tests`、`Frontend tests` 和 `deployment-recovery`；后端 CI 使用隔离 Redis 服务执行真实客户端验证。合并前检查必须对应最新提交，独立代码审查也必须覆盖最新提交。开发交付到提交与 PR，部署、EC2 启停和合并另等用户明确要求，不自动执行。
+GitHub PR 与 `codex/**` 分支推送运行 `Backend tests`、`Frontend tests`、`Android tests` 和 `deployment-recovery`；后端 CI 使用隔离 Redis 服务执行真实客户端验证。Android CI 编译应用与仪器测试、运行 JVM 测试及 Lint，不将编译成功称为设备测试通过。合并前检查必须对应最新提交，独立代码审查也必须覆盖最新提交。开发交付到提交与 PR，部署、EC2 启停和合并另等用户明确要求，不自动执行。
 
 ## 部署信息
 

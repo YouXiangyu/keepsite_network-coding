@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "retrievedAt": "2026-10-22",
+  "artifact": "io.github.webrtc-sdk:android:150.7871.01",
+  "artifactSha256": "0a1627b1a48c2bc17d9a40d62fc47bd45166f44a311e95917f147c402de379b0",
+  "packagingTag": "v150.7871.01",
+  "packagingCommit": "45d64c8be316b89e139d20ea51602027dc486d27",
+  "nativeSourceCommit": "73cb8180f7258ee292878d6edd05177f41883962",
+  "mappingSource": "https://github.com/webrtc-sdk/android/blob/45d64c8be316b89e139d20ea51602027dc486d27/CHANGES.md",
+  "noticeScope": "Unmodified license and patent grant text plus the complete maintainer-supplied bundled third-party notice from the matching Android release commit; not a separately reconstructed native-library bill of materials.",
+  "files": [
+    {
+      "file": "WEBRTC-SDK-PACKAGING-LICENSE.txt",
+      "sourceUrl": "https://raw.githubusercontent.com/webrtc-sdk/android/45d64c8be316b89e139d20ea51602027dc486d27/LICENSE",
+      "bytes": 1068,
+      "sha256": "e6b282fe6c0fb353928923470457f31b44cbab203effd60c0cde4a5bb96c8aec"
+    },
+    {
+      "file": "WEBRTC-THIRD-PARTY-NOTICES.md",
+      "sourceUrl": "https://raw.githubusercontent.com/webrtc-sdk/android/45d64c8be316b89e139d20ea51602027dc486d27/Licenses/WEBRTC.md",
+      "bytes": 788358,
+      "sha256": "d1f9382c6878ac024155fd6d44a5977329108bb8b0a01cea40e4a2f1d7de252e"
+    },
+    {
+      "file": "WEBRTC-LICENSE.txt",
+      "sourceUrl": "https://raw.githubusercontent.com/webrtc-sdk/webrtc/73cb8180f7258ee292878d6edd05177f41883962/LICENSE",
+      "bytes": 1511,
+      "sha256": "ab00a482b6a3902e40211b43c5d0441962ea99b6cc7c25c0f243fa270b78d482"
+    },
+    {
+      "file": "WEBRTC-PATENTS.txt",
+      "sourceUrl": "https://raw.githubusercontent.com/webrtc-sdk/webrtc/73cb8180f7258ee292878d6edd05177f41883962/PATENTS",
+      "bytes": 1388,
+      "sha256": "01462e2068d1a04c2274f3389773014c14ed9bc3446b28303543bd3e3c064145"
+    }
+  ]
+}

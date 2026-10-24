@@ -6,3 +6,6 @@
 *.pdf binary
 *.docx binary
 *.glb binary
+
+# Preserve the fixed upstream license notice byte-for-byte, including its whitespace.
+android/app/src/main/assets/licenses/WEBRTC-THIRD-PARTY-NOTICES.md -whitespace

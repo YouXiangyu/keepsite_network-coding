@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical">
+    <TextView android:id="@+id/brand" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:text="我的票夹" />
+    <TextView android:id="@+id/connection" android:layout_width="match_parent" android:layout_height="wrap_content" />
+    <TextView android:id="@+id/notice" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:accessibilityLiveRegion="polite" />
+    <ProgressBar android:id="@+id/progress" style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent" android:layout_height="3dp" android:indeterminate="true" />
+    <FrameLayout android:id="@+id/content" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" />
+    <LinearLayout android:id="@+id/navigation" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:gravity="center_vertical" android:paddingHorizontal="12dp" android:paddingTop="8dp"
+        android:paddingBottom="4dp" android:elevation="12dp" android:background="@drawable/navigation_background" />
+</LinearLayout>

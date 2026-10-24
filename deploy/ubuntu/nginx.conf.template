@@ -50,6 +50,15 @@ server {
         add_header Referrer-Policy no-referrer always;
         add_header X-Content-Type-Options nosniff always;
     }
+    # Native browser launch also carries a short-lived, one-use flow handle.
+    location = /api/auth/native/google/launch {
+        access_log off;
+        error_log /dev/null crit;
+        proxy_pass http://127.0.0.1:8000;
+        add_header Cache-Control "no-store" always;
+        add_header Referrer-Policy no-referrer always;
+        add_header X-Content-Type-Options nosniff always;
+    }
     location ^~ /api/auth/ {
         client_max_body_size 8k;
         proxy_pass http://127.0.0.1:8000;

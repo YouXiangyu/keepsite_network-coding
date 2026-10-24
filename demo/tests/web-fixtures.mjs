@@ -22,14 +22,15 @@ export const snapshotPage = (id = 'a') => ({
   capabilities: { processing: false, processingUnavailableReason: '处理配置未就绪，请配置服务端识别。', cloudStorage: true, deviceSync: false },
 });
 
-export function imageFixture(seed) {
+export function imageFixture(seed, width = 4, height = 4) {
   const crc = bytes => { let value = 0xffffffff; for (const byte of bytes) { value ^= byte; for (let bit = 0; bit < 8; bit++) value = (value >>> 1) ^ ((value & 1) ? 0xedb88320 : 0); } return (value ^ 0xffffffff) >>> 0; };
   const chunk = (name, data) => { const kind = Buffer.from(name), output = Buffer.alloc(data.length + 12); output.writeUInt32BE(data.length); kind.copy(output, 4); data.copy(output, 8); output.writeUInt32BE(crc(Buffer.concat([kind, data])), data.length + 8); return output; };
-  const header = Buffer.alloc(13); header.writeUInt32BE(4); header.writeUInt32BE(4, 4); header[8] = 8; header[9] = 6;
-  const pixels = Buffer.alloc(68); for (let row = 0; row < 4; row++) for (let col = 0; col < 4; col++) { const offset = row * 17 + col * 4 + 1; pixels[offset] = seed % 256; pixels[offset + 1] = Math.floor(seed / 256); pixels[offset + 2] = 100; pixels[offset + 3] = 255; }
+  const header = Buffer.alloc(13); header.writeUInt32BE(width); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = 6;
+  const stride = width * 4 + 1;
+  const pixels = Buffer.alloc(height * stride); for (let row = 0; row < height; row++) for (let col = 0; col < width; col++) { const offset = row * stride + col * 4 + 1; pixels[offset] = seed % 256; pixels[offset + 1] = Math.floor(seed / 256); pixels[offset + 2] = 100; pixels[offset + 3] = 255; }
   const bytes = Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), chunk('IHDR', header), chunk('IDAT', deflateSync(pixels)), chunk('IEND', Buffer.alloc(0))]);
   const hash = createHash('sha256').update(bytes).digest('hex');
-  return { bytes, asset: { assetId: hash, sha256: hash, url: '/api/media/' + hash, mimeType: 'image/png', size: bytes.length, width: 4, height: 4, cloudStatus: 'saved' } };
+  return { bytes, asset: { assetId: hash, sha256: hash, url: '/api/media/' + hash, mimeType: 'image/png', size: bytes.length, width, height, cloudStatus: 'saved' } };
 }
 
 export const posterSource = (title = 'Synthetic_movie_poster.png') => ({
