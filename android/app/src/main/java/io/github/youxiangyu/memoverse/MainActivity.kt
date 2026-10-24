@@ -68,6 +68,7 @@ class MainActivity : AppCompatActivity() {
     private var editorStatus: TextView? = null
     private var updatingFields = false
     private var keyboardVisible = false
+    private var accountDialog: androidx.appcompat.app.AlertDialog? = null
     private var editorDateValue = ""
     private val noticeSurface by lazy { rounded(R.color.mv_soft, Radius.CONTROL) }
     private val errorSurface by lazy { rounded(R.color.mv_error_soft, Radius.CONTROL) }
@@ -118,6 +119,7 @@ class MainActivity : AppCompatActivity() {
         subscription = controller.subscribe(::render); render(controller.snapshot())
     }
     override fun onStop() {
+        accountDialog?.dismiss(); accountDialog = null
         active = false; subscription?.close(); subscription = null
         releaseScreen(); screenKey = null; controller.setForeground(false); super.onStop()
     }
@@ -128,7 +130,10 @@ class MainActivity : AppCompatActivity() {
         editorSave = null; editorStatus = null; editorPhotoButton = null
         libraryCount = null; libraryEmpty = null; libraryDraft = null
     }
-    private fun navigate(route: String) { model.route = route; screenKey = null; render(controller.snapshot()) }
+    private fun navigate(route: String) {
+        model.route = route; screenKey = null; render(controller.snapshot())
+        if (route == "devices") controller.refreshAccountMethods()
+    }
     private fun redraw() { screenKey = null; render(controller.snapshot()) }
     private fun render(state: AppState) {
         if (!active) return
@@ -137,6 +142,7 @@ class MainActivity : AppCompatActivity() {
             model.libraryAccount = nextAccount; model.libraryQuery = ""; model.libraryOldestFirst = false
         }
         if (nextAccount != account) {
+            accountDialog?.dismiss(); accountDialog = null
             account = nextAccount; model.route = "library"; model.detailId = null
             model.awaitingDraft = false; model.editorWasOpen = false; screenKey = null; releaseScreen()
         }
@@ -176,7 +182,7 @@ class MainActivity : AppCompatActivity() {
             !authenticated -> listOf("auth", model.authMode, state.session.configured, state.session.emailEnabled, state.session.googleEnabled)
             model.route == "editor" -> listOf("editor", state.draft?.operationId)
             model.route == "detail" -> listOf("detail", state.tickets.find { it.id == model.detailId })
-            model.route == "devices" -> listOf("devices", state.cache, state.peer, state.session.email)
+            model.route == "devices" -> listOf("devices", state.cache, state.peer, state.session.email, state.accountMethods, state.accountPasswordEmail)
             else -> "library"
         }
         if (key != screenKey) {
@@ -473,10 +479,15 @@ class MainActivity : AppCompatActivity() {
             "原票" to Presentation.cloud(ticket.original.cloudStatus), ticket.poster?.let { "海报" to Presentation.cloud(it.cloudStatus) }))
         ticket.processingError?.takeIf { it.isNotBlank() }?.let { saved.addDivider(); saved.add(label(it, color = R.color.mv_error).apply { setPadding(0, dp(Space.M), 0, dp(Space.M)) }) }
         ticket.poster?.source?.let { source ->
-            val panel = infoPanel(body, "海报来源", listOf("作者" to source.author.ifBlank { "未提供" }, "许可" to source.licenseName))
+            val facts = when (source) {
+                is CommonsPosterSource -> listOf("作者" to source.author.ifBlank { "未提供" }, "许可" to source.licenseName)
+                is TmdbPosterSource -> listOf("来源" to "TMDB", "版权" to "海报版权归原权利人所有")
+            }
+            val terms = when (source) { is CommonsPosterSource -> source.licenseUrl; is TmdbPosterSource -> source.termsUrl }
+            val panel = infoPanel(body, "海报来源", facts)
             val links = row()
             if (Presentation.safeExternalUrl(source.sourcePage)) links.addView(action("查看来源页面", ButtonKind.Text) { openUrl(source.sourcePage) }.apply { setPadding(0, 0, dp(Space.L), 0) })
-            if (Presentation.safeExternalUrl(source.licenseUrl)) links.addView(action("查看许可条款", ButtonKind.Text) { openUrl(source.licenseUrl) }.apply { setPadding(0, 0, dp(Space.L), 0) })
+            if (Presentation.safeExternalUrl(terms)) links.addView(action("查看使用条款", ButtonKind.Text) { openUrl(terms) }.apply { setPadding(0, 0, dp(Space.L), 0) })
             if (links.isNotEmpty()) { panel.addDivider(); panel.add(links) }
         }
         if (ticket.poster != null) {
@@ -577,6 +588,29 @@ class MainActivity : AppCompatActivity() {
             }, LinearLayout.LayoutParams(0, -2, 1f))
         }, Space.L)
 
+        body.add(sectionTitle("登录方式"), Space.XL)
+        body.add(panel().apply {
+            add(label("绑定后可使用任一方式独立登录当前票夹。其他票夹的登录方式不能合并到此账号。"), Space.M)
+            val methods = state.accountMethods
+            if (methods == null) add(action("读取登录方式", clicked = controller::refreshAccountMethods), Space.M)
+            else {
+                add(label("Google：" + if (methods.google.linked) "已绑定 · ${methods.google.email}" else "未绑定"), Space.M)
+                if (!methods.google.linked && state.session?.googleEnabled == true) {
+                    if (methods.password.linked) add(label("请绑定使用另一个邮箱的 Google 账号。", Type.Caption), Space.S)
+                    add(action("绑定 Google") { controller.linkGoogle(::openUrl) }, Space.S)
+                }
+                add(label("邮箱密码：" + if (methods.password.linked) "已添加 · ${methods.password.email}" else "未添加"), Space.M)
+                if (!methods.password.linked && state.session?.emailEnabled == true) {
+                    if (methods.google.linked) add(label("Google 先登录时，请使用另一个可收验证码的邮箱设置密码。", Type.Caption), Space.S)
+                    if (state.accountPasswordEmail != null) add(action("输入验证码并完成添加") { accountPasswordDialog("confirm", state.accountPasswordEmail) }, Space.S)
+                    add(action("添加新邮箱密码") { accountPasswordDialog("register") }, Space.S)
+                    add(action("绑定已有邮箱密码", ButtonKind.Text) { accountPasswordDialog("link") }, Space.S)
+                    if (state.accountPasswordEmail == null) add(action("已有邮件验证码", ButtonKind.Text) { accountPasswordDialog("confirm") }, Space.S)
+                }
+            }
+            setPadding(paddingLeft, paddingTop, paddingRight, dp(Space.L))
+        }, Space.M)
+
         body.add(sectionTitle("本机图片缓存"), Space.XL)
         body.add(panel().apply {
             setPadding(dp(Space.L), dp(Space.L), dp(Space.L), dp(Space.XS))
@@ -633,6 +667,16 @@ class MainActivity : AppCompatActivity() {
             }, Space.M)
         }
 
+        body.add(sectionTitle("关于海报数据"), Space.XL)
+        body.add(panel().apply {
+            addView(ImageView(this@MainActivity).apply {
+                setImageResource(R.drawable.tmdb_logo); contentDescription = "TMDB"
+                scaleType = ImageView.ScaleType.FIT_START; adjustViewBounds = true
+            }, LinearLayout.LayoutParams(dp(150), dp(65)).apply { topMargin = dp(Space.L) })
+            add(label("This product uses the TMDB API but is not endorsed or certified by TMDB.", Type.Caption), Space.M)
+            add(action("TMDB 数据与使用条款", ButtonKind.Text) { openUrl("https://www.themoviedb.org/api-terms-of-use") }, Space.S)
+        }, Space.M)
+
         body.add(panel().apply {
             setPadding(dp(Space.L), dp(Space.XS), dp(Space.L), dp(Space.XS))
             add(listRow(R.drawable.ic_refresh, "刷新状态", clicked = controller::refresh))
@@ -642,6 +686,39 @@ class MainActivity : AppCompatActivity() {
                     .setPositiveButton("退出") { _, _ -> controller.logout() }.show()
             })
         }, Space.XL)
+    }
+    private fun accountPasswordDialog(mode: String, fixedEmail: String? = null) {
+        val fields = column().apply { setPadding(dp(Space.L), dp(Space.S), dp(Space.L), 0) }
+        val email = input("邮箱", 254).apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS; setText(fixedEmail.orEmpty()); isEnabled = fixedEmail == null }
+        val code = input("邮件验证码", 100)
+        val password = input(if (mode == "link") "已有邮箱密码" else if (mode == "confirm") "刚设置的密码" else "设置密码", 128).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setAutofillHints(if (mode == "link") View.AUTOFILL_HINT_PASSWORD else "newPassword")
+        }
+        fields.add(label("邮箱", Type.Label)); fields.add(email, Space.S)
+        if (mode == "confirm") { fields.add(label("邮件验证码", Type.Label), Space.M); fields.add(code, Space.S) }
+        fields.add(label(password.hint.toString(), Type.Label), Space.M); fields.add(password, Space.S)
+        fields.add(label("密码需为 12–128 个字符，包含大小写字母、数字和符号。", Type.Caption), Space.S)
+        accountDialog?.dismiss()
+        val builder = MaterialAlertDialogBuilder(this).setTitle(if (mode == "confirm") "验证并添加邮箱密码" else if (mode == "link") "绑定已有邮箱密码" else "添加新邮箱密码")
+            .setView(fields).setNegativeButton("取消", null).setPositiveButton(if (mode == "register") "发送验证邮件" else "验证并绑定", null)
+        if (mode == "confirm") builder.setNeutralButton("重发验证码", null)
+        val dialog = builder.create()
+        accountDialog = dialog
+        dialog.setOnShowListener {
+            if (mode == "confirm") dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                if (email.text.isNullOrBlank()) email.error = "请填写邮箱" else controller.resendEmail(email.text.toString())
+            }
+            dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                if (email.text.isNullOrBlank()) { email.error = "请填写邮箱"; return@setOnClickListener }
+                if (mode == "confirm" && code.text.isNullOrBlank()) { code.error = "请填写邮件验证码"; return@setOnClickListener }
+                if (password.text.isNullOrEmpty()) { password.error = "请填写密码"; return@setOnClickListener }
+                controller.addAccountPassword(mode, email.text.toString(), password.text.toString(), code.text.toString())
+                password.text?.clear(); dialog.dismiss()
+            }
+        }
+        dialog.setOnDismissListener { password.text?.clear(); if (accountDialog === dialog) accountDialog = null }
+        dialog.show()
     }
     private fun openUrl(url: String) {
         if (!Presentation.safeExternalUrl(url)) return

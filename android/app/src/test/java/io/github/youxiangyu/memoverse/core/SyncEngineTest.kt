@@ -89,4 +89,18 @@ class SyncEngineTest {
         poster.getJSONObject("source").put("sourcePage", "https://other.example/redirect")
         assertThrows(ApiFailure::class.java) { Wire.ticket(body) }
     }
+    @Test fun tmdbSourceRejectsUntrustedPagesAndImagePaths() {
+        val source = JSONObject().put("provider", "tmdb").put("sourcePage", "https://www.themoviedb.org/movie/157336")
+            .put("sourceFile", "/gEU2QniE6E77NI6lCU6MxlNBvIx.jpg").put("termsUrl", "https://www.themoviedb.org/api-terms-of-use").put("fetchedAt", 1)
+        assertTrue(Wire.posterSource(source) is TmdbPosterSource)
+        for ((key, value) in listOf("sourcePage" to "https://www.themoviedb.org/movie/01", "sourcePage" to "https://www.themoviedb.org.evil.test/movie/1", "sourceFile" to "/../../poster.jpg", "termsUrl" to "https://evil.test/terms")) {
+            assertThrows(ApiFailure::class.java) { Wire.posterSource(JSONObject(source.toString()).put(key, value)) }
+        }
+    }
+    @Test fun accountMethodsRequireConsistentLinkedEmail() {
+        val methods = JSONObject("""{"password":{"linked":true,"email":"a@example.test"},"google":{"linked":false,"email":null}}""")
+        assertEquals("a@example.test", Wire.accountMethods(methods).password.email)
+        methods.getJSONObject("password").put("email", JSONObject.NULL)
+        assertThrows(ApiFailure::class.java) { Wire.accountMethods(methods) }
+    }
 }

@@ -1,5 +1,6 @@
 """Durable pipeline, real Streams protocol, lease fencing and publication recovery."""
 from contextlib import contextmanager
+from dataclasses import replace
 import json
 import multiprocessing
 import os
@@ -14,7 +15,7 @@ from fastapi.testclient import TestClient
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 from backend.app import create_app
-from backend.backups import create_account_backup, restore_account_backup
+from backend.backups import BackupError, create_account_backup, restore_account_backup
 from backend.object_storage import S3ObjectStore, StorageError
 from backend.posters import PosterCandidate
 from backend.processing import ProcessingWorker, ProcessingFailed, run_isolated_ocr, TEMP_RETENTION_SECONDS
@@ -23,7 +24,7 @@ from backend.shared_state import RedisSharedState
 from account_fixtures import account_snapshot
 from account_fixtures import ORIGIN, USERS, WRITE_HEADERS, FakeAuthFactory, image_bytes, signed_in
 from test_api import create, upload, patch, delete, make_app, applied
-from test_backup_restore import restored_app
+from test_backup_restore import restored_app, rewrite
 from test_object_storage import FakeS3Client
 
 OWNER = USERS["alice"]["id"]
@@ -130,6 +131,25 @@ def test_missing_configuration_never_fakes_processing_or_registers_jobs(tmp_path
         with app.state.store.transaction() as db:
             assert db.execute("SELECT COUNT(*) FROM processing_jobs").fetchone()[0] == 0
             assert db.execute("SELECT COUNT(*) FROM operations WHERE id='manual'").fetchone()[0] == 0
+
+
+def test_missing_tmdb_read_token_disables_processing_with_explicit_reason(tmp_path, monkeypatch):
+    monkeypatch.setenv("MEMOVERSE_POSTER_PROVIDER", "tmdb")
+    monkeypatch.delenv("MEMOVERSE_TMDB_READ_ACCESS_TOKEN", raising=False)
+    storage = S3ObjectStore("test-bucket", "ap-northeast-1", client=FakeS3Client())
+    cache = RedisSharedState(client=fakeredis.FakeRedis())
+    def factory(store, shared):
+        return ProcessingWorker(store, shared, ocr_status={"available": True, "reason": None})
+    app = create_app(tmp_path / "data", object_store=storage, auth_provider=FakeAuthFactory(), shared_state=cache,
+                     run_recovery=False, run_processing=False, processing_factory=factory)
+    with TestClient(app, base_url=ORIGIN) as client:
+        signed_in(client)
+        state = account_snapshot(client)
+        assert state["capabilities"]["processing"] is False
+        assert "TMDB" in state["capabilities"]["processingUnavailableReason"]
+        create(client)
+        with app.state.store.transaction() as db:
+            assert db.execute("SELECT COUNT(*) FROM processing_jobs").fetchone()[0] == 0
 
 
 def test_processing_retry_is_idempotent_and_owner_scoped(tmp_path):
@@ -452,11 +472,19 @@ def test_ocr_timeout_terminates_owned_process_and_closes_resources():
     assert {child.pid for child in multiprocessing.active_children()} <= before
 
 
-def test_poster_attribution_survives_backup_but_runtime_jobs_do_not_resume_as_ready(tmp_path):
-    with pipeline(tmp_path) as (client, app, worker, *_):
+@pytest.mark.parametrize("provider_name", ["wikimedia_commons", "tmdb"])
+def test_poster_attribution_survives_backup_but_runtime_jobs_do_not_resume_as_ready(tmp_path, provider_name):
+    poster = candidate()
+    if provider_name == "tmdb":
+        poster = replace(poster, provider="tmdb", source_page="https://www.themoviedb.org/movie/535167",
+                         source_file="/Poster0123.jpg", author="", license_name="", license_url="")
+    with pipeline(tmp_path, provider=PosterFixture(poster)) as (client, app, worker, *_):
         create(client)
         worker.run_once()
         source = ticket(client)["media"]["poster"]["source"]
+        assert source["provider"] == provider_name
+        if provider_name == "tmdb":
+            assert set(source) == {"provider", "sourcePage", "sourceFile", "termsUrl", "fetchedAt"}
         archive = create_account_backup(app.state.store, OWNER)
         destination = tmp_path / "restored"
         restore_account_backup(archive, destination, user_id=OWNER)
@@ -470,6 +498,25 @@ def test_poster_attribution_survives_backup_but_runtime_jobs_do_not_resume_as_re
             assert reader.get(result["media"]["poster"]["url"]).status_code == 200
             with restored.state.store.transaction() as db:
                 assert db.execute("SELECT COUNT(*) FROM processing_artifacts").fetchone()[0] == 0
+
+
+def test_tmdb_backup_rejects_unsafe_attribution_before_publishing_destination(tmp_path):
+    poster = replace(candidate(), provider="tmdb", source_page="https://www.themoviedb.org/movie/535167",
+                     source_file="/Poster0123.jpg", author="", license_name="", license_url="")
+    with pipeline(tmp_path, provider=PosterFixture(poster)) as (client, app, worker, *_):
+        create(client)
+        worker.run_once()
+        archive = create_account_backup(app.state.store, OWNER)
+        def corrupt(_files, manifest):
+            source = json.loads(manifest["posterSources"][0]["source"])
+            source["termsUrl"] = "https://evil.test"
+            manifest["posterSources"][0]["source"] = json.dumps(source)
+        damaged = tmp_path / "unsafe.zip"
+        rewrite(archive, damaged, corrupt)
+        destination = tmp_path / "unsafe-restored"
+        with pytest.raises(BackupError, match="Malformed account backup"):
+            restore_account_backup(damaged, destination, user_id=OWNER)
+        assert not destination.exists()
 
 
 def test_real_redis_stream_group_delivery_and_queue_loss(tmp_path):

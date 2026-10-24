@@ -137,6 +137,18 @@ def test_m3_processing_states_and_safe_attribution_survive_cache(cache, status):
     assert get(cache) is None and not put(cache, payload)
 
 
+def test_tmdb_attribution_survives_cache_and_malformed_metadata_is_rejected(cache):
+    payload = snapshot()
+    source = {"provider": "tmdb", "sourcePage": "https://www.themoviedb.org/movie/535167",
+              "sourceFile": "/Poster0123.jpg", "termsUrl": "https://www.themoviedb.org/api-terms-of-use", "fetchedAt": 1}
+    ticket = payload["data"]["tickets"][0]
+    ticket["media"]["poster"] = {**ticket["media"]["original"], "source": source}
+    assert put(cache, payload) and get(cache) == payload
+    source["sourceFile"] = "/../private.jpg"
+    raw_write(cache, payload)
+    assert get(cache) is None and not put(cache, payload)
+
+
 def test_missing_capability_reason_and_nontext_processing_error_are_not_cached(cache):
     payload = snapshot()
     del payload["capabilities"]["processingUnavailableReason"]

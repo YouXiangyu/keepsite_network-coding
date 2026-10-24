@@ -61,3 +61,9 @@ test('poster links only accept approved Commons and matching license URLs', () =
     { licenseUrl: 'https://creativecommons.org.evil.test/licenses/by-sa/4.0/' }, { sourceFile: 'https://example.test/image.png' },
   ]) assert.equal(validPosterSource({ ...posterSource(), ...change }), false);
 });
+test('TMDB poster provenance accepts canonical movie pages and bounded image paths', () => {
+  const source = { provider: 'tmdb', sourcePage: 'https://www.themoviedb.org/movie/157336', sourceFile: '/gEU2QniE6E77NI6lCU6MxlNBvIx.jpg', termsUrl: 'https://www.themoviedb.org/api-terms-of-use', fetchedAt: 1792620000000 };
+  assert.equal(validPosterSource(source), true);
+  const data = sampleData(); data.tickets[0].media.poster = { ...media(), source }; data.tickets[0].processing.status = 'ready'; validateData(data);
+  for (const change of [{ sourcePage: 'https://www.themoviedb.org/movie/01' }, { sourcePage: 'https://www.themoviedb.org/movie/0' }, { sourcePage: source.sourcePage + '?redirect=evil' }, { sourcePage: 'https://www.themoviedb.org.evil.test/movie/1' }, { sourceFile: '/../../poster.jpg' }, { sourceFile: '/poster.svg' }, { termsUrl: 'https://evil.test/terms' }, { fetchedAt: -1 }]) assert.equal(validPosterSource({ ...source, ...change }), false);
+});

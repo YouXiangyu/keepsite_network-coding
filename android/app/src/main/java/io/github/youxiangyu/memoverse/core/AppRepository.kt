@@ -207,34 +207,61 @@ class AppRepository(context: Context) : AppController {
     override fun resetPassword(email: String) = authAction("正在发送重置邮件", "/api/auth/forgot-password", JSONObject().put("email", email), "重置请求已提交，请查收邮件。")
     override fun confirmPassword(email: String, code: String, password: String) = authAction("正在重置密码", "/api/auth/reset-password",
         JSONObject().put("email", email).put("code", code).put("password", password), "密码已重置，请重新登录。")
-    override fun startGoogle(openBrowser: (String) -> Unit) = run("正在打开 Google 登录") { expected ->
+    override fun refreshAccountMethods() = run("正在读取登录方式") { expected ->
+        val methods = Wire.accountMethods(api.json("/api/auth/account/methods"))
+        guard(expected); publish { it.copy(accountMethods = methods) }
+    }
+    override fun addAccountPassword(action: String, email: String, password: String, code: String) = run("正在添加邮箱密码") { expected ->
+        require(action in setOf("register", "confirm", "link"))
+        val body = JSONObject().put("email", email).put("password", password)
+        if (action == "confirm") body.put("code", code)
+        val result = api.json("/api/auth/account/password/$action", "POST", body)
+        guard(expected)
+        if (action == "register") {
+            if (!Wire.bool(result, "verificationRequired")) Wire.invalid()
+            val verifiedEmail = Wire.text(result, "email", 254)
+            publish { it.copy(accountPasswordEmail = verifiedEmail, message = "请查收验证邮件，再输入验证码和刚设置的密码。") }
+        } else {
+            val methods = Wire.accountMethods(result)
+            publish { it.copy(accountMethods = methods, accountPasswordEmail = null, message = "邮箱密码登录方式已添加。") }
+        }
+    }
+    override fun startGoogle(openBrowser: (String) -> Unit) = startGoogle(false, openBrowser)
+    override fun linkGoogle(openBrowser: (String) -> Unit) = startGoogle(true, openBrowser)
+    private fun startGoogle(link: Boolean, openBrowser: (String) -> Unit) = run(if (link) "正在打开 Google 绑定" else "正在打开 Google 登录") { expected ->
         val verifier = randomProof(); val appState = randomProof()
         val challenge = Base64.encodeToString(java.security.MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray()), Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
-        val result = api.json("/api/auth/native/google/start", "POST", JSONObject().put("challenge", challenge).put("state", appState), false)
+        val prefix = if (link) "/api/auth/account/google/native" else "/api/auth/native/google"
+        val result = api.json("$prefix/start", "POST", JSONObject().put("challenge", challenge).put("state", appState), link)
         guard(expected)
         val url = Wire.text(result, "browserUrl", 4096)
         val parsed = Uri.parse(url)
         val origin = Uri.parse(api.origin)
-        if (parsed.scheme != "https" || parsed.authority != origin.authority || parsed.path != "/api/auth/native/google/launch"
+        val launchPath = if (link) "/api/auth/account/google/launch" else "/api/auth/native/google/launch"
+        if (parsed.scheme != "https" || parsed.authority != origin.authority || parsed.path != launchPath
             || parsed.fragment != null || parsed.queryParameterNames != setOf("flow") || parsed.getQueryParameter("flow").isNullOrEmpty()) Wire.invalid()
         val expires = Wire.number(result, "expiresAt")
         if (expires <= System.currentTimeMillis() || expires > System.currentTimeMillis() + 11 * 60_000) Wire.invalid()
-        secrets.write("google-proof", JSONObject().put("verifier", verifier).put("state", appState).put("expiresAt", expires).toString())
+        secrets.write("google-proof", NativeGoogleProof(verifier, appState, expires, if (link) "link" else "login", if (link) accountId else null).toJson().toString())
         main.post { if (current(expected)) openBrowser(url) }
     }
     override fun handleGoogleCallback(uri: Uri) = run("正在完成 Google 登录") { expected ->
-        val saved = secrets.read("google-proof")?.let(::JSONObject) ?: throw ApiFailure(message = "登录流程已结束，请重新发起。")
-        if (uri.scheme != "io.github.youxiangyu.memoverse" || !uri.host.isNullOrEmpty() || uri.path != "/oauth/callback"
-            || uri.fragment != null || uri.queryParameterNames !in setOf(setOf("ticket", "state"), setOf("error", "state"))
-            || uri.queryParameterNames.any { uri.getQueryParameters(it).size != 1 }
-            || uri.getQueryParameter("state") != saved.getString("state") || saved.getLong("expiresAt") <= System.currentTimeMillis()) {
-            throw ApiFailure(message = "登录返回验证未通过，请重新发起。")
+        val saved = secrets.read("google-proof")?.let(::JSONObject)?.let(NativeGoogleProof::fromJson) ?: throw ApiFailure(message = "登录流程已结束，请重新发起。")
+        // A browser return may recreate the process before onStart refreshes the stored session.
+        if (saved.link && api.session == null) {
+            val session = Wire.session(api.json("/api/auth/session", authenticated = false))
+            guard(expected); install(session, expected)
         }
-        if (uri.getQueryParameter("error") != null) { secrets.clear("google-proof"); throw ApiFailure(message = "Google 登录未完成，请重试。") }
-        val ticket = uri.getQueryParameter("ticket") ?: Wire.invalid()
-        val result = api.json("/api/auth/native/google/redeem", "POST", JSONObject().put("ticket", ticket)
-            .put("verifier", saved.getString("verifier")).put("state", saved.getString("state")), false)
+        val query = saved.callback(uri.toString(), accountId, System.currentTimeMillis())
+        if (query["error"] != null) { secrets.clear("google-proof"); throw ApiFailure(message = "Google 授权未完成，请重试。") }
+        val link = saved.link
+        val result = api.json(saved.redeemPath, "POST", saved.redeemBody(query), link)
         guard(expected); secrets.clear("google-proof")
+        if (link) {
+            val methods = Wire.accountMethods(result)
+            publish { it.copy(accountMethods = methods, message = "Google 登录方式已绑定。") }
+            return@run
+        }
         val session = Wire.session(result)
         if (!session.authenticated) Wire.invalid()
         install(session, expected); if (foreground) synchronize(expected)

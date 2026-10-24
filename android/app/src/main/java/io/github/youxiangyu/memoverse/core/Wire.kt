@@ -62,7 +62,17 @@ object Wire {
         return MediaRef(sha, sha, number(o, "size", 1, MAX_IMAGE_BYTES), mime, width, height, cloud,
             if (o.has("source")) posterSource(obj(o, "source")) else null)
     }
-    private fun posterSource(o: JSONObject): PosterSource {
+    fun posterSource(o: JSONObject): PosterSource {
+        if (text(o, "provider") == "tmdb") {
+            if (o.keys().asSequence().toSet() != setOf("provider", "sourcePage", "sourceFile", "termsUrl", "fetchedAt")) invalid()
+            val page = text(o, "sourcePage")
+            val file = text(o, "sourceFile")
+            val terms = text(o, "termsUrl")
+            if (!Regex("https://www\\.themoviedb\\.org/movie/[1-9][0-9]{0,9}").matches(page)
+                || !Regex("/[A-Za-z0-9]{1,200}\\.(jpg|png|webp)").matches(file)
+                || terms != "https://www.themoviedb.org/api-terms-of-use") invalid()
+            return TmdbPosterSource(page, file, terms, number(o, "fetchedAt"))
+        }
         if (text(o, "provider") != "wikimedia_commons") invalid()
         val file = text(o, "sourceFile", 300)
         if (!file.startsWith("File:") || file.length <= 5 || Regex("[\\u0000-\\u001f\\\\/<>\\[\\]{}|]").containsMatchIn(file)) invalid()
@@ -81,7 +91,17 @@ object Wire {
             } ?: false
         }
         if (!valid) invalid()
-        return PosterSource(page, file, license, url, string(o, "author", 1000), number(o, "fetchedAt"))
+        return CommonsPosterSource(page, file, license, url, string(o, "author", 1000), number(o, "fetchedAt"))
+    }
+    fun accountMethods(o: JSONObject): AccountMethods {
+        fun method(key: String): LoginMethod {
+            val item = obj(o, key)
+            val linked = bool(item, "linked")
+            val email = nullable(item, "email", 254)
+            if (linked && email.isNullOrBlank() || !linked && email != null) invalid()
+            return LoginMethod(linked, email)
+        }
+        return AccountMethods(method("password"), method("google"))
     }
     fun ticket(o: JSONObject): Ticket {
         if (!o.has("deletedAt") || !o.isNull("deletedAt")) invalid()

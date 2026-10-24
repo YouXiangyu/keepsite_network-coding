@@ -59,6 +59,7 @@ class PosterCandidate:
     width: int
     height: int
     source_file: str
+    provider: str = "wikimedia_commons"
 
 
 class _Text(HTMLParser):
@@ -179,6 +180,14 @@ def _license(metadata, page):
 
 def validate_source(source):
     """Validate the persisted attribution contract, not a new licence grant."""
+    if isinstance(source, dict) and source.get("provider") == "tmdb":
+        return (set(source) == {"provider", "sourcePage", "sourceFile", "termsUrl", "fetchedAt"}
+                and isinstance(source.get("sourcePage"), str)
+                and re.fullmatch(r"https://www\.themoviedb\.org/movie/[1-9][0-9]{0,9}", source["sourcePage"]) is not None
+                and isinstance(source.get("sourceFile"), str)
+                and re.fullmatch(r"/[A-Za-z0-9]{1,200}\.(?:jpg|png|webp)", source["sourceFile"]) is not None
+                and source.get("termsUrl") == "https://www.themoviedb.org/api-terms-of-use"
+                and type(source.get("fetchedAt")) is int and 0 <= source["fetchedAt"] <= 2**53 - 1)
     keys = {"provider", "sourcePage", "sourceFile", "licenseName", "licenseUrl", "author", "fetchedAt"}
     if (not isinstance(source, dict) or set(source) != keys or source.get("provider") != "wikimedia_commons"
             or not isinstance(source.get("author"), str) or not 1 <= len(source["author"]) <= 1000

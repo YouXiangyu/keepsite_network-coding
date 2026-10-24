@@ -15,10 +15,15 @@ data class TicketFields(
     fun values() = listOf(title, cinema, hall, seat, showtime)
 }
 
-data class PosterSource(
-    val sourcePage: String, val sourceFile: String, val licenseName: String,
-    val licenseUrl: String, val author: String, val fetchedAt: Long,
-)
+sealed interface PosterSource { val sourcePage: String; val sourceFile: String; val fetchedAt: Long }
+data class CommonsPosterSource(
+    override val sourcePage: String, override val sourceFile: String, val licenseName: String,
+    val licenseUrl: String, val author: String, override val fetchedAt: Long,
+) : PosterSource
+data class TmdbPosterSource(override val sourcePage: String, override val sourceFile: String,
+    val termsUrl: String, override val fetchedAt: Long) : PosterSource
+data class LoginMethod(val linked: Boolean, val email: String?)
+data class AccountMethods(val password: LoginMethod, val google: LoginMethod)
 
 data class MediaRef(
     val assetId: String, val sha256: String, val size: Long, val mimeType: String,
@@ -66,6 +71,7 @@ data class AppState(
     val connected: Boolean = false, val cursor: Long = 0, val busy: String = "", val error: String = "",
     val message: String = "", val capabilities: Capabilities? = null, val cache: CacheInfo = CacheInfo(),
     val peer: PeerView = PeerView(), val draft: DraftView? = null,
+    val accountMethods: AccountMethods? = null, val accountPasswordEmail: String? = null,
 )
 
 /** UI calls are non-blocking. Listener/media callbacks are delivered on the main thread. */
@@ -82,6 +88,9 @@ interface AppController : Closeable {
     fun confirmPassword(email: String, code: String, password: String)
     fun startGoogle(openBrowser: (String) -> Unit)
     fun handleGoogleCallback(uri: Uri)
+    fun refreshAccountMethods()
+    fun addAccountPassword(action: String, email: String, password: String, code: String = "")
+    fun linkGoogle(openBrowser: (String) -> Unit)
     fun logout()
     fun clearNotice()
     fun newDraft()

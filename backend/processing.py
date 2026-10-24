@@ -156,8 +156,8 @@ class ProcessingWorker:
                 reason = ocr_status.get("reason") or "OCR 模型尚未就绪。"
         if reason is None:
             if self.provider is None:
-                from .posters import CommonsPosterProvider
-                self.provider = CommonsPosterProvider()
+                from .tmdb_posters import configured_provider
+                self.provider = configured_provider()
             status = self.provider.availability()
             if not status["available"]:
                 reason = status.get("reason") or "海报来源暂不可用。"
@@ -300,9 +300,12 @@ class ProcessingWorker:
             raise ProcessingFailed()
         descriptor = {"id": info["assetId"], "sha256": info["sha256"], "path": "media/" + info["filename"],
                       "mimeType": info["mimeType"], "size": info["size"], "width": info["width"], "height": info["height"]}
-        source = {"provider": "wikimedia_commons", "sourcePage": candidate.source_page, "sourceFile": candidate.source_file,
-                  "licenseName": candidate.license_name, "licenseUrl": candidate.license_url,
-                  "author": candidate.author, "fetchedAt": candidate.fetched_at}
+        source = {"provider": candidate.provider, "sourcePage": candidate.source_page,
+                  "sourceFile": candidate.source_file, "fetchedAt": candidate.fetched_at}
+        if candidate.provider == "tmdb":
+            source["termsUrl"] = "https://www.themoviedb.org/api-terms-of-use"
+        else:
+            source.update(licenseName=candidate.license_name, licenseUrl=candidate.license_url, author=candidate.author)
         from .posters import validate_source
         if not validate_source(source):
             raise ProcessingFailed()

@@ -368,6 +368,8 @@ class AuthService:
             ''')
         if os.name != 'nt':
             self.database.chmod(0o600)
+        from .account_auth import AccountAuth
+        self.account_auth = AccountAuth(self)
 
     def db(self):
         connection = sqlite3.connect(self.database, timeout=3, isolation_level=None)
@@ -430,6 +432,7 @@ class AuthService:
     def prepare_session(self, tokens, nonce=None):
         """Validate outside SQL locks; a caller can atomically insert the prepared session."""
         user, expiry = self.validate_login_tokens(tokens, nonce)
+        user = self.account_auth.resolve(user, tokens)
         sid, csrf, now = secrets.token_urlsafe(32), secrets.token_urlsafe(32), self.clock()
         session = {'sid': sid, 'user': user, 'csrf': csrf, 'expires': now + SESSION_SECONDS}
         values = (hashed(sid), json.dumps(user), self.encrypt(tokens), csrf, now, session['expires'], min(expiry - 30, now + 900))
@@ -524,6 +527,7 @@ class AuthService:
                     if not updated.get('refresh_token'):
                         updated['refresh_token'] = tokens['refresh_token']
                     user, expiry = self.validator.pair(updated)
+                    user = self.account_auth.resolve(user, updated)
                     if user['id'] != json.loads(row['user_json'])['id']:
                         raise AuthError(401, '刷新后的登录身份不一致。', 'invalid_token')
                     with self.db() as db:
@@ -533,6 +537,7 @@ class AuthService:
                         raise AuthError(401, '登录状态已退出。', 'invalid_session')
                     tokens = updated
                 user, _ = self.validator.pair(tokens)
+                user = self.account_auth.resolve(user, tokens)
                 return {'sid': sid, 'user': user, 'csrf': row['csrf'], 'expires': row['expires']}
             except AuthError as error:
                 if error.status in (401, 403):
@@ -566,10 +571,10 @@ class AuthService:
             raise AuthError(503, 'Google 登录尚未配置完成。', 'provider_disabled')
         state, binding, nonce, verifier = [secrets.token_urlsafe(32) for _ in range(4)]
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('=')
-        if purpose not in ('web', 'android'):
+        if purpose not in ('web', 'android', 'account'):
             raise ValueError('Unsupported OAuth purpose')
         expiry = min(self.clock() + OAUTH_SECONDS, expires) if expires is not None else self.clock() + OAUTH_SECONDS
-        payload = self.encrypt({'verifier': verifier, 'nonce': nonce, **({'purpose': 'android'} if purpose == 'android' else {})})
+        payload = self.encrypt({'verifier': verifier, 'nonce': nonce, **({'purpose': purpose} if purpose != 'web' else {})})
         url = self.config.domain + '/oauth2/authorize?' + urlencode({'response_type': 'code', 'client_id': self.config.client_id,
             'redirect_uri': self.config.public_url + '/api/auth/callback', 'scope': 'openid email profile',
             'identity_provider': 'Google', 'state': state, 'nonce': nonce, 'code_challenge_method': 'S256', 'code_challenge': challenge})
@@ -715,6 +720,8 @@ def install_auth(app: FastAPI, data_root: Path, on_authenticated=None, *, config
 
     from .native_auth import install_native_auth
     native = install_native_auth(app, service, login_response, failure)
+    from .account_auth import install_account_auth
+    install_account_auth(app, service, failure)
 
     @app.post('/api/auth/login')
     async def login_route(request: Request):
@@ -804,6 +811,12 @@ def install_auth(app: FastAPI, data_root: Path, on_authenticated=None, *, config
     @app.get('/api/auth/callback')
     async def callback_route(request: Request):
         state = request.query_params.get('state')
+        try:
+            account_state = await run_in_threadpool(service.account_auth.owns_state, state)
+        except sqlite3.Error:
+            return failure(AuthError(503, '登录方式暂时无法更新，请稍后重试。', 'session_unavailable'))
+        if account_state:
+            return await service.account_auth.callback(request)
         try:
             native_state = await run_in_threadpool(native.owns_state, state)
         except sqlite3.Error:

@@ -7,10 +7,14 @@ export interface MediaRef {
 }
 export const processingStatuses = ['not_started', 'queued', 'ocr', 'poster', 'ready', 'no_match', 'failed'] as const;
 export type ProcessingStatus = typeof processingStatuses[number];
-export interface PosterSource {
+export interface CommonsPosterSource {
   provider: 'wikimedia_commons'; sourcePage: string; sourceFile: string;
   licenseName: string; licenseUrl: string; author: string; fetchedAt: number;
 }
+export interface TmdbPosterSource {
+  provider: 'tmdb'; sourcePage: string; sourceFile: string; termsUrl: string; fetchedAt: number;
+}
+export type PosterSource = CommonsPosterSource | TmdbPosterSource;
 export interface PosterMediaRef extends MediaRef { source: PosterSource }
 export interface Ticket {
   id: string; fields: TicketFields;
@@ -40,6 +44,10 @@ export function validMedia(value: unknown): value is MediaRef {
     && ['saved', 'not_configured'].includes(String(value.cloudStatus));
 }
 export function validPosterSource(value: unknown): value is PosterSource {
+  if (object(value) && value.provider === 'tmdb') return Object.keys(value).length === 5 && typeof value.sourcePage === 'string'
+    && /^https:\/\/www\.themoviedb\.org\/movie\/[1-9][0-9]{0,9}$/.test(value.sourcePage)
+    && typeof value.sourceFile === 'string' && /^\/[A-Za-z0-9]{1,200}\.(jpg|png|webp)$/.test(value.sourceFile)
+    && value.termsUrl === 'https://www.themoviedb.org/api-terms-of-use' && integer(value.fetchedAt);
   if (!object(value) || value.provider !== 'wikimedia_commons' || typeof value.sourceFile !== 'string' || (!value.sourceFile.startsWith('File:') || value.sourceFile.length <= 5)
     || typeof value.sourcePage !== 'string' || typeof value.licenseName !== 'string' || typeof value.licenseUrl !== 'string'
     || typeof value.author !== 'string' || !integer(value.fetchedAt)) return false;

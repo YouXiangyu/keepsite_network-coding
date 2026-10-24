@@ -11,6 +11,14 @@ M4 沿用独立 SQLite schema 3，通过固定分页快照、持久增量和 Web
 - 原票和海报分别引用；纠错不提前撤下既有有效海报。配置私有 S3、Redis 与固定 OCR 模型后，自动登记 OCR/海报任务；缺少条件时 `capabilities.processing=false`，并通过 `processingUnavailableReason` 说明原因，不伪造识别结果。设备 P2P 留待 M5。
 - 票根变更、操作幂等和 `ticket_changes` 在同一事务提交；每账号 `revision` 是持久变更游标，创建、修改、删除都保存完整票根快照，删除快照包含墓碑。上传核对不占用票根游标。`sync_baselines` 标记历史边界：M1 旧库、隔离迁移和备份恢复从其当前 revision 建立基线，不伪造之前的增量。
 
+## 登录方式绑定
+
+账户页通过 `GET /api/auth/account/methods` 查询已绑定的邮箱密码和 Google 身份。密码入口支持 `POST /api/auth/account/password/register`、`confirm` 和 `link`；Google 入口分别使用 `/api/auth/account/google/start` 与 `/api/auth/account/google/native/start`，原生应用通过 `native/redeem` 完成绑定。
+
+身份映射保存在认证数据库，关联已验证的 Cognito subject 与不变的应用账户 ID。新登录、会话刷新和 WebSocket 都使用相同映射；不会根据邮箱相等自动合并身份，也不会迁移票根、缓存或 S3 对象。绑定要求近期登录、Origin/CSRF 和目标身份验证；原生交接还校验发起会话、一次性票据、state 与 PKCE。已经归属另一应用账户的身份返回冲突，原账户数据保持不变。个人票据 ZIP 不包含认证数据库，服务器备份仍须同时保留认证数据库与业务数据。
+
+当前 Cognito 用户池为邮箱唯一用户名配置。用户已确认允许两种登录方式使用不同邮箱；Google 先登录后，使用另一个可验证邮箱添加密码身份。本轮不调整用户池、不强制移动邮箱或删除 Cognito 用户，不承诺同邮箱的独立双身份。
+
 ## 媒体与授权
 
 上传支持解码核验的 JPG/PNG/WebP，最多 12 MiB、4000 万像素；SHA-256 寻址，不覆盖已有不同内容。S3 写入带校验和、AES256 和条件写，私有对象存储的网络 I/O 不持有 SQL 写事务。显式 `MEMOVERSE_STORAGE=local` 仅用于开发测试，不作为 S3 故障回退。
@@ -47,7 +55,11 @@ Redis I/O 只发生在完成的 SQL 事务之间；写操作直接提交数据�
 
 85 秒尝试预算和停止信号在阶段边界、流读取返回后检查；它们不是整个 S3 网络操作的硬截止。botocore 的 5 秒读取超时针对 socket 等待，持续低速且不空闲的流可能让一次聚合读取超过该墙钟预算。当前不通过私有 StreamingBody 接口或强杀 Python 线程绕过限制；只有 OCR 子进程能在 45 秒硬终止。SQL 租约/输入版本仍拒绝超期结果发布，服务关停不延长 EC2 倒计时。真实 S3 慢流耗时和退出行为属于后续测量边界，不能由 fixture 测试宣称已经保证严格端到端超时。
 
-海报只使用经过严格匹配与许可校验的 Wikimedia Commons 来源；无可信匹配以 no_match 结束，不自动扩展其他站点。海报 bytes 再次解码核验后，在上传前将 descriptor、出处和临时文件名写入 `processing_artifacts`。S3 保存并核验后才发布引用；最终 SQL 发布失败时，下一次租约先核对同一产物，不重跑 OCR 或重新抓取。当前海报出处保存在 `poster_sources`，返回 provider、sourcePage、sourceFile、licenseName、licenseUrl、author、fetchedAt。
+海报来源由后端 `MEMOVERSE_POSTER_PROVIDER` 明确选择：默认 `commons` 保留原 Wikimedia Commons 匹配；`tmdb` 使用 TMDB 电影 API，并从私密环境读取 `MEMOVERSE_TMDB_READ_ACCESS_TOKEN`。只读令牌通过 Bearer 请求头发送，仅限 TMDB API 主机，不发给图片 CDN；不进入客户端、Git、请求 URL 或业务响应；缺少配置时明确显示处理不可用。不会在匹配失败后串联不同来源猜测封面。TMDB 检查规范化片名、原名或经过 API 验证的别名，同名作品不按热度选择；可用片名中的显式年份消歧，放映时间不被当成首映年份。网络地址、响应大小、下载类型和实际图片均受校验。
+
+无可信匹配以 `no_match` 结束。海报 bytes 再次解码核验后，在上传前将 descriptor、出处和临时文件名写入 `processing_artifacts`。S3 保存并核验后才发布引用；最终 SQL 发布失败时，下一次租约先核对同一产物，不重跑 OCR 或重新抓取。`poster_sources` 按 provider 保存出处：Commons 保留 `licenseName/licenseUrl/author`；TMDB 使用电影 `sourcePage`、海报 `sourceFile`、`termsUrl`、`fetchedAt`，不虚构开放许可或作者。
+
+Web 与 Android 的账户页面提供 TMDB 标志和使用声明，详情显示电影来源及服务条款。官方标志来自 [TMDB Logos & Attribution](https://www.themoviedb.org/about/logos-attribution)，按原色与比例使用；API 说明见 [TMDB FAQ](https://developer.themoviedb.org/docs/faq)。本机私密配置位置为 `.cache/server/tmdb.env`，不自动改变已部署服务器环境。
 
 处理中间海报只放在数据目录的 `tmp/processing`，原票始终来自已验证的私有对象。S3 核验后立即清除该临时副本；未完成副本、取消/失败及崩溃遗留孤儿采用 24 小时保留期，每轮最多扫描 200 项，活动任务仍引用的文件不清理。逐段拒绝 tmp/processing 父链上的符号链接和 junction，记录清理原因与时间；不删除 S3 对象或有效图片。服务退出先停止领取任务，在调用边界结束当前工作，再由 worker 的退出路径关闭海报客户端；等待返回后仍存活的线程不被并发关闭 provider。
 

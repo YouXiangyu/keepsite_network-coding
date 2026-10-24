@@ -17,6 +17,42 @@ const logoutUrl = 'https://memoverse.auth.ap-northeast-3.amazoncognito.com/logou
 afterEach(() => { api.installSession(null); globalThis.fetch = originalFetch; });
 after(() => { globalThis.fetch = originalFetch; });
 
+test('account methods and linking require the active session and preserve CSRF and password bytes', async () => {
+  await assert.rejects(api.getAccountMethods(), error => error.status === 401);
+  await assert.rejects(api.addAccountPassword('link', 'a@example.test', 'Password-12!'), error => error.status === 401);
+  api.installSession(signedSession('a'));
+  const methods = { password: { linked: true, email: 'a@example.test' }, google: { linked: false, email: null } };
+  globalThis.fetch = async (path, options) => {
+    assert.equal(options.credentials, 'same-origin');
+    if (options.method === 'POST') {
+      assert.equal(options.headers.get('X-CSRF-Token'), 'test-csrf-a');
+      assert.equal(JSON.parse(options.body).password, '  Password-12!  ');
+    }
+    return Response.json(methods);
+  };
+  assert.deepEqual(await api.getAccountMethods(), methods);
+  assert.deepEqual(await api.addAccountPassword('link', 'a@example.test', '  Password-12!  '), methods);
+  globalThis.fetch = async () => Response.json({ password: { linked: true, email: null }, google: { linked: false, email: null } });
+  await assert.rejects(api.getAccountMethods(), /信息不完整/);
+});
+test('Google account binding navigates only to the same-origin single-flow launch', async () => {
+  const previousWindow = globalThis.window;
+  globalThis.window = { location: { origin } };
+  api.installSession(signedSession('a'));
+  const browserUrl = origin + '/api/auth/account/google/launch?flow=opaque-flow';
+  try {
+    globalThis.fetch = async (_path, options) => {
+      assert.equal(options.headers.get('X-CSRF-Token'), 'test-csrf-a');
+      return Response.json({ browserUrl, expiresAt: Date.now() + 600000 });
+    };
+    assert.equal(await api.startAccountGoogle(), browserUrl);
+    for (const url of ['https://evil.test/api/auth/account/google/launch?flow=x', browserUrl + '&flow=other', browserUrl + '#fragment', origin + '/api/auth/google?flow=x']) {
+      globalThis.fetch = async () => Response.json({ browserUrl: url, expiresAt: Date.now() + 600000 });
+      await assert.rejects(api.startAccountGoogle(), /绑定地址无效/);
+    }
+  } finally { globalThis.window = previousWindow; }
+});
+
 test('anonymous code cannot request workspace, upload or mutations', async () => {
   let requests = 0;
   globalThis.fetch = async () => { requests += 1; throw new Error('unexpected fetch'); };

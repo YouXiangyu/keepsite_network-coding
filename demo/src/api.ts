@@ -15,6 +15,37 @@ export interface SignedInSession extends AuthSession {
   user: User;
   csrfToken: string;
 }
+export interface AccountMethods {
+  password: { linked: boolean; email: string | null };
+  google: { linked: boolean; email: string | null };
+}
+function checkedAccountMethods(value: AccountMethods): AccountMethods {
+  if (!value || !['password', 'google'].every(key => {
+    const method = value[key as keyof AccountMethods];
+    return method && typeof method.linked === 'boolean' && (method.linked ? typeof method.email === 'string' && !!method.email : method.email === null);
+  })) throw new ApiError('登录方式信息不完整，请重新读取。');
+  return value;
+}
+export async function getAccountMethods(signal?: AbortSignal) {
+  return checkedAccountMethods(await jsonRequest<AccountMethods>('/api/auth/account/methods', { authenticated: true, signal }));
+}
+export async function addAccountPassword(action: 'register' | 'confirm' | 'link', email: string, password: string, code?: string) {
+  const result = await jsonRequest<AccountMethods | { verificationRequired: boolean; email: string }>(`/api/auth/account/password/${action}`, {
+    method: 'POST', authenticated: true, ...jsonBody({ email, password, ...(action === 'confirm' ? { code } : {}) }),
+  });
+  if (action === 'register') {
+    if (!('verificationRequired' in result) || result.verificationRequired !== true || typeof result.email !== 'string' || !result.email) throw new ApiError('验证邮件请求结果不完整，请核对后重试。');
+    return result;
+  }
+  return checkedAccountMethods(result as AccountMethods);
+}
+export async function startAccountGoogle() {
+  const result = await jsonRequest<{ browserUrl: string; expiresAt: number }>('/api/auth/account/google/start', { method: 'POST', authenticated: true, ...jsonBody({}) });
+  const url = new URL(result.browserUrl, window.location.origin);
+  if (url.origin !== window.location.origin || url.pathname !== '/api/auth/account/google/launch' || url.hash || !url.searchParams.get('flow')
+    || [...url.searchParams.keys()].length !== 1 || !Number.isSafeInteger(result.expiresAt) || result.expiresAt <= Date.now()) throw new ApiError('Google 绑定地址无效，请重试。');
+  return url.href;
+}
 export interface Capabilities { processing: boolean; processingUnavailableReason: string | null; cloudStorage: boolean; deviceSync: boolean }
 export interface SnapshotPage { serverId: string; userId: string; snapshotId: string; cursor: number; total: number; offset: number; tickets: Ticket[]; nextPageToken: string | null; expiresAt: number; capabilities: Capabilities }
 export type Change = { cursor: number; type: 'upsert'; ticket: Ticket } | { cursor: number; type: 'delete'; id: string; version: number; deletedAt: number };
