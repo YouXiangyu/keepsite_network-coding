@@ -8,6 +8,49 @@ class DraftSubmissionTest {
     private val operation = "draft-operation"
     private fun receipt() = JSONObject().put("serverId", "server").put("operationId", operation).put("committedCursor", 7)
 
+    @Test fun uploadRejectionAndStatusConflictReleaseOnlyTheUploadStage() {
+        for (status in listOf(409, 413, 422)) {
+            for (ticketPending in listOf(false, true)) {
+                var uploadPending = true
+                var ticketWrites = 0
+                val rejection = ApiFailure(status, message = "Upload rejected")
+                val failure = assertThrows(ApiFailure::class.java) {
+                    prepareDraftUpload<MediaRef>(prepare = { throw rejection }, rejected = { uploadPending = false })
+                    confirmDraftSubmission(operation, write = { ticketWrites++; receipt() },
+                        rejected = { fail("No ticket request should be sent after an upload rejection") }, confirm = {})
+                }
+                assertSame(rejection, failure)
+                assertFalse(uploadPending)
+                assertEquals("Upload rejection cannot release an earlier uncertain ticket request", ticketPending, ticketPending || uploadPending)
+                assertEquals(0, ticketWrites)
+            }
+        }
+    }
+
+    @Test fun uncertainUploadAndInvalidUploadResponseKeepPendingAndNeverWriteTicket() {
+        for (failure in listOf(ApiFailure(message = "Upload timed out"), ApiFailure(500, message = "Upload failed"),
+            ApiFailure(503, message = "Storage unavailable"), ApiFailure(message = "Invalid upload receipt"))) {
+            var uploadPending = true
+            var ticketWrites = 0
+            val actual = assertThrows(ApiFailure::class.java) {
+                prepareDraftUpload<MediaRef>(prepare = { throw failure }, rejected = { uploadPending = false })
+                confirmDraftSubmission(operation, write = { ticketWrites++; receipt() }, rejected = {}, confirm = {})
+            }
+            assertSame(failure, actual)
+            assertTrue(uploadPending)
+            assertEquals(0, ticketWrites)
+        }
+    }
+
+    @Test fun localPreparationFailureNeverCallsTheUploadRejectionHandler() {
+        val failure = java.io.IOException("Draft photo is no longer readable")
+        val actual = assertThrows(java.io.IOException::class.java) {
+            prepareDraftUpload<MediaRef>(prepare = { throw failure },
+                rejected = { fail("A local preparation error is not a remote upload rejection") })
+        }
+        assertSame(failure, actual)
+    }
+
     @Test fun deletedTicketAndValidationRejectionReleasePendingWithoutConfirmingSave() {
         for (status in listOf(404, 422)) {
             var pending = true

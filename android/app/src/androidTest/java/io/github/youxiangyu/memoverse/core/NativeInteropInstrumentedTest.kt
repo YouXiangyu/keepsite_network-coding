@@ -245,6 +245,21 @@ class NativeInteropInstrumentedTest {
             assertEquals(before.uploadId, restored.uploadId)
             assertEquals(fields, restored.fields)
             assertTrue(restored.hasPhoto)
+            // A local preparation error must not persist confirmation for an upload never sent.
+            val restoredPhoto = restored.previewFile ?: throw AssertionError("Restored draft photo missing")
+            val validPhoto = restoredPhoto.readBytes()
+            restoredPhoto.writeBytes(byteArrayOf(1, 2, 3))
+            main { repository.saveDraft() }
+            await("local photo failure leaves the draft replaceable") {
+                val state = repository.snapshot()
+                state.busy.isEmpty() && state.error.isNotEmpty() && state.draft?.pendingConfirmation == false
+            }
+            main { repository.selectPhoto(Uri.fromFile(photo)) }
+            await("replace photo after failed preparation") {
+                val state = repository.snapshot()
+                state.busy.isEmpty() && state.draft?.uploadId != restored.uploadId && state.draft?.hasPhoto == true
+            }
+            assertArrayEquals(validPhoto, repository.snapshot().draft!!.previewFile!!.readBytes())
             val createCursor = repository.snapshot().cursor
             main { repository.saveDraft() }
             await("created ticket write barrier", 60_000) {

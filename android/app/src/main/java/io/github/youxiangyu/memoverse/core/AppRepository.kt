@@ -47,10 +47,11 @@ class AppRepository(context: Context) : AppController {
     private data class Draft(
         val ticketId: String?, val createId: String, val fields: TicketFields, val initialFields: TicketFields,
         val operationId: String, val uploadId: String, val photo: File? = null, val mime: String = "",
-        val pending: Boolean = false, val uploaded: MediaRef? = null,
+        val pending: Boolean = false, val uploaded: MediaRef? = null, val uploadPending: Boolean = false,
     ) {
+        val awaitingConfirmation get() = pending || uploadPending
         fun view() = DraftView(ticketId, fields, photo != null, if (photo != null) "已选择原票照片" else "",
-            operationId, uploadId, pending, photo)
+            operationId, uploadId, awaitingConfirmation, photo)
     }
 
     private fun current(expected: Long) = !closed && expected == api.epoch()
@@ -264,12 +265,11 @@ class AppRepository(context: Context) : AppController {
         val id = accountId ?: throw ApiFailure(401, message = "请先登录。")
         return File(context.noBackupFilesDir, "draft-v1/${sha256(id.toByteArray())}").apply { mkdirs() }
     }
-    private fun persistDraft() {
-        val active = draft ?: return
+    private fun persistDraft(active: Draft) {
         val file = AtomicFile(File(draftDirectory(), "draft.json"))
         val body = JSONObject().put("ticketId", active.ticketId ?: JSONObject.NULL).put("createId", active.createId)
             .put("fields", Wire.fieldsJson(active.fields)).put("initialFields", Wire.fieldsJson(active.initialFields))
-            .put("operationId", active.operationId).put("uploadId", active.uploadId).put("pending", active.pending)
+            .put("operationId", active.operationId).put("uploadId", active.uploadId).put("pending", active.pending).put("uploadPending", active.uploadPending)
             .put("photo", active.photo?.name ?: JSONObject.NULL).put("mime", active.mime)
         val output = file.startWrite()
         try { output.write(body.toString().toByteArray()); file.finishWrite(output) }
@@ -289,12 +289,14 @@ class AppRepository(context: Context) : AppController {
             }
             draft = Draft(Wire.nullable(data, "ticketId", 120), Wire.id(data, "createId"), Wire.fields(Wire.obj(data, "fields")),
                 Wire.fields(Wire.obj(data, "initialFields")), Wire.id(data, "operationId"), Wire.id(data, "uploadId"), photo,
-                Wire.string(data, "mime", 50), Wire.bool(data, "pending"))
+                Wire.string(data, "mime", 50), Wire.bool(data, "pending"),
+                uploadPending = if (data.has("uploadPending")) Wire.bool(data, "uploadPending") else false)
             publish { it.copy(draft = draft?.view()) }
         } catch (_: Exception) { publish { it.copy(error = "未提交草稿无法恢复，请重新选择原票。") } }
     }
     private fun setDraft(value: Draft?) {
-        draft = value; if (value != null) persistDraft()
+        if (value != null) persistDraft(value)
+        draft = value
         publish { it.copy(draft = value?.view()) }
     }
     override fun newDraft() = run {
@@ -309,12 +311,12 @@ class AppRepository(context: Context) : AppController {
     }
     override fun setDraftFields(fields: TicketFields) = run {
         val active = draft ?: return@run
-        if (active.pending) return@run
+        if (active.awaitingConfirmation) return@run
         setDraft(active.copy(fields = fields))
     }
     override fun selectPhoto(uri: Uri) = run("正在读取照片") { expected ->
         val active = draft ?: throw ApiFailure(message = "请先新建或编辑票根。")
-        if (active.pending) throw ApiFailure(message = "请先核对上次提交结果。")
+        if (active.awaitingConfirmation) throw ApiFailure(message = "请先核对上次提交结果。")
         val bytes = context.contentResolver.openInputStream(uri)?.use { stream ->
             val output = java.io.ByteArrayOutputStream(); val buffer = ByteArray(16 * 1024)
             while (true) {
@@ -357,31 +359,36 @@ class AppRepository(context: Context) : AppController {
             if (active.ticketId == null && value.isNotEmpty() || active.ticketId != null && value != active.initialFields.values()[index]) fields.put(key, value.trim())
         }
         if (active.ticketId != null && fields.length() == 0 && active.photo == null) throw ApiFailure(message = "还没有修改内容。")
-        active = active.copy(pending = true); setDraft(active)
         val body = JSONObject().put("operationId", active.operationId).put("fields", fields)
         if (active.photo != null) {
-            var uploaded = active.uploaded
-            if (uploaded == null) {
-                try {
-                    val status = api.json("/api/uploads/${active.uploadId}")
-                    if (Wire.id(status, "uploadId") != active.uploadId) Wire.invalid()
-                    val kind = Wire.text(status, "status", 20)
-                    if (kind in setOf("stored", "attached")) uploaded = Wire.media(Wire.obj(status, "asset"), true)
-                    else if (kind != "pending" || !status.has("asset") || !status.isNull("asset")) Wire.invalid()
-                } catch (failure: ApiFailure) { if (failure.status != 404) throw failure }
-            }
-            if (uploaded == null) uploaded = api.upload(active.photo, active.mime, active.uploadId)
+            val uploaded = prepareDraftUpload(prepare = {
+                var result = active.uploaded
+                if (result == null) {
+                    try {
+                        val status = api.json("/api/uploads/${active.uploadId}")
+                        if (Wire.id(status, "uploadId") != active.uploadId) Wire.invalid()
+                        val kind = Wire.text(status, "status", 20)
+                        if (kind in setOf("stored", "attached")) result = Wire.media(Wire.obj(status, "asset"), true)
+                        else if (kind != "pending" || !status.has("asset") || !status.isNull("asset")) Wire.invalid()
+                    } catch (failure: ApiFailure) { if (failure.status != 404) throw failure }
+                }
+                if (result == null) {
+                    // Local preparation cannot leave a fresh draft waiting for a request never sent.
+                    ImageFiles.inspect(active.photo!!.readBytes()); guard(expected)
+                    active = active.copy(uploadPending = true); setDraft(active)
+                    result = api.upload(active.photo!!, active.mime, active.uploadId)
+                }
+                result
+            }, rejected = { if (current(expected)) setDraft(active.copy(uploadPending = false)) })
             guard(expected)
-            val actual = ImageFiles.inspect(active.photo.readBytes())
-            // The server may normalize image bytes; the stable upload intent remains authoritative.
-            if (uploaded.mimeType != actual.mimeType && uploaded.mimeType !in setOf("image/jpeg", "image/png", "image/webp")) Wire.invalid()
-            active = active.copy(uploaded = uploaded); setDraft(active)
+            active = active.copy(uploaded = uploaded, uploadPending = false); setDraft(active)
             body.put("originalAssetId", uploaded.assetId)
         }
         val path: String
         val method: String
         if (active.ticketId == null) { path = "/api/tickets"; method = "POST"; body.put("id", active.createId) }
         else { path = "/api/tickets/${active.ticketId}"; method = "PATCH" }
+        active = active.copy(pending = true); setDraft(active)
         confirmDraftSubmission(active.operationId,
             write = { api.json(path, method, body) },
             rejected = { if (current(expected)) setDraft(active.copy(pending = false)) },
@@ -395,7 +402,7 @@ class AppRepository(context: Context) : AppController {
     }
     override fun discardDraft() = run { expected ->
         val active = draft ?: return@run
-        if (active.pending) {
+        if (active.awaitingConfirmation) {
             val receipt = applied(active.operationId)
             if (receipt == null) throw ApiFailure(message = "提交结果尚未确认，请先核对并重试保存。")
             synchronize(expected, receipt)
