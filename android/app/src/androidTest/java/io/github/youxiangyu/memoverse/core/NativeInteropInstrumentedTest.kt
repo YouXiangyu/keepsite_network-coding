@@ -273,6 +273,11 @@ class NativeInteropInstrumentedTest {
             assertTrue(repository.snapshot().tickets.none { it.id == created.id })
             assertAccountCannotRead(created.original)
             logout(repository); login(repository, "bob")
+            main { repository.editDraft(created.id) }
+            await("draft before concurrent deletion") { repository.snapshot().draft?.ticketId == created.id }
+            main { repository.setDraftFields(edited.fields.copy(hall = "Deleted while editing")) }
+            await("changed draft before concurrent deletion") { repository.snapshot().draft?.fields?.hall == "Deleted while editing" }
+            val rejectedDraft = repository.snapshot().draft!!
             val deletionCursor = repository.snapshot().cursor
             main { repository.deleteTicket(created.id) }
             await("deleted ticket write barrier", 60_000) {
@@ -280,6 +285,33 @@ class NativeInteropInstrumentedTest {
                 state.busy.isEmpty() && state.cursor > deletionCursor && state.tickets.none { it.id == created.id }
             }
             assertAccountCannotRead(created.original)
+            main { repository.saveDraft() }
+            await("deleted ticket rejects save without trapping the draft") {
+                val state = repository.snapshot()
+                state.busy.isEmpty() && state.error.isNotEmpty() && state.draft?.pendingConfirmation == false
+            }
+            assertEquals("电影票不存在或已删除。", repository.snapshot().error)
+            assertEquals(rejectedDraft.operationId, repository.snapshot().draft!!.operationId)
+            HttpApi(origin, SecretStore(context)).use { reader ->
+                reader.session = Wire.session(reader.json("/api/auth/session", authenticated = false))
+                assertFalse(reader.json("/api/operations/${rejectedDraft.operationId}").getBoolean("applied"))
+            }
+            main { repository.close() }
+            repository = AppRepository(context)
+            ready(repository)
+            await("rejected draft restored without pending confirmation") {
+                val state = repository.snapshot()
+                state.ready && state.draft?.operationId == rejectedDraft.operationId && state.draft?.pendingConfirmation == false
+            }
+            assertEquals(rejectedDraft.fields, repository.snapshot().draft!!.fields)
+            main { repository.discardDraft() }
+            await("rejected draft can be discarded") { repository.snapshot().draft == null }
+            main { repository.newDraft() }
+            await("new draft after deleted ticket rejection") { repository.snapshot().draft != null }
+            assertNotEquals(rejectedDraft.operationId, repository.snapshot().draft!!.operationId)
+            assertNull(repository.snapshot().draft!!.ticketId)
+            main { repository.discardDraft() }
+            await("new empty draft discarded") { repository.snapshot().draft == null }
             logout(repository)
             val triggered = AtomicBoolean()
             val listener = repository.subscribe { state ->

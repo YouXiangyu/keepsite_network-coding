@@ -382,13 +382,10 @@ class AppRepository(context: Context) : AppController {
         val method: String
         if (active.ticketId == null) { path = "/api/tickets"; method = "POST"; body.put("id", active.createId) }
         else { path = "/api/tickets/${active.ticketId}"; method = "PATCH" }
-        try {
-            val receipt = Wire.receipt(api.json(path, method, body), active.operationId)
-            guard(expected); synchronize(expected, receipt); finishDraft(active, expected)
-        } catch (failure: ApiFailure) {
-            if (failure.status == 422 && current(expected)) setDraft(active.copy(pending = false))
-            throw failure
-        }
+        confirmDraftSubmission(active.operationId,
+            write = { api.json(path, method, body) },
+            rejected = { if (current(expected)) setDraft(active.copy(pending = false)) },
+            confirm = { receipt -> guard(expected); synchronize(expected, receipt); finishDraft(active, expected) })
     }
     private fun finishDraft(active: Draft, expected: Long) {
         guard(expected)
