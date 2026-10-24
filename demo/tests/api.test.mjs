@@ -11,8 +11,8 @@ const hook = registerHooks({ resolve(specifier, context, nextResolve) {
 const api = await import(apiUrl);
 hook.deregister();
 const originalFetch = globalThis.fetch;
-const origin = 'https://memoverse.example';
-const logoutUrl = 'https://memoverse.auth.ap-northeast-3.amazoncognito.com/logout?'
+const origin = 'https://keepsite.example';
+const logoutUrl = 'https://keepsite.auth.ap-northeast-3.amazoncognito.com/logout?'
   + new URLSearchParams({ client_id: 'testclient123', logout_uri: origin + '/' });
 afterEach(() => { api.installSession(null); globalThis.fetch = originalFetch; });
 after(() => { globalThis.fetch = originalFetch; });
@@ -83,7 +83,7 @@ test('login preserves password bytes and uses the Web client header', async () =
   const password = '  Aa123456789!  ';
   globalThis.fetch = async (path, options) => {
     assert.equal(path, '/api/auth/login');
-    assert.equal(options.headers.get('X-MemoVerse-Client'), 'web');
+    assert.equal(options.headers.get('X-Keepsite-Client'), 'web');
     assert.equal(options.credentials, 'same-origin');
     assert.equal(JSON.parse(options.body).password, password);
     return Response.json(signedSession());
@@ -100,7 +100,7 @@ test('email codes are passed verbatim without length assumptions', async () => {
   const code = ' long-code-AB12 ';
   globalThis.fetch = async (path, options) => {
     assert.equal(JSON.parse(options.body).code, code);
-    assert.equal(options.headers.get('X-MemoVerse-Client'), 'web');
+    assert.equal(options.headers.get('X-Keepsite-Client'), 'web');
     return Response.json(path.endsWith('verify-email') ? { verified: true } : { ok: true });
   };
   assert.equal((await api.verifyEmail('a@example.test', code)).verified, true);
@@ -111,7 +111,7 @@ test('authenticated writes attach the active CSRF token and preserve operation i
   api.installSession(signedSession());
   globalThis.fetch = async (path, options) => {
     assert.equal(path, '/api/tickets/item-1');
-    assert.equal(options.headers.get('X-MemoVerse-Client'), 'web');
+    assert.equal(options.headers.get('X-Keepsite-Client'), 'web');
     assert.equal(options.headers.get('X-CSRF-Token'), 'test-csrf-a');
     assert.equal(options.credentials, 'same-origin');
     assert.deepEqual(JSON.parse(options.body), { operationId: 'op-2', fields: { title: '保留草稿' } });
@@ -194,7 +194,7 @@ test('explicit logout forwards only the validated Cognito destination after clea
 test('logout rejects unsafe provider and return URLs while still clearing the local session', async () => {
   const unsafe = [
     'javascript:alert(1)', logoutUrl.replace('https:', 'http:'),
-    logoutUrl.replace('memoverse.auth.ap-northeast-3.amazoncognito.com', 'evil.example'),
+    logoutUrl.replace('keepsite.auth.ap-northeast-3.amazoncognito.com', 'evil.example'),
     logoutUrl.replace('.amazoncognito.com', '.amazoncognito.com.evil.example'),
     logoutUrl.replace('https://', 'https://user:password@'),
     logoutUrl.replace('.com/logout', '.com:444/logout'), logoutUrl.replace('/logout?', '/oauth2/authorize?'),
@@ -466,12 +466,12 @@ test('the shared socket accepts bounded peer envelopes but closes malformed UTF-
     close() { this.readyState = 3; this.dispatchEvent(new Event('close')); }
     send(value) { this.sent.push(value); }
   }
-  globalThis.WebSocket = Socket; globalThis.window = { location: { origin: 'https://memoverse.example' } };
+  globalThis.WebSocket = Socket; globalThis.window = { location: { origin: 'https://keepsite.example' } };
   api.installSession(signedSession()); let closed = 0; const received = [];
   let connection;
   try {
     connection = api.openSyncEvents(value => received.push(value), () => { closed++; });
-    assert.equal(sockets[0].url, 'wss://memoverse.example/api/sync/events');
+    assert.equal(sockets[0].url, 'wss://keepsite.example/api/sync/events');
     sockets[0].dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ v: 1, type: 'device.peers', serverId: 'server', userId: 'a', peers: [] }) }));
     assert.equal(received[0].type, 'device.peers'); assert.ok(received[0].wireBytes > 0);
     assert.equal(connection.send({ v: 1, type: 'peer.signal', requestId: 'r', payload: 'x'.repeat(65536) }), false);

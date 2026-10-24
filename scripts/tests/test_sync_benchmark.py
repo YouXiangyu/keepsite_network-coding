@@ -23,9 +23,9 @@ class SyncBenchmarkTests(unittest.TestCase):
     def test_incremental_workload_has_complete_state_and_exact_request_accounting(self):
         sentinel = self.root / "keep.txt"
         sentinel.write_text("untouched", encoding="utf-8")
-        with patch.dict(os.environ, {"MEMOVERSE_DATA_DIR": str(self.root / "do-not-open"),
-                                     "MEMOVERSE_STORAGE": "s3", "MEMOVERSE_S3_BUCKET": "do-not-access",
-                                     "MEMOVERSE_REDIS_URL": "redis://do-not-connect.invalid:6379/0"}):
+        with patch.dict(os.environ, {"KEEPSITE_DATA_DIR": str(self.root / "do-not-open"),
+                                     "KEEPSITE_STORAGE": "s3", "KEEPSITE_S3_BUCKET": "do-not-access",
+                                     "KEEPSITE_REDIS_URL": "redis://do-not-connect.invalid:6379/0"}):
             report = benchmark.run_case(ROOT, self.root, "incremental", 103)
         measured, checked = report["measurements"], report["checks"]
         self.assertEqual(measured["initialSync"]["requests"], 3)
@@ -48,7 +48,7 @@ class SyncBenchmarkTests(unittest.TestCase):
                 benchmark.run_case(ROOT, self.root, protocol, count)
         with self.assertRaisesRegex(ValueError, "historical"):
             benchmark.run_case(ROOT, self.root, "full-poll", 3)
-        sentinel = self.root / "memoverse.sqlite3"
+        sentinel = self.root / "keepsite.sqlite3"
         sentinel.write_bytes(b"untouched; not a database")
         with self.assertRaisesRegex(ValueError, "existing account"):
             benchmark.run_case(ROOT, self.root, "incremental", 3)

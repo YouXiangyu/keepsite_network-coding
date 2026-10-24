@@ -147,8 +147,8 @@ def application(directory, run_token, *, dist=None):
         nonlocal media_count, media_overflow
         if request.url.path.startswith('/__test/'):
             if (request.client.host != '127.0.0.1'
-                    or request.headers.get('X-MemoVerse-Fixture') != FIXTURE_HEADER
-                    or not equal_secret(request.headers.get('X-MemoVerse-Fixture-Run'), run_token)
+                    or request.headers.get('X-Keepsite-Fixture') != FIXTURE_HEADER
+                    or not equal_secret(request.headers.get('X-Keepsite-Fixture-Run'), run_token)
                     or request.headers.get('Origin', ORIGIN) != ORIGIN):
                 return JSONResponse({'detail': 'Fixture access denied'}, status_code=403)
         if request.url.path == '/api/health':
@@ -159,7 +159,7 @@ def application(directory, run_token, *, dist=None):
             with seed_lock:
                 media_count += 1
                 if len(media_requests) < MAX_MEDIA_REQUESTS:
-                    row = {'sequence': media_count, 'client': 'android' if request.headers.get('X-MemoVerse-Client') == 'android' else 'web',
+                    row = {'sequence': media_count, 'client': 'android' if request.headers.get('X-Keepsite-Client') == 'android' else 'web',
                            'assetId': match.group(1), 'status': None, 'finished': False}
                     media_requests.append(row)
                 else:
@@ -299,9 +299,9 @@ def run_fixture():
         raise SystemExit('Build the Web client before starting the native fixture')
     cache = safe_directory(ROOT / '.cache')
     cache.mkdir(exist_ok=True)
-    run_token = os.environ.get('MEMOVERSE_NATIVE_RUN_TOKEN', '')
+    run_token = os.environ.get('KEEPSITE_NATIVE_RUN_TOKEN', '')
     if not re.fullmatch(r'[a-f0-9]{32}', run_token):
-        raise SystemExit('Launch with a random MEMOVERSE_NATIVE_RUN_TOKEN ownership key')
+        raise SystemExit('Launch with a random KEEPSITE_NATIVE_RUN_TOKEN ownership key')
     os.environ['AWS_EC2_METADATA_DISABLED'] = 'true'
     manifest = cache / f'native-run-{run_token}.json'
     owns_manifest, directory = False, None

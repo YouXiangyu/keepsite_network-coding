@@ -92,7 +92,7 @@ test('native observer counts UTF-8, frame payload/header and closes, without ret
   const prior = globalThis.window;
   globalThis.window = { WebSocket: Socket, RTCPeerConnection: Connection };
   try {
-    installObserver(); const observer = window.__memoVerseObserver; observer.start('measured');
+    installObserver(); const observer = window.__keepsiteObserver; observer.start('measured');
     const socket = new window.WebSocket(); socket.send('{"type":"peer.signal","payload":"中文秘密"}');
     const pc = new window.RTCPeerConnection(), channel = pc.createDataChannel();
     const binary = new ArrayBuffer(27); new DataView(binary).setUint32(4, 19); channel.send(binary);

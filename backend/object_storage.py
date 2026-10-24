@@ -295,9 +295,9 @@ class S3ObjectStore(ObjectStore):
 
 
 def configured_store(data_root: Path) -> ObjectStore:
-    mode = os.environ.get("MEMOVERSE_STORAGE")
+    mode = os.environ.get("KEEPSITE_STORAGE")
     if mode == "local":
         return LocalObjectStore(data_root / "objects")
     if mode == "s3":
-        return S3ObjectStore(os.environ.get("MEMOVERSE_S3_BUCKET", ""), os.environ.get("AWS_REGION", ""))
-    raise StorageError("Set MEMOVERSE_STORAGE explicitly to local or s3")
+        return S3ObjectStore(os.environ.get("KEEPSITE_S3_BUCKET", ""), os.environ.get("AWS_REGION", ""))
+    raise StorageError("Set KEEPSITE_STORAGE explicitly to local or s3")

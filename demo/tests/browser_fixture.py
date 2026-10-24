@@ -66,7 +66,7 @@ P2P_PROFILE = Profile("p2p", 4177, ROOT / "demo/dist/client", 1, 512, 768, "p2p"
 
 
 def benchmark_profile(count=None):
-    value = os.environ.get("MEMOVERSE_M6_TICKET_COUNT", "300") if count is None else str(count)
+    value = os.environ.get("KEEPSITE_M6_TICKET_COUNT", "300") if count is None else str(count)
     if not re.fullmatch(r"[1-9][0-9]{0,2}", value) or not 1 <= int(value) <= 300:
         raise ValueError("M6 ticket count must be an integer from 1 to 300")
     return Profile("benchmark", 4178, ROOT / ".cache/m6-bench-client", int(value), 256, 384, "m6")
@@ -235,8 +235,8 @@ class LoopbackAuth(FakeAuthFactory):
             path = request.url.path
             if path.startswith("/__test/"):
                 if (request.client.host != "127.0.0.1"
-                        or request.headers.get("X-MemoVerse-Fixture") != FIXTURE_HEADER
-                        or request.headers.get("X-MemoVerse-Fixture-Run") != self.run_token
+                        or request.headers.get("X-Keepsite-Fixture") != FIXTURE_HEADER
+                        or request.headers.get("X-Keepsite-Fixture-Run") != self.run_token
                         or request.headers.get("Origin", self.origin) != self.origin):
                     return JSONResponse({"detail": "Fixture access denied"}, status_code=403)
                 return await call_next(request)
@@ -399,9 +399,9 @@ def run_fixture(profile):
         raise SystemExit("Build the matching browser client before starting its fixture")
     cache = safe_directory(ROOT / ".cache")
     cache.mkdir(exist_ok=True)
-    run_token = os.environ.get("MEMOVERSE_P2P_RUN_TOKEN", "")
+    run_token = os.environ.get("KEEPSITE_P2P_RUN_TOKEN", "")
     if not re.fullmatch(r"[a-f0-9]{32}", run_token):
-        raise SystemExit("Launch with a random MEMOVERSE_P2P_RUN_TOKEN ownership key")
+        raise SystemExit("Launch with a random KEEPSITE_P2P_RUN_TOKEN ownership key")
     os.environ["AWS_EC2_METADATA_DISABLED"] = "true"
     manifest = cache / f"{profile.prefix}-run-{run_token}.json"
     owns_manifest, directory = False, None

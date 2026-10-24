@@ -161,7 +161,7 @@ export function installObserver() {
     }
     close() { if (connections.delete(this) && this.__benchState) this.__benchState.pcClosed++; super.close(); }
   };
-  window.__memoVerseObserver = {
+  window.__keepsiteObserver = {
     start(id) { if (phase && !phase.stoppedAt || connections.size || channels.size) throw new Error('Transport observation phase overlap'); phase = fresh(id); lateEvents = 0; },
     status() { return { activePCs: connections.size, activeChannels: channels.size, lateEvents }; },
     stop() { if (!phase || phase.stoppedAt) throw new Error('No active observation phase'); phase.stoppedAt = Date.now(); return { ...phase, activePCs: connections.size, activeChannels: channels.size, lateEvents }; },

@@ -13,7 +13,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .auth import AuthError, OAUTH_SECONDS, equal_secret, hashed
 
-APP_RETURN_URI = 'io.github.youxiangyu.memoverse:/oauth/callback'
+APP_RETURN_URI = 'io.github.youxiangyu.keepsite:/oauth/callback'
 TICKET_SECONDS = 60
 MAX_FLOWS = 64
 OPAQUE = re.compile(r'[A-Za-z0-9_-]{43}\Z')
@@ -31,7 +31,7 @@ def unavailable():
 class NativeAuth:
     def __init__(self, auth):
         self.auth = auth
-        self.cookie_name = '__Host-memoverse_native_oauth' if auth.config and auth.config.secure else 'memoverse_native_oauth'
+        self.cookie_name = '__Host-keepsite_native_oauth' if auth.config and auth.config.secure else 'keepsite_native_oauth'
         with auth.db() as db:
             db.execute('''CREATE TABLE IF NOT EXISTS native_oauth (
                 flow_hash TEXT PRIMARY KEY, challenge TEXT NOT NULL, app_state TEXT NOT NULL,
@@ -179,7 +179,7 @@ def install_native_auth(app, auth, login_response, failure):
 
     async def payload(request, fields):
         auth.check_write(request)
-        if request.headers.get('x-memoverse-client') != 'android':
+        if request.headers.get('x-keepsite-client') != 'android':
             raise AuthError(403, '原生登录请求来源验证失败。', 'invalid_origin')
         auth.limiter.check(request.client.host if request.client else '', 'native-auth')
         sid = request.cookies.get(auth.cookie_name)

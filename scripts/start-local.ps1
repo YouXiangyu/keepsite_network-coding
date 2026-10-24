@@ -3,9 +3,9 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $pythonPath = Join-Path $projectRoot 'backend/.venv/Scripts/python.exe'
 if (-not (Test-Path -LiteralPath $pythonPath)) { throw '请先按 backend/README.md 创建项目虚拟环境。' }
-if ($env:MEMOVERSE_STORAGE -notin @('local', 's3')) { throw '请先按 backend/README.md 明确配置 MEMOVERSE_STORAGE 和鉴权环境。' }
-if ($env:MEMOVERSE_PUBLIC_URL -notin @('http://127.0.0.1:4173', 'http://localhost:4173')) { throw '本机开发的 MEMOVERSE_PUBLIC_URL 必须与 4173 前端 origin 一致；不要直接复用生产环境文件。' }
-$authSettings = @('MEMOVERSE_COGNITO_REGION', 'MEMOVERSE_COGNITO_USER_POOL_ID', 'MEMOVERSE_COGNITO_CLIENT_ID', 'MEMOVERSE_COGNITO_DOMAIN', 'MEMOVERSE_SESSION_KEY')
+if ($env:KEEPSITE_STORAGE -notin @('local', 's3')) { throw '请先按 backend/README.md 明确配置 KEEPSITE_STORAGE 和鉴权环境。' }
+if ($env:KEEPSITE_PUBLIC_URL -notin @('http://127.0.0.1:4173', 'http://localhost:4173')) { throw '本机开发的 KEEPSITE_PUBLIC_URL 必须与 4173 前端 origin 一致；不要直接复用生产环境文件。' }
+$authSettings = @('KEEPSITE_COGNITO_REGION', 'KEEPSITE_COGNITO_USER_POOL_ID', 'KEEPSITE_COGNITO_CLIENT_ID', 'KEEPSITE_COGNITO_DOMAIN', 'KEEPSITE_SESSION_KEY')
 foreach ($setting in $authSettings) {
     if (-not [Environment]::GetEnvironmentVariable($setting, 'Process')) { throw "缺少鉴权配置项 $setting；未启动进程。" }
 }

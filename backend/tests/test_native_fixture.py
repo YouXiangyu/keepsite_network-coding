@@ -13,12 +13,12 @@ spec = importlib.util.spec_from_file_location('native_fixture', ROOT / 'backend/
 fixture = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fixture)
 TOKEN = '1' * 32
-OWNED = {'X-MemoVerse-Fixture': fixture.FIXTURE_HEADER, 'X-MemoVerse-Fixture-Run': TOKEN}
-ANDROID = {'Origin': fixture.ORIGIN, 'X-MemoVerse-Client': 'android'}
+OWNED = {'X-Keepsite-Fixture': fixture.FIXTURE_HEADER, 'X-Keepsite-Fixture-Run': TOKEN}
+ANDROID = {'Origin': fixture.ORIGIN, 'X-Keepsite-Client': 'android'}
 
 
 def login(client, who='alice', platform='android'):
-    response = client.post('/api/auth/login', headers={**ANDROID, 'X-MemoVerse-Client': platform},
+    response = client.post('/api/auth/login', headers={**ANDROID, 'X-Keepsite-Client': platform},
                            json={'email': f'{who}@example.test', 'password': fixture.PASSWORD})
     assert response.status_code == 200, response.text
     assert 'id_token' not in response.text and 'refresh_token' not in response.text
@@ -72,7 +72,7 @@ def test_native_fixture_real_bff_isolation_and_explicit_synthetic_bootstrap(tmp_
 
 def test_native_fixture_lifecycle_does_not_adopt_foreign_manifest(tmp_path, monkeypatch):
     monkeypatch.setattr(fixture, 'ROOT', tmp_path)
-    monkeypatch.setenv('MEMOVERSE_NATIVE_RUN_TOKEN', TOKEN)
+    monkeypatch.setenv('KEEPSITE_NATIVE_RUN_TOKEN', TOKEN)
     dist = tmp_path / 'demo/dist/client'
     dist.mkdir(parents=True)
     (dist / 'index.html').write_text('synthetic client', encoding='utf-8')
@@ -87,7 +87,7 @@ def test_native_fixture_lifecycle_does_not_adopt_foreign_manifest(tmp_path, monk
         def run(self):
             assert (cache / f'native-run-{TOKEN}.json').exists()
             with TestClient(self.app, base_url=fixture.ORIGIN, client=('127.0.0.1', 12345)) as client:
-                bad = {**OWNED, 'X-MemoVerse-Fixture-Run': '0' * 32}
+                bad = {**OWNED, 'X-Keepsite-Fixture-Run': '0' * 32}
                 assert client.post('/__test/shutdown', headers=bad).status_code == 403
                 assert not self.should_exit
                 assert client.post('/__test/shutdown', headers=OWNED).status_code == 200
@@ -156,7 +156,7 @@ def test_owned_auth_limit_reset_preserves_real_login_validation(tmp_path):
             login(client)
         body = {'email': 'alice@example.test', 'password': fixture.PASSWORD}
         assert client.post('/api/auth/login', headers=ANDROID, json=body).status_code == 429
-        bad = {**OWNED, 'X-MemoVerse-Fixture-Run': '0' * 32}
+        bad = {**OWNED, 'X-Keepsite-Fixture-Run': '0' * 32}
         assert client.post('/__test/reset-auth-limits', headers=bad).status_code == 403
         assert client.post('/api/auth/login', headers=ANDROID, json=body).status_code == 429
         assert client.post('/__test/reset-auth-limits', headers=OWNED).json() == {'ok': True}

@@ -103,7 +103,7 @@ def test_pinned_uvicorn_transport_handshake_hints_limits_and_cleanup():
 
 def test_production_proxy_and_engine_use_dedicated_bounded_websocket_path():
     root = Path(__file__).resolve().parents[2]
-    unit = (root / "deploy/ubuntu/memoverse.service").read_text()
+    unit = (root / "deploy/ubuntu/keepsite.service").read_text()
     assert "--ws websockets-sansio --ws-max-size 65536" in unit
     assert "--ws-ping-interval 15 --ws-ping-timeout 15 --ws-per-message-deflate false" in unit
     proxy = (root / "deploy/ubuntu/nginx.conf.template").read_text()

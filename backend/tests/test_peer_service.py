@@ -332,7 +332,7 @@ def test_partial_peer_start_releases_subscriptions_and_threads(tmp_path, monkeyp
     else:
         original = threading.Thread.start
         def start(thread):
-            if thread.name == "memoverse-peer-subscriber":
+            if thread.name == "keepsite-peer-subscriber":
                 raise RuntimeError("injected")
             return original(thread)
         monkeypatch.setattr(threading.Thread, "start", start)

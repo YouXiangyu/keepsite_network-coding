@@ -134,8 +134,8 @@ def test_missing_configuration_never_fakes_processing_or_registers_jobs(tmp_path
 
 
 def test_missing_tmdb_read_token_disables_processing_with_explicit_reason(tmp_path, monkeypatch):
-    monkeypatch.setenv("MEMOVERSE_POSTER_PROVIDER", "tmdb")
-    monkeypatch.delenv("MEMOVERSE_TMDB_READ_ACCESS_TOKEN", raising=False)
+    monkeypatch.setenv("KEEPSITE_POSTER_PROVIDER", "tmdb")
+    monkeypatch.delenv("KEEPSITE_TMDB_READ_ACCESS_TOKEN", raising=False)
     storage = S3ObjectStore("test-bucket", "ap-northeast-1", client=FakeS3Client())
     cache = RedisSharedState(client=fakeredis.FakeRedis())
     def factory(store, shared):
@@ -520,7 +520,7 @@ def test_tmdb_backup_rejects_unsafe_attribution_before_publishing_destination(tm
 
 
 def test_real_redis_stream_group_delivery_and_queue_loss(tmp_path):
-    url = os.environ.get("MEMOVERSE_TEST_REDIS_URL")
+    url = os.environ.get("KEEPSITE_TEST_REDIS_URL")
     if not url:
         if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
             pytest.fail("CI must provide real Redis for Streams coverage")

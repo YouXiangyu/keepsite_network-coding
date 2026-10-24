@@ -58,7 +58,7 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
     socket.send(JSON.stringify({ v: 1, type: 'sync.ready', serverId: 'web-server', userId: entry.user, cursor: history(entry.user).cursor }));
     socket.onClose(() => sockets.delete(entry));
   });
-  await page.addInitScript(() => { (window as any).__legacyReads = 0; const open = indexedDB.open.bind(indexedDB); indexedDB.open = ((name: string, version?: number) => { if (name === 'memoverse-media-cache-v1') return open(name, version); (window as any).__legacyReads += 1; throw new Error('Legacy data must not be read'); }) as typeof indexedDB.open; });
+  await page.addInitScript(() => { (window as any).__legacyReads = 0; const open = indexedDB.open.bind(indexedDB); indexedDB.open = ((name: string, version?: number) => { if (name === 'keepsite-media-cache-v1') return open(name, version); (window as any).__legacyReads += 1; throw new Error('Legacy data must not be read'); }) as typeof indexedDB.open; });
   await page.route('**/api/**', async route => {
     const request = route.request(), path = new URL(request.url()).pathname, method = request.method();
     let body: any; try { body = request.postDataJSON(); } catch { body = request.postData(); }
@@ -231,7 +231,7 @@ test('peer inventory follows durable cache clearing, external eviction and the p
   await expect.poll(() => api.requests.filter(request => request.path.endsWith('/changes')).length).toBeGreaterThan(before);
   await page.getByLabel('本页启用 P2P 加速').check(); await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '1');
   await page.evaluate(() => new Promise<void>((resolve, reject) => {
-    const open = indexedDB.open('memoverse-media-cache-v1'); open.onsuccess = () => { const database = open.result, tx = database.transaction('media', 'readwrite'); tx.objectStore('media').clear(); tx.oncomplete = () => { database.close(); resolve(); }; tx.onerror = () => reject(tx.error); };
+    const open = indexedDB.open('keepsite-media-cache-v1'); open.onsuccess = () => { const database = open.result, tx = database.transaction('media', 'readwrite'); tx.objectStore('media').clear(); tx.oncomplete = () => { database.close(); resolve(); }; tx.onerror = () => reject(tx.error); };
   }));
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '0');
@@ -275,9 +275,11 @@ test('online page controls and observed transport totals fit all supported viewp
 test('session barrier blocks private pages and all business requests', async ({ page }) => {
   let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });
   const api = await mockApi(page, { sessionGate: gate }); await page.goto('/tickets/item-1');
-  await expect(page.getByText('正在确认登录状态…')).toBeVisible(); await expect(page.locator('.memoverse-shell')).toHaveCount(0);
+  await expect(page.getByText('正在确认登录状态…')).toBeVisible(); await expect(page.locator('.keepsite-shell')).toHaveCount(0);
   expect(api.requests.every(request => request.path.startsWith('/api/auth/'))).toBeTruthy(); release();
   await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
+  await expect(page).toHaveTitle('欢迎回来 · keepsite');
+  await expect(page.locator('.auth-story .brand')).toHaveText('keepsite');
   await expect(page.getByRole('button', { name: 'Google 登录暂不可用' })).toBeDisabled();
   expect(await page.evaluate(() => (window as any).__legacyReads)).toBe(0);
 });
@@ -328,7 +330,7 @@ test('unverified login routes to verification without exposing the collection', 
   await page.goto('/login');
   await login(page);
   await expect(page.getByRole('heading', { name: '验证你的邮箱' })).toBeVisible();
-  await expect(page.locator('.memoverse-shell')).toHaveCount(0);
+  await expect(page.locator('.keepsite-shell')).toHaveCount(0);
 });
 
 test('Cognito logout leaves an anonymous document before redirect and returns signed out', async ({ page }) => {
@@ -336,13 +338,13 @@ test('Cognito logout leaves an anonymous document before redirect and returns si
   await page.goto('/tickets');
   await expect(page.getByRole('heading', { name: '我的票夹', exact: true })).toBeVisible();
   const origin = new URL(page.url()).origin;
-  const provider = 'https://memoverse.auth.ap-northeast-3.amazoncognito.com';
+  const provider = 'https://keepsite.auth.ap-northeast-3.amazoncognito.com';
   api.logoutUrl = provider + '/logout?' + new URLSearchParams({ client_id: 'testclient123', logout_uri: origin + '/' });
   let beforeNavigation: { privateUI: boolean; pathname: string; message: boolean } | undefined;
   await page.exposeFunction('recordLogoutDocument', (snapshot: typeof beforeNavigation) => { beforeNavigation = snapshot; });
   await page.evaluate(() => {
     window.addEventListener('beforeunload', () => {
-      void (window as any).recordLogoutDocument({ privateUI: !!document.querySelector('.memoverse-shell'),
+      void (window as any).recordLogoutDocument({ privateUI: !!document.querySelector('.keepsite-shell'),
         pathname: location.pathname, message: document.body.innerText.includes('已退出登录。') });
     }, { once: true });
   });
@@ -353,7 +355,7 @@ test('Cognito logout leaves an anonymous document before redirect and returns si
   await expect.poll(() => beforeNavigation).toEqual({ privateUI: false, pathname: '/login', message: true });
   await expect(page).toHaveURL(origin + '/');
   await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
-  await expect(page.locator('.memoverse-shell')).toHaveCount(0);
+  await expect(page.locator('.keepsite-shell')).toHaveCount(0);
   expect(api.user).toBe('');
 });
 
@@ -368,7 +370,7 @@ test('an unsafe logout URL stays on the signed-out local page', async ({ page })
   await page.getByRole('button', { name: '退出登录', exact: true }).first().click();
   await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
   await expect(page.getByText('已退出登录。', { exact: true })).toBeVisible();
-  await expect(page.locator('.memoverse-shell')).toHaveCount(0);
+  await expect(page.locator('.keepsite-shell')).toHaveCount(0);
   await expect(page).toHaveURL(origin + '/login');
   expect(externalNavigations).toEqual([]);
 });
@@ -378,7 +380,7 @@ test('unconfigured authentication remains unavailable and cannot expose workspac
   await page.goto('/login');
   await expect(page.getByRole('alert')).toContainText('登录服务暂时不可用');
   await expect(page.getByRole('button', { name: '登录', exact: true })).toBeDisabled();
-  await expect(page.locator('.memoverse-shell')).toHaveCount(0);
+  await expect(page.locator('.keepsite-shell')).toHaveCount(0);
   expect(api.requests.every(request => request.path.startsWith('/api/auth/'))).toBeTruthy();
 });
 
@@ -388,7 +390,7 @@ test('Google callback failure shows a fixed message and removes the error query'
   await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
   await expect(page.getByText('Google 登录未完成，请重试。', { exact: true })).toBeVisible();
   await expect(page).not.toHaveURL(/auth_error/);
-  await expect(page.locator('.memoverse-shell')).toHaveCount(0);
+  await expect(page.locator('.keepsite-shell')).toHaveCount(0);
 });
 
 test('returning to a browser tab rechecks a session ended elsewhere', async ({ page }) => {
@@ -398,7 +400,7 @@ test('returning to a browser tab rechecks a session ended elsewhere', async ({ p
   api.user = '';
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
-  await expect(page.locator('.memoverse-shell')).toHaveCount(0);
+  await expect(page.locator('.keepsite-shell')).toHaveCount(0);
 });
 
 
@@ -473,8 +475,8 @@ test('six mixed-aspect covers form a masonry library and preserve sort and resiz
 });
 
 test('authorized reference covers render in the real mobile collection', async ({ page }, info) => {
-  test.skip(!process.env.MEMOVERSE_VISUAL_ASSETS, 'Local user-authorized reference crops are not committed.');
-  const directory = process.env.MEMOVERSE_VISUAL_ASSETS!;
+  test.skip(!process.env.KEEPSITE_VISUAL_ASSETS, 'Local user-authorized reference crops are not committed.');
+  const directory = process.env.KEEPSITE_VISUAL_ASSETS!;
   const manifest = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8'));
   const api = await mockApi(page, { user: 'a' });
   const tickets = [];
@@ -550,7 +552,7 @@ test('logout discards a late old-account state before another login', async ({ p
   const before = api.requests.length; await page.getByRole('button', { name: '刷新票夹' }).click();
   await expect.poll(() => api.requests.length).toBeGreaterThan(before);
   await page.getByRole('button', { name: '退出登录' }).click(); await login(page, 'b@example.test'); release();
-  await expect(page.locator('.memoverse-shell')).toHaveAttribute('data-user-id', 'b');
+  await expect(page.locator('.keepsite-shell')).toHaveAttribute('data-user-id', 'b');
   await expect(page.getByRole('heading', { name: 'B 的电影票' })).toBeVisible();
   await expect(page.getByText('A 的电影票', { exact: true })).toHaveCount(0);
 });
@@ -571,7 +573,7 @@ test('an authenticated state 401 removes all private UI', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'A 的电影票' })).toBeVisible();
   await page.route('**/api/sync/changes?**', route => route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ detail: '会话结束' }) }));
   await page.getByRole('button', { name: '刷新票夹' }).click();
-  await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible(); await expect(page.locator('.memoverse-shell')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible(); await expect(page.locator('.keepsite-shell')).toHaveCount(0);
 });
 test('an old in-flight delta cannot restore a deleted ticket', async ({ page }) => {
   const api = await mockApi(page, { user: 'a' }); await page.clock.install(); await page.goto('/tickets/item-1');
@@ -586,7 +588,7 @@ test('an old in-flight delta cannot restore a deleted ticket', async ({ page }) 
 
 async function cacheEntries(page: Page): Promise<{ accountId: string; sha256: string }[]> {
   return page.evaluate(() => new Promise((resolve, reject) => {
-    const open = indexedDB.open('memoverse-media-cache-v1', 1);
+    const open = indexedDB.open('keepsite-media-cache-v1', 1);
     open.onerror = () => reject(open.error);
     open.onsuccess = () => {
       const database = open.result;
@@ -699,7 +701,7 @@ test('focus and device status recheck storage eviction without redownloading an 
   const api = await mockApi(page, { user: 'a' }); await page.goto('/tickets/item-1');
   await expect(page.locator('.media-availability')).toContainText('已校验'); const reads = imageReads(api);
   await page.evaluate(() => new Promise<void>((resolve, reject) => {
-    const open = indexedDB.open('memoverse-media-cache-v1', 1);
+    const open = indexedDB.open('keepsite-media-cache-v1', 1);
     open.onsuccess = () => { const database = open.result, tx = database.transaction('media', 'readwrite'); tx.objectStore('media').clear(); tx.oncomplete = () => { database.close(); resolve(); }; tx.onerror = () => reject(tx.error); };
   }));
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
@@ -753,7 +755,7 @@ test('a corrupt cached blob is removed even when cloud retrieval also fails', as
   await mockApi(page, { user: 'a' }); await page.goto('/tickets'); await expect(page.locator('.media-availability').first()).toContainText('已校验');
   await page.getByRole('link', { name: '设备与状态' }).click();
   await page.evaluate(() => new Promise<void>((resolve, reject) => {
-    const open = indexedDB.open('memoverse-media-cache-v1', 1);
+    const open = indexedDB.open('keepsite-media-cache-v1', 1);
     open.onsuccess = () => { const database = open.result, tx = database.transaction('media', 'readwrite'), store = tx.objectStore('media'), request = store.openCursor();
       request.onsuccess = () => { const cursor = request.result; if (cursor) { const record = cursor.value; record.blob = new Blob([new Uint8Array(record.size)], { type: record.mimeType }); cursor.update(record); } };
       tx.oncomplete = () => { database.close(); resolve(); }; tx.onerror = () => reject(tx.error); };

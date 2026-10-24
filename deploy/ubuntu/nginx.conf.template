@@ -1,11 +1,11 @@
 # Replace __DOMAIN__; validate separately before atomic activation.
 # Access logs intentionally omit all query strings, including OAuth codes.
-log_format memoverse_safe '$remote_addr - $request_method $uri $status $body_bytes_sent';
+log_format keepsite_safe '$remote_addr - $request_method $uri $status $body_bytes_sent';
 server {
     listen 80;
     listen [::]:80;
     server_name __DOMAIN__;
-    access_log /var/log/memoverse/nginx-access.log memoverse_safe;
+    access_log /var/log/keepsite/nginx-access.log keepsite_safe;
     location ^~ /.well-known/acme-challenge/ {
         root /var/www/letsencrypt;
         try_files $uri =404;
@@ -20,12 +20,12 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/__DOMAIN__/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     server_tokens off;
-    root /opt/memoverse/current/demo/dist/client;
+    root /opt/keepsite/current/demo/dist/client;
     index index.html;
     client_max_body_size 13m;
     client_body_timeout 120s;
-    access_log /var/log/memoverse/nginx-access.log memoverse_safe;
-    error_log /var/log/memoverse/nginx-error.log warn;
+    access_log /var/log/keepsite/nginx-access.log keepsite_safe;
+    error_log /var/log/keepsite/nginx-error.log warn;
     add_header X-Content-Type-Options nosniff always;
     add_header Referrer-Policy same-origin always;
     add_header X-Frame-Options SAMEORIGIN always;

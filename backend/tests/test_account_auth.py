@@ -144,7 +144,7 @@ def native_ticket(auth, headers, verifier, state):
 
 def test_native_google_link_uses_original_app_session_pkce_and_one_use_ticket(auth):
     session, headers = signed_in(auth)
-    headers = {**headers, 'X-MemoVerse-Client': 'android'}
+    headers = {**headers, 'X-Keepsite-Client': 'android'}
     verifier, state = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
     ticket = native_ticket(auth, headers, verifier, state)
     body = {'ticket': ticket['ticket'][0], 'verifier': verifier, 'state': state}
@@ -160,12 +160,12 @@ def test_native_google_link_uses_original_app_session_pkce_and_one_use_ticket(au
 
 def test_native_link_ticket_cannot_be_redeemed_from_new_session_of_same_account(auth):
     _, headers = signed_in(auth)
-    headers = {**headers, 'X-MemoVerse-Client': 'android'}
+    headers = {**headers, 'X-Keepsite-Client': 'android'}
     verifier, state = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
     ticket = native_ticket(auth, headers, verifier, state)
     auth.provider.subject, auth.provider.email, auth.provider.id_changes, auth.provider.nonce = 'subject-a', 'person@example.com', {}, None
     _, new_headers = signed_in(auth)
-    result = auth.client.post('/api/auth/account/google/native/redeem', headers={**new_headers, 'X-MemoVerse-Client': 'android'},
+    result = auth.client.post('/api/auth/account/google/native/redeem', headers={**new_headers, 'X-Keepsite-Client': 'android'},
                              json={'ticket': ticket['ticket'][0], 'verifier': verifier, 'state': state})
     assert result.status_code == 410
 

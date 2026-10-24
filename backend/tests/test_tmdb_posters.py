@@ -233,8 +233,8 @@ def test_stopping_cancels_before_network():
 
 
 def test_explicit_provider_selection_and_missing_private_key(monkeypatch):
-    monkeypatch.setenv("MEMOVERSE_POSTER_PROVIDER", "tmdb")
-    monkeypatch.delenv("MEMOVERSE_TMDB_READ_ACCESS_TOKEN", raising=False)
+    monkeypatch.setenv("KEEPSITE_POSTER_PROVIDER", "tmdb")
+    monkeypatch.delenv("KEEPSITE_TMDB_READ_ACCESS_TOKEN", raising=False)
     value = configured_provider()
     try:
         assert isinstance(value, TMDBPosterProvider)
@@ -244,7 +244,7 @@ def test_explicit_provider_selection_and_missing_private_key(monkeypatch):
             value.find("流浪地球")
     finally:
         value.close()
-    monkeypatch.setenv("MEMOVERSE_POSTER_PROVIDER", "invalid")
+    monkeypatch.setenv("KEEPSITE_POSTER_PROVIDER", "invalid")
     with pytest.raises(ValueError, match="Unsupported poster provider"):
         configured_provider()
 

@@ -1,4 +1,4 @@
-# MemoVerse · 个人电影票整理与多端同步
+# keepsite · 个人电影票整理与多端同步
 
 当前需求以[产品规格](docs/项目定义与决策主文档.md)为准，按[开发计划](docs/开发计划.md)的 M1—M7 顺序实施。先完成电脑、手机、平板共用的响应式 Web，再开发独立 Kotlin Android 客户端。
 
@@ -12,7 +12,7 @@ M1 将应用收窄为个人电影票，M2 补充上传核对、持久变更日�
 
 浏览器仅按账号缓存图片，完整校验后标为可用；128 MiB 上限、按需加载和并发限制控制资源。缓存不可用或空间不足时仍可临时展示，清本机缓存不删除云端记录。默认使用受保护同源媒体接口；60 秒 S3 直读签名需显式启用并先验证桶 CORS。
 
-云存原票的处理意图在数据库持久登记，由 Redis Streams 投递；OCR 使用固定版本和哈希的 PP-OCRv6 tiny CPU 模型，模型须显式准备。计算在可终止的独立子进程中执行，不延迟原票保存响应。用户字段、输入版本与删除标记优先于异步结果；海报先核验云存，再切换引用。来源只接入 Commons，逐文件保存并展示许可；处理进行中保留当前封面，正常处理进入无匹配或失败终态时回退原票封面。
+云存原票的处理意图在数据库持久登记，由 Redis Streams 投递；OCR 使用固定版本和哈希的 PP-OCRv6 tiny CPU 模型，模型须显式准备。计算在可终止的独立子进程中执行，不延迟原票保存响应。用户字段、输入版本与删除标记优先于异步结果；海报先核验云存，再切换引用。来源可配置为 TMDB 或 Commons，逐文件保存并展示对应出处；处理进行中保留当前封面，正常处理进入无匹配或失败终态时回退原票封面。
 
 首次同步分批获取同一游标的完整快照，再补拉其后的持久变更；新增、纠错、删除和处理结果均走增量。WebSocket 的状态同步消息只发水位提示，同一连接另承载设备登记与 P2P 信令；丢通知或重连后仍按 SQL 游标校准。写操作回执返回同步空间 `serverId` 与确认游标，客户端补齐同一空间的全部变化才确认保存；过期游标重取快照，期间保留页面数据与编辑草稿。旧生产 `/api/state` 接口已移除。
 
@@ -47,7 +47,9 @@ Android 当前为 `codex/android-native-progress` 上的 **M7 WIP 检查点**。
 
 ## 旧数据迁移与保护
 
-新程序不在启动时升级旧库，也不把旧全局数据归给首次登录者。已有 `backend/data`、`backend/data-v2` 和服务器旧目录保留；M1 使用 `backend/data-v3`，正式服务器候选目录为 `/var/lib/memoverse-v3`。
+2026-10-24 软件正式名称统一为 `keepsite`，包括客户端包名、环境变量、数据库文件名与部署服务名。已有安装与服务器不能直接原地替换；重命名迁移步骤见 [keepsite 迁移说明](docs/keepsite迁移.md)。原用户账户 ID、原票与云端对象不因改名改变。
+
+新程序不在启动时升级旧库，也不把旧全局数据归给首次登录者。已有 `backend/data`、`backend/data-v2` 和服务器旧目录保留；M1 使用 `backend/data-v3`，正式服务器候选目录为 `/var/lib/keepsite-v3`。
 
 迁移工具默认只读清单：
 
@@ -74,7 +76,7 @@ GitHub PR 与 `codex/**` 分支推送运行 `Backend tests`、`Frontend tests`�
 
 ## 部署信息
 
-既有环境为 AWS 东京 EC2、Cognito、私有 S3 和 [keepsite.space](https://keepsite.space)。定位信息见[项目运行信息](.agents/skills/memoverse-delivery/references/project-context.md)；当前状态必须现场查询。新版代码或 PR 不代表已部署。发布与回滚说明见 [Ubuntu 部署](deploy/ubuntu/README.md)。
+既有环境为 AWS 东京 EC2、Cognito、私有 S3 和 [keepsite.space](https://keepsite.space)。定位信息见[项目运行信息](.agents/skills/keepsite-delivery/references/project-context.md)；当前状态必须现场查询。新版代码或 PR 不代表已部署。发布与回滚说明见 [Ubuntu 部署](deploy/ubuntu/README.md)。
 
 每次 EC2 开机 58 分钟后自动发起正常关机，本次开发不改变该规则。停机仍保留磁盘与 S3 数据费用；数据持久存在不代表服务停止时还能登录或获取下载授权。
 

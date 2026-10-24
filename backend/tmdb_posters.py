@@ -29,11 +29,11 @@ _NOT_BEFORE = 0.0
 
 
 def configured_provider():
-    provider = os.environ.get("MEMOVERSE_POSTER_PROVIDER", "commons")
+    provider = os.environ.get("KEEPSITE_POSTER_PROVIDER", "commons")
     if provider == "commons":
         return CommonsPosterProvider()
     if provider == "tmdb":
-        return TMDBPosterProvider(access_token=os.environ.get("MEMOVERSE_TMDB_READ_ACCESS_TOKEN", ""))
+        return TMDBPosterProvider(access_token=os.environ.get("KEEPSITE_TMDB_READ_ACCESS_TOKEN", ""))
     raise ValueError("Unsupported poster provider configuration")
 
 

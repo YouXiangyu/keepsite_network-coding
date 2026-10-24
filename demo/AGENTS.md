@@ -1,4 +1,4 @@
-# MemoVerse Web App Agent Guide
+# keepsite Web App Agent Guide
 
 Updated: 2026-10-24.
 

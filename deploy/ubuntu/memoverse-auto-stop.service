@@ -1,6 +1,0 @@
-[Unit]
-Description=Normally power off the MemoVerse EC2 instance
-
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/systemctl poweroff

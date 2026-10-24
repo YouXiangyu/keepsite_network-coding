@@ -1,0 +1,10 @@
+[Unit]
+Description=Stop the keepsite EC2 instance 58 minutes after each boot
+
+[Timer]
+OnBootSec=58min
+AccuracySec=1s
+Unit=keepsite-auto-stop.service
+
+[Install]
+WantedBy=timers.target

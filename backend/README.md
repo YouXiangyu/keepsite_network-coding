@@ -1,6 +1,8 @@
-# MemoVerse 电影票后端
+# keepsite 电影票后端
 
-M4 沿用独立 SQLite schema 3，通过固定分页快照、持久增量和 WebSocket 水位提示同步本人票夹。默认数据目录是 `backend/data-v3`；正式环境使用 `/var/lib/memoverse-v3`。应用遇到旧 schema 1/2 会在写入前拒绝启动，不能把旧目录直接切给新版本。
+M4 沿用独立 SQLite schema 3，通过固定分页快照、持久增量和 WebSocket 水位提示同步本人票夹。默认数据目录是 `backend/data-v3`；正式环境使用 `/var/lib/keepsite-v3`。应用遇到旧 schema 1/2 会在写入前拒绝启动，不能把旧目录直接切给新版本。
+
+当前业务数据库名为 `keepsite.sqlite3`，鉴权库仍为 `auth.sqlite3`。启动前发现旧名 `memoverse.sqlite3`（包括新旧文件并存）或任何 `MEMOVERSE_*` 环境变量时会停止，要求先使用 `scripts/migrate-keepsite.py` 离线迁移到新目录；不会自动新建空库或回退读取旧变量。迁移保留原目录，账号 ID、票据 ID、原图哈希和对象键不改写。新客户端使用 `X-Keepsite-Client`，浏览器会话 Cookie 使用 `keepsite_` 前缀，Android 登录回调为 `io.github.youxiangyu.keepsite:/oauth/callback`；浏览器迁移后需重新登录。
 
 ## 当前能力与边界
 
@@ -21,7 +23,7 @@ M4 沿用独立 SQLite schema 3，通过固定分页快照、持久增量和 Web
 
 ## 媒体与授权
 
-上传支持解码核验的 JPG/PNG/WebP，最多 12 MiB、4000 万像素；SHA-256 寻址，不覆盖已有不同内容。S3 写入带校验和、AES256 和条件写，私有对象存储的网络 I/O 不持有 SQL 写事务。显式 `MEMOVERSE_STORAGE=local` 仅用于开发测试，不作为 S3 故障回退。
+上传支持解码核验的 JPG/PNG/WebP，最多 12 MiB、4000 万像素；SHA-256 寻址，不覆盖已有不同内容。S3 写入带校验和、AES256 和条件写，私有对象存储的网络 I/O 不持有 SQL 写事务。显式 `KEEPSITE_STORAGE=local` 仅用于开发测试，不作为 S3 故障回退。
 
 上传必须携带稳定 `uploadId`。服务端先解码照片，再将账号、上传标识、SHA-256、类型、尺寸、对象键及存储身份写入 `upload_intents`，随后才执行存储 I/O；相同标识换内容返回 409。对象成功后登记图片与待引用凭证。响应丢失、对象写入后数据库失败时，`GET /api/uploads/{uploadId}` 可核对并恢复；对象未到返回 `pending`，存储故障明确失败。客户端声称或旧 grant 都不能替代对象核验。
 
@@ -35,13 +37,13 @@ S3 核对使用 `HeadObject(ChecksumMode=ENABLED)` 返回的原生完整 `Checks
 
 数据库 `storage_binding` 绑定 S3 的区域、桶和区域端点，防止切换桶或从 local 切到 S3 后错误显示已保存。已有媒体却无绑定的 schema 3 数据须先做显式隔离验证/恢复，应用拒绝猜测。local 绑定为模式而非临时路径，允许验证后的完整备份搬移；上传意图与缓存仍包含完整 local 路径，旧意图不能给另一对象目录授权。
 
-`GET /api/media/{sha}/download` 先验证本人有效引用，默认返回受保护同源流地址。仅显式 `MEMOVERSE_DIRECT_DOWNLOAD=1` 时返回 60 秒 SigV4 HTTPS GET 地址；使用明确区域 S3 端点，并限制签名 URL 主机。签名不落库或日志，不向浏览器发长期凭据；未核验桶 CORS 前保持默认服务器传输。授权失效可重新请求；已签发地址有自己的有效期，退出或删除不会保证瞬时撤销它。临时凭据先过期时，实际有效期也会提前结束。
+`GET /api/media/{sha}/download` 先验证本人有效引用，默认返回受保护同源流地址。仅显式 `KEEPSITE_DIRECT_DOWNLOAD=1` 时返回 60 秒 SigV4 HTTPS GET 地址；使用明确区域 S3 端点，并限制签名 URL 主机。签名不落库或日志，不向浏览器发长期凭据；未核验桶 CORS 前保持默认服务器传输。授权失效可重新请求；已签发地址有自己的有效期，退出或删除不会保证瞬时撤销它。临时凭据先过期时，实际有效期也会提前结束。
 
 删除提交墓碑后撤销后续业务媒体授权；另一条有效票根仍引用相同文件时继续可读。不删除 S3 对象、本地旧文件、数据库或模型缓存，云对象和历史版本回收须另行授权。
 
 ## Redis 热点快照
 
-`MEMOVERSE_REDIS_URL` 可选，支持 redis/rediss/unix URL。未配置、断连、超时或内容损坏均回数据库；SQL 是持久事实。缓存键隔离账号、serverId、revision 和完整存储身份，默认 TTL 60 秒、单快照上限 8 MiB。缓存前后校验票根和归属，恢复空间或存储变化不会串用旧缓存。
+`KEEPSITE_REDIS_URL` 可选，支持 redis/rediss/unix URL。未配置、断连、超时或内容损坏均回数据库；SQL 是持久事实。缓存键隔离账号、serverId、revision 和完整存储身份，默认 TTL 60 秒、单快照上限 8 MiB。缓存前后校验票根和归属，恢复空间或存储变化不会串用旧缓存。
 
 Redis I/O 只发生在完成的 SQL 事务之间；写操作直接提交数据库，不等待 Redis。连接和读超时均为 0.5 秒、零自动重试，生命周期关闭连接池。缓存 miss 使用批量媒体、处理状态和出处查询，避免每张票单独查资产。完整能力配置参与缓存身份，未配置原因变化不会复用旧提示。在线设备状态仍未实现。
 
@@ -51,15 +53,15 @@ Redis I/O 只发生在完成的 SQL 事务之间；写操作直接提交数据�
 
 任务由 Redis Streams 消费者组投递，消息仅含 jobId。数据库每 10 秒允许补投未完成任务，队列删除、入队中断和重复消息不丢处理意图；消费者通过 90 秒 SQL 租约、递增 token、当前 job、账号、原图和 inputVersion 校验发布资格。计算/网络均在写事务外，每任务最多 3 次尝试、总窗口 10 分钟。即使 Redis 持续失联，过期任务也由独立 SQL 检查收敛为 failed。原票保存响应不等待 OCR。
 
-每次 OCR 尝试使用独立 spawn 子进程，最多 45 秒；停止/超时终止并回收进程和管道。子进程在导入 OCR 之前限定 OMP/OpenBLAS/MKL 线程为 1，OCR 引擎也使用单 CPU 线程；每任务包含模型冷启动成本。模型目录由 `MEMOVERSE_OCR_MODEL_DIR` 明确指定，固定依赖、文件与字典哈希见 `ocr-models.json`，不在运行时下载模型。
+每次 OCR 尝试使用独立 spawn 子进程，最多 45 秒；停止/超时终止并回收进程和管道。子进程在导入 OCR 之前限定 OMP/OpenBLAS/MKL 线程为 1，OCR 引擎也使用单 CPU 线程；每任务包含模型冷启动成本。模型目录由 `KEEPSITE_OCR_MODEL_DIR` 明确指定，固定依赖、文件与字典哈希见 `ocr-models.json`，不在运行时下载模型。
 
 85 秒尝试预算和停止信号在阶段边界、流读取返回后检查；它们不是整个 S3 网络操作的硬截止。botocore 的 5 秒读取超时针对 socket 等待，持续低速且不空闲的流可能让一次聚合读取超过该墙钟预算。当前不通过私有 StreamingBody 接口或强杀 Python 线程绕过限制；只有 OCR 子进程能在 45 秒硬终止。SQL 租约/输入版本仍拒绝超期结果发布，服务关停不延长 EC2 倒计时。真实 S3 慢流耗时和退出行为属于后续测量边界，不能由 fixture 测试宣称已经保证严格端到端超时。
 
-海报来源由后端 `MEMOVERSE_POSTER_PROVIDER` 明确选择：默认 `commons` 保留原 Wikimedia Commons 匹配；`tmdb` 使用 TMDB 电影 API，并从私密环境读取 `MEMOVERSE_TMDB_READ_ACCESS_TOKEN`。只读令牌通过 Bearer 请求头发送，仅限 TMDB API 主机，不发给图片 CDN；不进入客户端、Git、请求 URL 或业务响应；缺少配置时明确显示处理不可用。不会在匹配失败后串联不同来源猜测封面。TMDB 检查规范化片名、原名或经过 API 验证的别名，同名作品不按热度选择；可用片名中的显式年份消歧，放映时间不被当成首映年份。网络地址、响应大小、下载类型和实际图片均受校验。
+海报来源由后端 `KEEPSITE_POSTER_PROVIDER` 明确选择：默认 `commons` 保留原 Wikimedia Commons 匹配；`tmdb` 使用 TMDB 电影 API，并从私密环境读取 `KEEPSITE_TMDB_READ_ACCESS_TOKEN`。只读令牌通过 Bearer 请求头发送，仅限 TMDB API 主机，不发给图片 CDN；不进入客户端、Git、请求 URL 或业务响应；缺少配置时明确显示处理不可用。不会在匹配失败后串联不同来源猜测封面。TMDB 检查规范化片名、原名或经过 API 验证的别名，同名作品不按热度选择；可用片名中的显式年份消歧，放映时间不被当成首映年份。网络地址、响应大小、下载类型和实际图片均受校验。
 
 无可信匹配以 `no_match` 结束。海报 bytes 再次解码核验后，在上传前将 descriptor、出处和临时文件名写入 `processing_artifacts`。S3 保存并核验后才发布引用；最终 SQL 发布失败时，下一次租约先核对同一产物，不重跑 OCR 或重新抓取。`poster_sources` 按 provider 保存出处：Commons 保留 `licenseName/licenseUrl/author`；TMDB 使用电影 `sourcePage`、海报 `sourceFile`、`termsUrl`、`fetchedAt`，不虚构开放许可或作者。
 
-Web 与 Android 的账户页面提供 TMDB 标志和使用声明，详情显示电影来源及服务条款。官方标志来自 [TMDB Logos & Attribution](https://www.themoviedb.org/about/logos-attribution)，按原色与比例使用；API 说明见 [TMDB FAQ](https://developer.themoviedb.org/docs/faq)。本机私密配置位置为 `.cache/server/tmdb.env`，不自动改变已部署服务器环境。
+Web 与 Android 的账户页面提供 TMDB 标志和使用声明，详情显示电影来源及服务条款。官方标志来自 [TMDB Logos & Attribution](https://www.themoviedb.org/about/logos-attribution)，按原色与比例使用；API 说明见 [TMDB FAQ](https://developer.themoviedb.org/docs/faq)。本机私密配置候选位置为 `.cache/server/keepsite-tmdb.env`，不自动改变已部署服务器环境。
 
 处理中间海报只放在数据目录的 `tmp/processing`，原票始终来自已验证的私有对象。S3 核验后立即清除该临时副本；未完成副本、取消/失败及崩溃遗留孤儿采用 24 小时保留期，每轮最多扫描 200 项，活动任务仍引用的文件不清理。逐段拒绝 tmp/processing 父链上的符号链接和 junction，记录清理原因与时间；不删除 S3 对象或有效图片。服务退出先停止领取任务，在调用边界结束当前工作，再由 worker 的退出路径关闭海报客户端；等待返回后仍存活的线程不被并发关闭 provider。
 
@@ -134,7 +136,7 @@ backend/.venv/Scripts/python.exe -B scripts/restore-account-backup.py --archive 
 
 ## 配置与验证
 
-必需环境配置包括明确的 `MEMOVERSE_STORAGE`，S3 模式的 `MEMOVERSE_S3_BUCKET`/`AWS_REGION`，以及既有 Cognito、公共 Origin、会话加密密钥。`MEMOVERSE_TEMPLATE_DIR` 已退出。认证协议配置见 `backend/auth.py`；不得把凭据写入 Git。运行定位与发布边界见[项目运行信息](../.agents/skills/memoverse-delivery/references/project-context.md)。
+必需环境配置包括明确的 `KEEPSITE_STORAGE`，S3 模式的 `KEEPSITE_S3_BUCKET`/`AWS_REGION`，以及既有 Cognito、公共 Origin、会话加密密钥。`KEEPSITE_TEMPLATE_DIR` 已退出。认证协议配置见 `backend/auth.py`；不得把凭据写入 Git。运行定位与发布边界见[项目运行信息](../.agents/skills/keepsite-delivery/references/project-context.md)。
 
 Python 3.12/3.13，依赖使用 `backend/.venv`。测试均在隔离目录，认证/S3 为显式 fixture；真实身份服务及真机验收另行执行。
 

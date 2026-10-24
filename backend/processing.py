@@ -94,7 +94,7 @@ class ProcessingQueue:
 
     def __init__(self, client, server_id, consumer):
         self.client, self.consumer = client, consumer
-        self.stream = "memoverse:processing:" + server_id
+        self.stream = "keepsite:processing:" + server_id
 
     def ensure(self):
         try:
@@ -139,7 +139,7 @@ class ProcessingWorker:
         self.owner = str(uuid.uuid4())
         self.provider = provider
         self.ocr_runner = ocr_runner or run_isolated_ocr
-        self.thread = threading.Thread(target=self._loop, name="memoverse-ticket-processing", daemon=True)
+        self.thread = threading.Thread(target=self._loop, name="keepsite-ticket-processing", daemon=True)
         self.queue = None
         self._scanner = None
         self._resources_closed = False

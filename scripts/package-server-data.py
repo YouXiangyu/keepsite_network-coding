@@ -26,9 +26,9 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DATABASE = "memoverse.sqlite3"
+DATABASE = "keepsite.sqlite3"
 MANIFEST = "migration-manifest.json"
-FORMAT = "memoverse-server-data"
+FORMAT = "keepsite-server-data"
 JOB_FILES = ("model.glb", "depth.npy", "geometry.json")
 TABLES = {"meta", "assets", "collections", "shares", "community", "likes", "migrations", "jobs"}
 
@@ -253,7 +253,7 @@ def package_data(data_dir: Path, output: Path) -> dict:
     if output.resolve().is_relative_to(data_dir.resolve()):
         raise PackageError("Output cannot be inside the original data directory")
     source_database = safe_file(data_dir, DATABASE)
-    with tempfile.TemporaryDirectory(prefix=".memoverse-package-", dir=output.parent) as temporary:
+    with tempfile.TemporaryDirectory(prefix=".keepsite-package-", dir=output.parent) as temporary:
         staging = Path(temporary)
         snapshot = staging / DATABASE
         with closing(read_only_database(source_database)) as source, closing(sqlite3.connect(snapshot)) as destination:

@@ -26,7 +26,7 @@ from PIL import Image
 from .media import MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, image_info
 
 API_URL = "https://commons.wikimedia.org/w/api.php"
-USER_AGENT = "MemoVerse/0.6 (https://keepsite.space)"
+USER_AGENT = "keepsite/0.6 (https://keepsite.space)"
 MAX_CANDIDATES = 8
 MAX_IDENTITIES = 12
 MAX_METADATA_BYTES = 1024 * 1024

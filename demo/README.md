@@ -1,8 +1,10 @@
-# MemoVerse 电影票 Web
+# keepsite 电影票 Web
 
 更新日期：2026-10-22。产品规则见[主规格](../docs/项目定义与决策主文档.md)，执行顺序见[开发计划](../docs/开发计划.md)。
 
 当前 Web 已接入 M1—M5：同一响应式 Web 提供空票夹、原票上传、电影字段编辑、详情、删除、服务端处理状态、海报出处、分页快照、增量游标、WebSocket 提示及本人在线页面间的 P2P 加速。保留 Google 与邮箱认证、服务端 HttpOnly 会话、CSRF、账号隔离、可回收媒体缓存和云端恢复。旧分类、标签、社交、浮雕页面和 API 调用已移除。
+
+2026-10-24 改名为 lowercase `keepsite`：Web 使用 `keepsite-media-cache-v1` 图片缓存及 `X-Keepsite-Client` 请求头，与后端新 cookie 协议同步。旧 IndexedDB 仅为可回收媒体缓存，保留原样且不读取、不自动删除；新缓存通过同账号授权媒体读取重新填充。切换后需用原登录方式重新登录，同一服务端账号和已保存记录保持不变。尚未提交的页面草稿应在刷新或切换前完成保存并确认，改名不提供未提交草稿恢复保证。
 
 ## 运行边界
 
@@ -102,7 +104,7 @@ npm run test:p2p
 
 `npm run build:benchmark` 将 `benchmark/` 构建到仓库 `.cache/m6-bench-client`，不替换生产入口或 `dist/client`。夹具只允许 `http://127.0.0.1:4178`；通过公开的 AccountSync、AccountMediaCache、PeerMedia 接口执行真实读取与缓存，不修改私有状态、生产配额或连接统计。
 
-`window.__memoVerseBenchmark` 提供 boot、status、setPeerWanted、run、verify、dispose。每阶段最多 300 个不同的自有媒体，任务并发只允许 1/2/4，总截止 120 秒。每个任务从 acquire 到真实缓存终态记录耗时和来源；失败与未调度任务保留，缺失时间不补零。verify 在计时之外逐项读取实际 IDB 并核验大小、MIME 和 SHA-256。生产诊断视图本身只保留最近 50 条，测量入口持续收集并明确报告覆盖情况，不用最后 50 条代替全量任务样本。
+`window.__keepsiteBenchmark` 提供 boot、status、setPeerWanted、run、verify、dispose。每阶段最多 300 个不同的自有媒体，任务并发只允许 1/2/4，总截止 120 秒。每个任务从 acquire 到真实缓存终态记录耗时和来源；失败与未调度任务保留，缺失时间不补零。verify 在计时之外逐项读取实际 IDB 并核验大小、MIME 和 SHA-256。生产诊断视图本身只保留最近 50 条，测量入口持续收集并明确报告覆盖情况，不用最后 50 条代替全量任务样本。
 
 运行器是仓库 `scripts/benchmark-browser.mjs`，未加 `--execute` 时只显示计划，输出目录必须是新的绝对路径。正式矩阵使用两个独立 Chromium 进程、300 条元数据及 300 个独立合成 PNG，从中固定选取 60 张 working set；HTTP-only 冷读取、P2P 源预热后的目标冷读取、目标重载后的暖读取分别测试任务并发 1/2/4。每个配置的源端 HTTP 预热成本单列；暖缓存仅指该 working set，不代表整库预热。具体源码、样本、结果和限制见[开发计划](../docs/开发计划.md)。
 

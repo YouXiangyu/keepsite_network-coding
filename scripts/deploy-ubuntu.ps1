@@ -14,13 +14,13 @@ $ProjectRoot = Split-Path -Parent $PSScriptRoot
 if ($Server -notmatch '^(?:\d{1,3}\.){3}\d{1,3}$') { throw 'Use the verified IPv4 address.' }
 if ($Domain -notmatch '^[a-zA-Z0-9][a-zA-Z0-9.-]*\.[a-zA-Z]{2,}$') { throw 'Invalid hostname.' }
 if ($HostKeyAlias -and $HostKeyAlias -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') { throw 'Invalid SSH host key alias.' }
-if ($EnvironmentPath -and $EnvironmentPath -ne '/etc/memoverse.env.next') { throw 'Use the reviewed server-staged environment path /etc/memoverse.env.next.' }
-if ($NginxPath -and $NginxPath -ne '/etc/nginx/sites-available/memoverse.next') { throw 'Use the reviewed server-staged Nginx path /etc/nginx/sites-available/memoverse.next.' }
+if ($EnvironmentPath -and $EnvironmentPath -ne '/etc/keepsite.env.next') { throw 'Use the reviewed server-staged environment path /etc/keepsite.env.next.' }
+if ($NginxPath -and $NginxPath -ne '/etc/nginx/sites-available/keepsite.next') { throw 'Use the reviewed server-staged Nginx path /etc/nginx/sites-available/keepsite.next.' }
 if (-not $KeyPath) { $KeyPath = Join-Path $ProjectRoot '.cache/server/ssh/id_rsa' }
 $KeyPath = [IO.Path]::GetFullPath($KeyPath)
 $Commit = (& git -C $ProjectRoot rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or $Commit -notmatch '^[a-f0-9]{40}$') { throw 'Cannot resolve release commit.' }
-$Release = '/opt/memoverse/releases/' + $Commit
+$Release = '/opt/keepsite/releases/' + $Commit
 Write-Output "Plan: build this commit for same-origin API, upload source and static assets to $Server, prepare $Release. PrepareOnly=$PrepareOnly."
 if (-not $PrepareOnly) { Write-Output "Activation will verify authenticated backend readiness and coordinate optional staged environment/Nginx changes. Environment=$EnvironmentPath Nginx=$NginxPath" }
 Write-Output 'Existing database/media/models, TLS credentials and DNS are preserved. AWS resources are not created by this script.'
@@ -38,8 +38,8 @@ $TransferId = [guid]::NewGuid().ToString('N')
 $Building = $null
 $HashNext = $null
 $LocalPrepare = $null
-$RemoteArchive = "/tmp/memoverse-$Commit-$TransferId.tar"
-$RemotePrepare = "/tmp/memoverse-prepare-$Commit-$TransferId.py"
+$RemoteArchive = "/tmp/keepsite-$Commit-$TransferId.tar"
+$RemotePrepare = "/tmp/keepsite-prepare-$Commit-$TransferId.py"
 $UploadStarted = $false
 try {
     $Archive = Join-Path $TransferDir ("release-$Commit.tar")
@@ -97,7 +97,7 @@ try {
         if ($NginxPath) { $Activation += " --nginx '$NginxPath'" }
         & ssh @SshOptions "ubuntu@$Server" $Activation
         if ($LASTEXITCODE -ne 0) { throw 'Activation failed; inspect actual environment/site/current and rollback evidence before continuing.' }
-        Write-Output "Deployed $Commit. Schema-3 data stays in /var/lib/memoverse-v3; legacy data is preserved; origin https://$Domain."
+        Write-Output "Deployed $Commit. Schema-3 data stays in /var/lib/keepsite-v3; legacy data is preserved; origin https://$Domain."
     } else {
         Write-Output "Prepared $Commit only. Current app, environment and public Nginx site were not activated or replaced."
     }

@@ -57,9 +57,9 @@ test('logout during a stalled save cannot publish the old response into a replac
   await page.getByLabel('邮箱地址', { exact: true }).fill('b@example.test');
   await page.getByLabel('密码', { exact: true }).fill('ExamplePassword123!');
   await page.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(page.locator('.memoverse-shell')).toHaveAttribute('data-user-id', 'b');
+  await expect(page.locator('.keepsite-shell')).toHaveAttribute('data-user-id', 'b');
   await request.post('/__test/release');
-  await expect(page.locator('.memoverse-shell')).toHaveAttribute('data-user-id', 'b');
+  await expect(page.locator('.keepsite-shell')).toHaveAttribute('data-user-id', 'b');
   await expect(page.getByRole('heading', { name: 'B 的电影票', exact: true }).first()).toBeVisible();
   await expect(page.getByText('旧账户的草稿', { exact: true })).toHaveCount(0);
 });
@@ -229,6 +229,6 @@ test('logout during a stalled processing request cannot affect the replacement a
   await page.goto('/tickets/item-1'); await hang(request, '/api/tickets/item-1/process', 'POST');
   await waitForHeaders(page, '/api/tickets/item-1/process', () => page.getByRole('button', { name: '开始识别' }).click());
   await page.getByRole('button', { name: '退出登录' }).click(); await page.getByLabel('邮箱地址', { exact: true }).fill('b@example.test'); await page.getByLabel('密码', { exact: true }).fill('ExamplePassword123!'); await page.getByRole('button', { name: '登录', exact: true }).click();
-  await request.post('/__test/release'); await expect(page.locator('.memoverse-shell')).toHaveAttribute('data-user-id', 'b');
+  await request.post('/__test/release'); await expect(page.locator('.keepsite-shell')).toHaveAttribute('data-user-id', 'b');
   await expect(page.getByRole('heading', { name: 'B 的电影票' })).toBeVisible(); await expect(page.getByText('等待处理', { exact: true })).toHaveCount(0);
 });

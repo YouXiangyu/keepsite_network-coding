@@ -2,7 +2,7 @@
 
 更新日期：2026-10-21。
 
-在本仓库进行修改、修复、小版本交付、阶段收尾或服务器维护时，先读取并使用项目技能 [.agents/skills/memoverse-delivery/SKILL.md](.agents/skills/memoverse-delivery/SKILL.md)。关键环境信息集中在该技能的 `references/project-context.md`，操作前核实实时状态。
+在本仓库进行修改、修复、小版本交付、阶段收尾或服务器维护时，先读取并使用项目技能 [.agents/skills/keepsite-delivery/SKILL.md](.agents/skills/keepsite-delivery/SKILL.md)。关键环境信息集中在该技能的 `references/project-context.md`，操作前核实实时状态。
 
 ## 用户通用要求
 

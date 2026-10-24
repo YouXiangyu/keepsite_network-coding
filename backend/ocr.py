@@ -35,7 +35,7 @@ def _verify_files(directory, stamps):
 
 
 def model_directory():
-    value = os.environ.get("MEMOVERSE_OCR_MODEL_DIR")
+    value = os.environ.get("KEEPSITE_OCR_MODEL_DIR")
     if not value:
         raise OCRError("尚未配置 OCR 模型。")
     directory = Path(value).resolve(strict=True)

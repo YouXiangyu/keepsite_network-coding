@@ -23,7 +23,7 @@ const descriptions: Record<Mode, string> = {
 const anonymous: AuthSession = { authenticated: false, configured: false, providers: { google: false, email: false } };
 
 export function Brand() {
-  return <div className="brand"><span className="brand-mark"><Stack size={23} weight="light" /></span><span>MemoVerse</span></div>;
+  return <div className="brand"><span className="brand-mark"><Stack size={23} weight="light" /></span><span>keepsite</span></div>;
 }
 
 export default function AuthGate({ children }: { children: (session: SignedInSession) => ReactNode }) {
@@ -151,7 +151,7 @@ function AuthPage({ mode, session, serviceError, retry, onSignedIn }: {
     setError('');
     setPassword('');
     setCode('');
-    document.title = `${titles[mode]} · MemoVerse`;
+    document.title = `${titles[mode]} · keepsite`;
   }, [mode]);
 
   const move = (next: Mode) => {
@@ -216,7 +216,7 @@ function AuthPage({ mode, session, serviceError, retry, onSignedIn }: {
       <div className="memory-illustration" aria-hidden="true"><div /><div /><div /><span>Every moment matters.</span></div>
     </div><small>YOUR LIFE, COLLECTED.</small></div>
     <section className="auth-panel" aria-labelledby="auth-heading"><div className="auth-mobile-brand"><Brand /></div>
-      <div className="auth-form-wrap"><span className="eyebrow">MEMOVERSE ACCOUNT</span><h1 id="auth-heading">{titles[mode]}</h1><p className="auth-description">{descriptions[mode]}</p>
+      <div className="auth-form-wrap"><span className="eyebrow">keepsite account</span><h1 id="auth-heading">{titles[mode]}</h1><p className="auth-description">{descriptions[mode]}</p>
         {message && <p className="auth-notice" role="status"><CheckCircle size={20} />{message}</p>}
         {serviceError && <p className="auth-service-message" role="status">{serviceError}</p>}
         {!session.configured && <div className="auth-unavailable" role="alert"><p>登录服务暂时不可用，请稍后重试。</p><button className="secondary-button" onClick={retry}>重新连接</button></div>}

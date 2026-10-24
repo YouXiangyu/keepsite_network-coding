@@ -32,6 +32,8 @@ from fastapi.responses import JSONResponse, RedirectResponse
 import jwt
 from starlette.concurrency import run_in_threadpool
 
+from .configuration import require_current_environment
+
 SESSION_SECONDS = 7 * 24 * 3600
 OAUTH_SECONDS = 600
 WRITE_METHODS = {'POST', 'PUT', 'PATCH', 'DELETE'}
@@ -116,13 +118,14 @@ class AuthConfig:
 
     @classmethod
     def from_env(cls):
+        require_current_environment()
         fields = ('REGION', 'USER_POOL_ID', 'CLIENT_ID', 'DOMAIN')
-        values = [os.environ.get('MEMOVERSE_COGNITO_' + field, '') for field in fields]
-        values += [os.environ.get('MEMOVERSE_PUBLIC_URL', ''), os.environ.get('MEMOVERSE_SESSION_KEY', '')]
+        values = [os.environ.get('KEEPSITE_COGNITO_' + field, '') for field in fields]
+        values += [os.environ.get('KEEPSITE_PUBLIC_URL', ''), os.environ.get('KEEPSITE_SESSION_KEY', '')]
         if not all(values):
             return None
         try:
-            return cls(*values, google_enabled=os.environ.get('MEMOVERSE_GOOGLE_ENABLED', '').lower() == 'true')
+            return cls(*values, google_enabled=os.environ.get('KEEPSITE_GOOGLE_ENABLED', '').lower() == 'true')
         except (ValueError, TypeError, UnicodeError):
             return None  # Fail closed, without printing configuration or key material.
 
@@ -344,8 +347,8 @@ class AuthService:
         self.configured = self.config is not None
         self.fernet = Fernet(self.config.session_key.encode()) if self.config else None
         self.validator = TokenValidator(self.config, self.provider, clock) if self.config else None
-        self.cookie_name = '__Host-memoverse_session' if self.config and self.config.secure else 'memoverse_session'
-        self.oauth_cookie = '__Host-memoverse_oauth' if self.config and self.config.secure else 'memoverse_oauth'
+        self.cookie_name = '__Host-keepsite_session' if self.config and self.config.secure else 'keepsite_session'
+        self.oauth_cookie = '__Host-keepsite_oauth' if self.config and self.config.secure else 'keepsite_oauth'
         self.limiter = RateLimiter(clock)
         self.locks = [threading.Lock() for _ in range(64)]
         self._revocation_lock = threading.Lock()
@@ -400,7 +403,7 @@ class AuthService:
 
     def check_write(self, request, session=None):
         self.require_config()
-        if request.headers.get('origin') != self.config.public_url or request.headers.get('x-memoverse-client') not in ('web', 'android'):
+        if request.headers.get('origin') != self.config.public_url or request.headers.get('x-keepsite-client') not in ('web', 'android'):
             raise AuthError(403, '请求来源验证失败。', 'invalid_origin')
         if session and not equal_secret(request.headers.get('x-csrf-token', ''), session['csrf']):
             raise AuthError(403, '页面验证已失效，请刷新后重试。', 'invalid_csrf')

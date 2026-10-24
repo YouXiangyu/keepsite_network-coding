@@ -1,10 +1,10 @@
 import { defineConfig } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 
-const python = process.env.MEMOVERSE_TEST_PYTHON ?? (process.platform === 'win32' ? '../backend/.venv/Scripts/python.exe' : 'python');
+const python = process.env.KEEPSITE_TEST_PYTHON ?? (process.platform === 'win32' ? '../backend/.venv/Scripts/python.exe' : 'python');
 // Workers inherit the same opaque ownership key; another run cannot shut down
 // this fixture merely because it happens to use the same loopback port.
-process.env.MEMOVERSE_P2P_RUN_TOKEN ??= randomUUID().replaceAll('-', '');
+process.env.KEEPSITE_P2P_RUN_TOKEN ??= randomUUID().replaceAll('-', '');
 
 export default defineConfig({
   testDir: './p2p',

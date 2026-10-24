@@ -70,7 +70,7 @@ def _scratch_root(value: Path) -> Path:
     if root.exists() and not root.is_dir():
         raise ValueError("temp-root must be a directory")
     # Never accept a workspace itself, even though only a new child is used.
-    if (root / "memoverse.sqlite3").exists() or (root / "workspace" / "memoverse.sqlite3").exists():
+    if any((folder / name).exists() for folder in (root, root / "workspace") for name in ("keepsite.sqlite3", "memoverse.sqlite3")):
         raise ValueError("temp-root must not be an existing account workspace")
     return root
 

@@ -136,7 +136,7 @@ async function request<T>(path: string, options: RequestOptions, consume: (respo
   const started = epoch;
   const headers = new Headers(init.headers);
   if (!signedMedia && init.method && init.method !== 'GET') {
-    headers.set('X-MemoVerse-Client', 'web');
+    headers.set('X-Keepsite-Client', 'web');
     if (activeSession) headers.set('X-CSRF-Token', activeSession.csrfToken);
   }
   const controller = new AbortController();

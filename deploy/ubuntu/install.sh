@@ -11,16 +11,16 @@ while (($#)); do
     --initialize-host) INITIALIZE_HOST=1; shift ;;
     --release) RELEASE="${2:?Missing --release value}"; shift 2 ;;
     --domain) DOMAIN="${2:?Missing --domain value}"; shift 2 ;;
-    *) printf 'Usage: %s --release /opt/memoverse/releases/<commit> --domain <hostname> [--initialize-host] [--execute]\n' "$0" >&2; exit 2 ;;
+    *) printf 'Usage: %s --release /opt/keepsite/releases/<commit> --domain <hostname> [--initialize-host] [--execute]\n' "$0" >&2; exit 2 ;;
   esac
 done
-[[ "$RELEASE" =~ ^/opt/memoverse/releases/[a-f0-9]{7,40}$ ]] || { printf 'Release must be /opt/memoverse/releases/<git-commit>.\n' >&2; exit 2; }
+[[ "$RELEASE" =~ ^/opt/keepsite/releases/[a-f0-9]{7,40}$ ]] || { printf 'Release must be /opt/keepsite/releases/<git-commit>.\n' >&2; exit 2; }
 [[ "$DOMAIN" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$ ]] || { printf 'A plain DNS hostname is required.\n' >&2; exit 2; }
 cat <<PLAN
 Plan for Ubuntu 24.04:
   Host initialization requested: $INITIALIZE_HOST (apt/user/global logs only when 1).
-  Prepare memoverse service user and $RELEASE Python 3.12 venv.
-  Link release .cache to /opt/memoverse/shared/cache; prepare separate account data at /var/lib/memoverse-v3; preserve old /var/lib/memoverse and /var/lib/memoverse-v2.
+  Prepare keepsite service user and $RELEASE Python 3.12 venv.
+  Link release .cache to /opt/keepsite/shared/cache; prepare separate account data at /var/lib/keepsite-v3; preserve all old /var/lib/memoverse* directories.
   Install pinned application and CPU OCR dependencies. Models require a separate explicit preparation; this installer does not download them.
   Initial host setup writes log limits; no environment or authentication defaults are created.
   Do NOT change current symlink, start application, enable a public Nginx site,
@@ -31,9 +31,13 @@ if (( ! EXECUTE )); then printf 'No changes made. Add --execute to perform this 
 source /etc/os-release
 [[ "${ID:-}" == ubuntu && "${VERSION_ID:-}" == 24.04 ]] || { printf 'This installer targets Ubuntu 24.04 only.\n' >&2; exit 1; }
 [[ -d "$RELEASE" && "$(realpath "$RELEASE")" == "$RELEASE" ]] || { printf 'Upload a real release directory first; symlink releases are rejected.\n' >&2; exit 1; }
-for file in backend/requirements.txt deploy/ubuntu/memoverse.service deploy/ubuntu/nginx.conf.template demo/dist/client/index.html; do
+for file in backend/requirements.txt deploy/ubuntu/keepsite.service deploy/ubuntu/nginx.conf.template demo/dist/client/index.html; do
   [[ -f "$RELEASE/$file" ]] || { printf 'Release missing %s\n' "$file" >&2; exit 1; }
 done
+if [[ -d /var/lib/memoverse-v3 && ! -s /var/lib/keepsite-v3/keepsite.sqlite3 ]]; then
+  echo 'Existing source data requires the explicit offline keepsite migration before installation. No empty data root was created.' >&2
+  exit 1
+fi
 if (( INITIALIZE_HOST )); then
   # Prevent first package installation from briefly exposing the default nginx site.
   # Do not replace or assume the behavior of an administrator's existing policy.
@@ -51,42 +55,42 @@ if (( INITIALIZE_HOST )); then
   apt-get install -y nginx python3-venv python3-pip unzip git curl ca-certificates apache2-utils certbot libgomp1 logrotate time
   cleanup_policy
   POLICY_CREATED=0
-  if ! id memoverse >/dev/null 2>&1; then
-    useradd --system --user-group --home-dir /var/lib/memoverse-v3 --shell /usr/sbin/nologin memoverse
+  if ! id keepsite >/dev/null 2>&1; then
+    useradd --system --user-group --home-dir /var/lib/keepsite-v3 --shell /usr/sbin/nologin keepsite
   fi
-  install -d -o memoverse -g memoverse -m 0755 /opt/memoverse/shared /opt/memoverse/shared/cache
-  install -d -o memoverse -g memoverse -m 0750 /opt/memoverse/shared/cache/tmp /opt/memoverse/shared/cache/pip
+  install -d -o keepsite -g keepsite -m 0755 /opt/keepsite/shared /opt/keepsite/shared/cache
+  install -d -o keepsite -g keepsite -m 0750 /opt/keepsite/shared/cache/tmp /opt/keepsite/shared/cache/pip
   install -d -o root -g root -m 0755 /var/www/letsencrypt
-  install -d -o root -g adm -m 0750 /var/log/memoverse
+  install -d -o root -g adm -m 0750 /var/log/keepsite
 else
-  id memoverse >/dev/null 2>&1 || { echo "Host not initialized; review --initialize-host." >&2; exit 1; }
+  id keepsite >/dev/null 2>&1 || { echo "Host not initialized; review --initialize-host." >&2; exit 1; }
   command -v python3.12 >/dev/null
   command -v nginx >/dev/null
-  [[ -d /opt/memoverse/shared/cache ]] || { echo "Host paths/environment are incomplete." >&2; exit 1; }
+  [[ -d /opt/keepsite/shared/cache ]] || { echo "Host paths/environment are incomplete." >&2; exit 1; }
 fi
-[[ ! -L /var/lib/memoverse-v3 ]] || { echo "Account data directory cannot be a symlink." >&2; exit 1; }
-install -d -o memoverse -g memoverse -m 0700 /var/lib/memoverse-v3
+[[ ! -L /var/lib/keepsite-v3 ]] || { echo "Account data directory cannot be a symlink." >&2; exit 1; }
+install -d -o keepsite -g keepsite -m 0700 /var/lib/keepsite-v3
 if [[ -e "$RELEASE/.cache" || -L "$RELEASE/.cache" ]]; then
-  [[ -L "$RELEASE/.cache" && "$(realpath "$RELEASE/.cache")" == /opt/memoverse/shared/cache ]] || { printf 'Release .cache exists and is not the expected shared link; nothing removed.\n' >&2; exit 1; }
+  [[ -L "$RELEASE/.cache" && "$(realpath "$RELEASE/.cache")" == /opt/keepsite/shared/cache ]] || { printf 'Release .cache exists and is not the expected shared link; nothing removed.\n' >&2; exit 1; }
 else
-  ln -s /opt/memoverse/shared/cache "$RELEASE/.cache"
+  ln -s /opt/keepsite/shared/cache "$RELEASE/.cache"
 fi
 if [[ ! -x "$RELEASE/backend/.venv/bin/python" ]]; then
   python3.12 -m venv "$RELEASE/backend/.venv"
-  chown -R memoverse:memoverse "$RELEASE/backend/.venv"
+  chown -R keepsite:keepsite "$RELEASE/backend/.venv"
 fi
-runuser -u memoverse -- env PIP_CACHE_DIR=/opt/memoverse/shared/cache/pip TMPDIR=/opt/memoverse/shared/cache/tmp \
+runuser -u keepsite -- env PIP_CACHE_DIR=/opt/keepsite/shared/cache/pip TMPDIR=/opt/keepsite/shared/cache/tmp \
   "$RELEASE/backend/.venv/bin/python" -B -m pip install --only-binary=:all: -r "$RELEASE/backend/requirements.txt"
 if (( INITIALIZE_HOST )); then
   install -d -o root -g root -m 0755 /etc/systemd/journald.conf.d
-  cat > /etc/systemd/journald.conf.d/60-memoverse-limits.conf <<'JOURNAL'
+  cat > /etc/systemd/journald.conf.d/60-keepsite-limits.conf <<'JOURNAL'
 [Journal]
 SystemMaxUse=100M
 RuntimeMaxUse=30M
 MaxRetentionSec=7day
 JOURNAL
-  cat > /etc/logrotate.d/memoverse <<'ROTATE'
-/var/log/memoverse/nginx-access.log /var/log/memoverse/nginx-error.log {
+  cat > /etc/logrotate.d/keepsite <<'ROTATE'
+/var/log/keepsite/nginx-access.log /var/log/keepsite/nginx-error.log {
     daily
     maxsize 10M
     rotate 3

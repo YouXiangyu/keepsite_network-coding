@@ -1,48 +1,48 @@
 # Ubuntu / EC2 部署
 
-既有环境为东京 `t3.small`（2 GB）EC2，Nginx 提供 HTTPS。新版发布候选使用独立 `/var/lib/memoverse-v3`、Cognito 和私有 S3，单 API worker；配置就绪时另有受限的 OCR 子进程，不启动旧浮雕 worker。源码更新不代表已部署；部署、服务器启停均须用户明确要求。
+既有环境为东京 `t3.small`（2 GB）EC2，Nginx 提供 HTTPS。新版发布候选使用独立 `/var/lib/keepsite-v3`、Cognito 和私有 S3，单 API worker；配置就绪时另有受限的 OCR 子进程，不启动旧浮雕 worker。源码更新不代表已部署；部署、服务器启停均须用户明确要求。
 
-旧 `/var/lib/memoverse`、`/var/lib/memoverse-v2` 及其媒体保留，不自动升级或覆盖。正式迁移前先用一致快照和原票副本在隔离目录验证 `scripts/migrate-movie-tickets.py`；本地验证副本不能直接宣称已完成 S3 恢复。
+旧 `/var/lib/memoverse`、`/var/lib/memoverse-v2`、`/var/lib/memoverse-v3` 及其媒体保留，不自动升级或覆盖。名称迁移必须先完成[离线迁移与回滚](../../docs/keepsite迁移.md)，工具为 `scripts/migrate-keepsite.py`，默认只预演。schema 1/2 仍须先用一致快照和原票副本在隔离目录验证 `scripts/migrate-movie-tickets.py`；本地验证副本不能直接宣称已完成 S3 恢复。
 
-实时实例、域名、角色、用户池与配置位置见[项目运行信息](../../.agents/skills/memoverse-delivery/references/project-context.md)。操作前用 AWS MCP 查询明确实例 ID；启动后重新查询动态公网 IP，核对 DDNS 和 SSH 主机身份，不使用历史 IP。
+实时实例、域名、角色、用户池与配置位置见[项目运行信息](../../.agents/skills/keepsite-delivery/references/project-context.md)。操作前用 AWS MCP 查询明确实例 ID；启动后重新查询动态公网 IP，核对 DDNS 和 SSH 主机身份，不使用历史 IP。
 
 ## 发布前提
 
 - 源码完整提交，工作区干净，阶段独立审查与相关测试通过。
-- EC2 running 且状态检查通过，严格 SSH host key 验证可用。动态地址使用稳定 `-HostKeyAlias memoverse-i-0e9ba9bc6f4b1c019`。
+- EC2 running 且状态检查通过，严格 SSH host key 验证可用。动态地址使用稳定 `-HostKeyAlias keepsite-i-0e9ba9bc6f4b1c019`。
 - Cognito 已配置邮箱验证、Google 提供方、授权码与令牌轮换；环境配置包含[后端列出的必需项](../../backend/README.md)。密钥只放受限文件，不输出或提交 Git。
-- 私有 S3 禁止公开访问，服务器通过实例角色获得临时凭据。角色策略见 `memoverse-s3-policy.json`：只允许目标桶 media/models 的 Get/Put，另允许该桶 ListBucket，使不存在对象的 HEAD 正确返回 404；没有对象删除、ACL、KMS 或其他桶权限。授权候选由 IAM Policy Autopilot 生成后按实际 SSE-S3 和前缀范围收紧，并经过 IAM 模拟验证。
+- 私有 S3 禁止公开访问，服务器通过实例角色获得临时凭据。角色策略见 `keepsite-s3-policy.json`：只允许目标桶 media/models 的 Get/Put，另允许该桶 ListBucket，使不存在对象的 HEAD 正确返回 404；没有对象删除、ACL、KMS 或其他桶权限。策略中的既有 `memoverse-media-125647512944-apne1` 是真实桶标识，不能在代码改名时伪造替换；`KEEPSITE_S3_BUCKET` 保留实际桶值。S3 桶不能原地改名，另建桶、复制对象和切换权限须单独执行并验收。既有 IAM、Cognito 和 EC2 标识同样保持真实值。
 - 新账号从空票夹开始，不再需要初始化模板或 AnyImage 模型。旧模板和共享模型缓存仍保留用于历史回滚，不自动清理。
-- OCR 使用固定 CPU 依赖及 PP-OCRv6 tiny 文件。普通安装不下载模型；授权部署时先用发布目录的虚拟环境 Python 运行 `python -B scripts/prepare-ocr.py --destination <独立模型目录>` 查看计划，再显式加 `--execute` 准备、校验并确保服务用户只读可达。以 `MEMOVERSE_OCR_MODEL_DIR` 指向该目录，并配置可用 Redis 与私有 S3；缺少条件时界面应显示处理不可用，不能把部署成功等同于 OCR 已开启。模型目录可位于 `/opt/memoverse/shared/cache/ocr/ppocrv6-tiny`，不得覆盖旧模型目录。
-- `/var/lib/memoverse-v3` 属于 memoverse，0700；service 只对新数据目录开放写入。旧数据库、证书、DDNS 与认证回退资料保持完整。
+- OCR 使用固定 CPU 依赖及 PP-OCRv6 tiny 文件。普通安装不下载模型；授权部署时先用发布目录的虚拟环境 Python 运行 `python -B scripts/prepare-ocr.py --destination <独立模型目录>` 查看计划，再显式加 `--execute` 准备、校验并确保服务用户只读可达。以 `KEEPSITE_OCR_MODEL_DIR` 指向该目录，并配置可用 Redis 与私有 S3；缺少条件时界面应显示处理不可用，不能把部署成功等同于 OCR 已开启。模型目录可位于 `/opt/keepsite/shared/cache/ocr/ppocrv6-tiny`，不得覆盖旧模型目录。
+- `/var/lib/keepsite-v3` 属于 keepsite，0700；service 只对新数据目录开放写入。旧数据库、证书、DDNS 与认证回退资料保持完整。
 
 ## 准备与候选验证
 
 先执行计划模式；同一次发布始终使用同一 Git commit 及其已校验制品。
 
 ```powershell
-./scripts/deploy-ubuntu.ps1 -Server <本次IP> -HostKeyAlias memoverse-i-0e9ba9bc6f4b1c019 -PrepareOnly
-./scripts/deploy-ubuntu.ps1 -Server <本次IP> -HostKeyAlias memoverse-i-0e9ba9bc6f4b1c019 -PrepareOnly -Execute
+./scripts/deploy-ubuntu.ps1 -Server <本次IP> -HostKeyAlias keepsite-i-0e9ba9bc6f4b1c019 -PrepareOnly
+./scripts/deploy-ubuntu.ps1 -Server <本次IP> -HostKeyAlias keepsite-i-0e9ba9bc6f4b1c019 -PrepareOnly -Execute
 ```
 
 `-PrepareOnly` 构建同源前端、上传已提交源码和构建，校验 tar/文件哈希，准备独立 release 与 Python 依赖；不启动应用、不切换 current 或公开站点。相同提交只复用准确匹配的制品，目录或哈希冲突立即停止。`-InitializeHost` 仅用于已审查的新主机初始软件/用户配置，不在每次更新重复运行。
 
 执行模式持有工作区 `.cache/server/deployment.lock` 的独占文件句柄，覆盖构建、制品发布、上传和远端执行；同一工作区第二次发布立即拒绝。锁文件保留，进程关闭句柄后释放锁，不按文件是否存在判断占用。上传包与辅助脚本使用每次唯一 ID，失败清理也只针对本次传输路径。制品先原子写入哈希，再晋升归档；只有哈希而没有归档的中断状态可重新构建，已有归档缺哈希或不匹配仍停止。
 
-服务器准备和激活共用 `/opt/memoverse/activation-backups/.lock` 的真实 `flock`，准备锁覆盖解包、校验与依赖安装。先解包到同卷唯一临时目录，全部校验成功并写入制品身份后才原子改名为最终 release；中断解包不会留下半成品占用正式路径。venv 在最终路径安装，避免解释器绝对路径随目录移动失效；安装失败不写 prepared 标记，下次核验同一制品后重新安装。未知或冲突的正式目录始终保留并拒绝覆盖。
+服务器准备和激活共用 `/opt/keepsite/activation-backups/.lock` 的真实 `flock`，准备锁覆盖解包、校验与依赖安装。先解包到同卷唯一临时目录，全部校验成功并写入制品身份后才原子改名为最终 release；中断解包不会留下半成品占用正式路径。venv 在最终路径安装，避免解释器绝对路径随目录移动失效；安装失败不写 prepared 标记，下次核验同一制品后重新安装。未知或冲突的正式目录始终保留并拒绝覆盖。
 
-新环境放 `/etc/memoverse.env.next`（root 0600 或 root:memoverse 0640），新站点放 `/etc/nginx/sites-available/memoverse.next`（root 0644）。候选文件必须是实际普通文件。环境中的 `MEMOVERSE_DATA_DIR` 必须为 `/var/lib/memoverse-v3`，`MEMOVERSE_STORAGE=s3`，身份配置必须齐全；不要从 shell 执行环境文件，也不要在命令行传密钥。旧模板和 `ANYIMAGE_PYTHON` 配置不再用于新版应用。
+新环境放 `/etc/keepsite.env.next`（root 0600 或 root:keepsite 0640），新站点放 `/etc/nginx/sites-available/keepsite.next`（root 0644）。候选文件必须是实际普通文件。环境中的 `KEEPSITE_DATA_DIR` 必须为 `/var/lib/keepsite-v3`，`KEEPSITE_STORAGE=s3`，身份配置必须齐全；不要从 shell 执行环境文件，也不要在命令行传密钥。旧模板和 `ANYIMAGE_PYTHON` 配置不再用于新版应用。
 
 重大配置迁移先在服务器 `127.0.0.1` 的独立端口启动候选服务，使用相同新环境和实例角色检查真实对象读取、空账号初始化、匿名拒绝与登录流程。候选检查不改域名入口，结束后停止候选服务。
 
 ## 正式切换
 
 ```powershell
-./scripts/deploy-ubuntu.ps1 -Server <本次IP> -HostKeyAlias memoverse-i-0e9ba9bc6f4b1c019 -EnvironmentPath /etc/memoverse.env.next -NginxPath /etc/nginx/sites-available/memoverse.next
-./scripts/deploy-ubuntu.ps1 -Server <本次IP> -HostKeyAlias memoverse-i-0e9ba9bc6f4b1c019 -EnvironmentPath /etc/memoverse.env.next -NginxPath /etc/nginx/sites-available/memoverse.next -Execute
+./scripts/deploy-ubuntu.ps1 -Server <本次IP> -HostKeyAlias keepsite-i-0e9ba9bc6f4b1c019 -EnvironmentPath /etc/keepsite.env.next -NginxPath /etc/nginx/sites-available/keepsite.next
+./scripts/deploy-ubuntu.ps1 -Server <本次IP> -HostKeyAlias keepsite-i-0e9ba9bc6f4b1c019 -EnvironmentPath /etc/keepsite.env.next -NginxPath /etc/nginx/sites-available/keepsite.next -Execute
 ```
 
-激活脚本持互斥锁，保存实际旧环境、站点、unit 与 current 到 root-only 的 `/opt/memoverse/activation-backups/activation-*`。先预检候选权限、配置和 Nginx 语法；停止旧应用后切换环境、unit 和代码，再检查 health、匿名 state=401 和 session configured=true。
+激活脚本持互斥锁，保存实际旧环境、站点、unit 与 current 到 root-only 的 `/opt/keepsite/activation-backups/activation-*`。先预检候选权限、配置和 Nginx 语法；停止旧应用后切换环境、unit 和代码，再检查 health、匿名 state=401 和 session configured=true。
 
 站点配置变化时会短暂停止 Nginx，避免旧日志格式记录新 OAuth 回调。只有新后端访问控制通过，才安装并启动公开登录页配置。环境/站点变更即使使用相同 commit 也会正确应用；完全相同且健康时保持幂等。
 
@@ -60,7 +60,7 @@
 
 - 检查内部 health、HTTP→HTTPS、公开登录页、匿名 API/原图/备份拒绝；旧社交、模型、任务接口不存在。
 - 实测邮箱/Google 身份、两账号隔离、新账号空票夹、原票上传与有效引用、字段纠错、幂等重试、删除后的媒体拒绝与备份；模拟提供方测试不能代替真实 Google 同意和邮件收件。启用 OCR 后还须验证异步进度、Redis 重启补投、纠错/删除竞态、海报来源及 S3 发布核对；本机合成样本不能替代主机资源和真实票据验收。
-- 验证 `/opt/memoverse/current` 实际提交、S3 对象完整性与私有性、原数据库仍保留；检查磁盘、内存和 OOM。
+- 验证 `/opt/keepsite/current` 实际提交、S3 对象完整性与私有性、原数据库仍保留；检查磁盘、内存和 OOM。
 - Nginx access 格式不含查询字符串，OAuth callback 的 access/error 日志单独关闭；Uvicorn 同样去除认证回调查询。应用日志不记录密码、验证码或令牌。
 - 应用依赖实例角色，不保存长期 AWS 访问密钥。按测试规模评估 S3 访问日志、CloudTrail 数据事件和 CloudWatch 指标的可观测性与额外费用，不默认启用与本轮无关的收费服务。
 - systemd 默认 MemoryHigh=1200M、MemoryMax=1500M、swap 上限 2 GB，针对当前 2 GB 测试机；更大图片/并发仍需实测。以应用行为判断容量，不把单样例当作压测结果。
@@ -68,18 +68,18 @@
 
 ## 开机 58 分钟自动关机
 
-`memoverse-auto-stop.timer` 使用 `OnBootSec=58min`，从系统启动计时，触发同名 service 执行正常 `systemctl poweroff`。本机已核验 EC2 `InstanceInitiatedShutdownBehavior=stop`；迁移到其他实例时必须重新核验，不能假定系统关机一定不会删除实例。配置不依赖 Codex 或 AWS 登录会话继续在线。
+`keepsite-auto-stop.timer` 使用 `OnBootSec=58min`，从系统启动计时，触发同名 service 执行正常 `systemctl poweroff`。本机已核验 EC2 `InstanceInitiatedShutdownBehavior=stop`；迁移到其他实例时必须重新核验，不能假定系统关机一定不会删除实例。配置不依赖 Codex 或 AWS 登录会话继续在线。
 
 首次安装前查看 `cat /proc/uptime`。如果本次运行已超过 58 分钟，启动该 timer 会立即触发关机；应在刚启动的维护窗口安装。只启用 timer，不启用 service。以下命令针对已审查、位于当前工作目录的两个 unit：
 
 ```bash
-sudo install -o root -g root -m 0644 memoverse-auto-stop.service memoverse-auto-stop.timer /etc/systemd/system/
-sudo systemd-analyze verify /etc/systemd/system/memoverse-auto-stop.service /etc/systemd/system/memoverse-auto-stop.timer
+sudo install -o root -g root -m 0644 keepsite-auto-stop.service keepsite-auto-stop.timer /etc/systemd/system/
+sudo systemd-analyze verify /etc/systemd/system/keepsite-auto-stop.service /etc/systemd/system/keepsite-auto-stop.timer
 sudo systemctl daemon-reload
-sudo systemctl enable --now memoverse-auto-stop.timer
-systemctl is-enabled memoverse-auto-stop.timer
-systemctl list-timers memoverse-auto-stop.timer --all
-systemctl show memoverse-auto-stop.timer -p NextElapseUSecMonotonic -p TimersMonotonic -p AccuracyUSec
+sudo systemctl enable --now keepsite-auto-stop.timer
+systemctl is-enabled keepsite-auto-stop.timer
+systemctl list-timers keepsite-auto-stop.timer --all
+systemctl show keepsite-auto-stop.timer -p NextElapseUSecMonotonic -p TimersMonotonic -p AccuracyUSec
 ```
 
 这是独立的主机配置，普通应用发布不会替换或重新计时。应用重启不会延长；系统重新开机重新计时。在第 58 分钟发起正常关机，预留约两分钟等待应用、DDNS 退出和 AWS 状态转换；该缓冲不保证严格在开机后 60 分钟内进入 AWS `stopped`。若用户明确授权延长，另行调整并记录本次期限，不要仅重启 timer 冒充延长。
@@ -88,7 +88,7 @@ systemctl show memoverse-auto-stop.timer -p NextElapseUSecMonotonic -p TimersMon
 
 ## 自动 DNS
 
-`memoverse-ddns.service` 在 EC2 开机后读取 IMDSv2，更新 Cloudflare 精确 A 记录，正常关机撤回仍属于本实例的记录。配置和状态仅 root 可读。DDNS 是独立运维组件，普通应用发布不会自动替换 `/opt/memoverse/admin/sync-cloudflare-dns.py`。
+`keepsite-ddns.service` 在 EC2 开机后读取 IMDSv2，更新 Cloudflare 精确 A 记录，正常关机撤回仍属于本实例的记录。配置和状态仅 root 可读。DDNS 是独立运维组件，普通应用发布不会自动替换 `/opt/keepsite/admin/sync-cloudflare-dns.py`。
 
 若明确修改 DDNS，先验证脚本与 unit，再同步两者、daemon-reload，并有计划地重启服务；重启会短暂撤回再发布 DNS。只允许单实例管理该域名。强制关机、网络故障或 Token 失效时不保证撤回，关机后必须读回核验。
 

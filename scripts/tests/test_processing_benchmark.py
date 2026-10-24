@@ -124,7 +124,7 @@ def test_deadline_stops_owned_worker_sampler_and_removes_scratch(tmp_path):
     assert entered.is_set()
     assert not list(tmp_path.iterdir())
     assert not [thread for thread in threading.enumerate() if thread not in existing_threads
-                and thread.name in {"memoverse-ticket-processing", "benchmark-owned-memory"}]
+                and thread.name in {"keepsite-ticket-processing", "benchmark-owned-memory"}]
 
 
 def test_output_guard_never_overwrites_existing_evidence(tmp_path):

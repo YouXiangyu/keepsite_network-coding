@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 // Windows may force-terminate Playwright webServer processes. Ask this explicit
 // fixture to close itself first so its owned data directory is removed normally.
 export default async function teardown() {
-  const token = process.env.MEMOVERSE_P2P_RUN_TOKEN;
+  const token = process.env.KEEPSITE_P2P_RUN_TOKEN;
   if (!token || !/^[a-f0-9]{32}$/.test(token)) throw new Error('Missing P2P fixture ownership key');
   const cache = fileURLToPath(new URL('../../.cache/', import.meta.url));
   const manifest = path.join(cache, `p2p-run-${token}.json`);
@@ -21,7 +21,7 @@ export default async function teardown() {
   let response: Response;
   try {
     response = await fetch('http://127.0.0.1:4177/__test/shutdown', {
-      method: 'POST', headers: { 'X-MemoVerse-Fixture': 'p2p-browser-fixture', 'X-MemoVerse-Fixture-Run': token }, signal: AbortSignal.timeout(3000),
+      method: 'POST', headers: { 'X-Keepsite-Fixture': 'p2p-browser-fixture', 'X-Keepsite-Fixture-Run': token }, signal: AbortSignal.timeout(3000),
     });
   } catch (error) {
     if ((error as { cause?: { code?: string } }).cause?.code === 'ECONNREFUSED'

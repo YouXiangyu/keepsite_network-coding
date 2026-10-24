@@ -22,7 +22,7 @@ class AccountAuth:
     def __init__(self, auth):
         self.auth = auth
         self.owner_exists = lambda _owner: False
-        self.cookie_name = '__Host-memoverse_account_oauth' if auth.config and auth.config.secure else 'memoverse_account_oauth'
+        self.cookie_name = '__Host-keepsite_account_oauth' if auth.config and auth.config.secure else 'keepsite_account_oauth'
         with auth.db() as db:
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS account_profiles (
@@ -331,7 +331,7 @@ def install_account_auth(app, auth, failure):
         if fields is None:
             return session, None
         auth.check_write(request, session)
-        if native and request.headers.get('x-memoverse-client') != 'android':
+        if native and request.headers.get('x-keepsite-client') != 'android':
             raise AuthError(403, '原生绑定请求来源验证失败。', 'invalid_origin')
         auth.limiter.check(request.client.host if request.client else '', 'account-write', session['user']['id'])
         try:

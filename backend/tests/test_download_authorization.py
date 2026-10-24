@@ -56,12 +56,12 @@ def test_s3_direct_download_is_opt_in_and_never_authorizes_unreferenced_or_forei
             endpoint = asset["url"] + "/download"
             assert client.get(endpoint).status_code == 404
             create(client, asset=asset)
-            monkeypatch.delenv("MEMOVERSE_DIRECT_DOWNLOAD", raising=False)
+            monkeypatch.delenv("KEEPSITE_DIRECT_DOWNLOAD", raising=False)
             fallback = client.get(endpoint).json()
             assert fallback["transport"] == "server" and fallback["url"] == asset["url"]
             assert fallback["expiresAt"] > int(time.time() * 1000)
             assert not calls
-            monkeypatch.setenv("MEMOVERSE_DIRECT_DOWNLOAD", "1")
+            monkeypatch.setenv("KEEPSITE_DIRECT_DOWNLOAD", "1")
             authorized = client.get(endpoint).json()
             assert authorized["transport"] == "s3" and authorized["sha256"] == asset["assetId"]
             assert calls[0]["ExpiresIn"] == 60 and calls[0]["HttpMethod"] == "GET"

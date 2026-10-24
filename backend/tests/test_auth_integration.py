@@ -13,8 +13,8 @@ from account_fixtures import account_snapshot
 from account_fixtures import image_bytes
 from test_auth import FakeProvider
 
-PUBLIC = "https://memoverse.test"
-HEADERS = {"Origin": PUBLIC, "X-MemoVerse-Client": "web"}
+PUBLIC = "https://keepsite.test"
+HEADERS = {"Origin": PUBLIC, "X-Keepsite-Client": "web"}
 
 
 @pytest.fixture(scope="module")
@@ -46,7 +46,7 @@ def login(client, provider, name):
                            json={"email": provider.email, "password": "StrongPassword!123"})
     assert response.status_code == 200, response.text
     assert "Secure" in response.headers["set-cookie"] and "HttpOnly" in response.headers["set-cookie"]
-    assert "__Host-memoverse_session=" in response.headers["set-cookie"]
+    assert "__Host-keepsite_session=" in response.headers["set-cookie"]
     return response.json()
 
 
