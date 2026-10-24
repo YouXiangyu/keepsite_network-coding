@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "MemoVerseAndroid"
+rootProject.name = "keepsiteAndroid"
 include(":app")

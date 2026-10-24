@@ -54,7 +54,7 @@ def prepare(destination, execute=False):
         descriptor, temporary = tempfile.mkstemp(prefix=".ocr-download-", dir=destination)
         try:
             digest, size = hashlib.sha256(), 0
-            request = urllib.request.Request(model["url"], headers={"User-Agent": "MemoVerse-OCR-Setup/1.0"})
+            request = urllib.request.Request(model["url"], headers={"User-Agent": "keepsite-OCR-Setup/1.0"})
             with os.fdopen(descriptor, "wb") as output, opener.open(request, timeout=30) as response:
                 while block := response.read(1024 * 1024):
                     size += len(block)

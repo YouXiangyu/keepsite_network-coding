@@ -31,7 +31,7 @@ OTHER_IP = '54.168.1.2'
 def record(address=OTHER_IP, **overrides):
     return {'id': 'b' * 32, 'type': 'A', 'name': 'keepsite.space', 'content': address,
             'ttl': 3600, 'proxied': False, 'modified_on': 'revision-0',
-            'comment': 'operator comment', 'tags': ['project:memoverse'], **overrides}
+            'comment': 'operator comment', 'tags': ['project:keepsite'], **overrides}
 
 
 class FakeHTTP:
@@ -139,7 +139,7 @@ class DDNSLifecycleTests(unittest.TestCase):
                 self.assertEqual(http.records[0]['proxied'], proxied)
                 self.assertEqual(http.records[0]['ttl'], ttl)
                 self.assertEqual(http.records[0]['comment'], 'operator comment')
-                self.assertEqual(http.records[0]['tags'], ['project:memoverse'])
+                self.assertEqual(http.records[0]['tags'], ['project:keepsite'])
 
     def test_repeated_publish_is_noop_and_shutdown_then_boot_recreates(self):
         http = FakeHTTP()
@@ -387,9 +387,9 @@ class HTTPTests(unittest.TestCase):
                 self.assertEqual(opener.calls, [])
 
     def test_service_has_bounded_start_stop_and_root_private_state(self):
-        unit = (ROOT / 'deploy/ubuntu/memoverse-ddns.service').read_text()
+        unit = (ROOT / 'deploy/ubuntu/keepsite-ddns.service').read_text()
         for expected in ('Wants=network-online.target', 'After=network-online.target', 'Type=oneshot',
-                         'RemainAfterExit=yes', 'User=root', 'StateDirectory=memoverse-ddns',
+                         'RemainAfterExit=yes', 'User=root', 'StateDirectory=keepsite-ddns',
                          'StateDirectoryMode=0700', 'publish --execute', 'withdraw --execute',
                          'TimeoutStartSec=90', 'TimeoutStopSec=90'):
             self.assertIn(expected, unit)

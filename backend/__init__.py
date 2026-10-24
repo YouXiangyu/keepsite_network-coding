@@ -1,1 +1,1 @@
-"""MemoVerse local API and background image processing."""
+"""keepsite local API and background image processing."""

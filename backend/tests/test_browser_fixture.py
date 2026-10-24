@@ -13,12 +13,12 @@ from fastapi.testclient import TestClient
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-spec = importlib.util.spec_from_file_location("memoverse_browser_fixture", ROOT / "demo/tests/browser_fixture.py")
+spec = importlib.util.spec_from_file_location("keepsite_browser_fixture", ROOT / "demo/tests/browser_fixture.py")
 fixture = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = fixture
 spec.loader.exec_module(fixture)
 TOKEN = "1" * 32
-HEADERS = {"X-MemoVerse-Fixture": fixture.FIXTURE_HEADER, "X-MemoVerse-Fixture-Run": TOKEN}
+HEADERS = {"X-Keepsite-Fixture": fixture.FIXTURE_HEADER, "X-Keepsite-Fixture-Run": TOKEN}
 
 
 def test_shared_fixture_preserves_m5_and_m6_manifest_checks_real_account_references(tmp_path):
@@ -128,7 +128,7 @@ def test_aborted_stream_cannot_be_reported_as_complete():
 
 def test_fixture_run_owns_only_its_manifest_and_cleans_normal_shutdown(tmp_path, monkeypatch):
     monkeypatch.setattr(fixture, "ROOT", tmp_path)
-    monkeypatch.setenv("MEMOVERSE_P2P_RUN_TOKEN", TOKEN)
+    monkeypatch.setenv("KEEPSITE_P2P_RUN_TOKEN", TOKEN)
     dist = tmp_path / "client"
     dist.mkdir()
     (dist / "index.html").write_text("synthetic fixture", encoding="utf-8")
@@ -144,7 +144,7 @@ def test_fixture_run_owns_only_its_manifest_and_cleans_normal_shutdown(tmp_path,
         def run(self):
             assert (cache / f"m6-run-{TOKEN}.json").exists()
             with TestClient(self.app, base_url=profile.origin, client=("127.0.0.1", 12345)) as client:
-                bad = {**HEADERS, "X-MemoVerse-Fixture-Run": "0" * 32}
+                bad = {**HEADERS, "X-Keepsite-Fixture-Run": "0" * 32}
                 assert client.post("/__test/shutdown", headers=bad).status_code == 403
                 assert not self.should_exit
                 assert client.post("/__test/shutdown", headers=HEADERS).status_code == 200

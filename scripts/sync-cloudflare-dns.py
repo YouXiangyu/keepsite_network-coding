@@ -27,8 +27,8 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 
 CF_BASE = 'https://api.cloudflare.com/client/v4'
 IMDS_BASE = 'http://169.254.169.254'
-DEFAULT_CONFIG = Path('/etc/memoverse/cloudflare.json')
-DEFAULT_STATE = Path('/var/lib/memoverse-ddns/state.json')
+DEFAULT_CONFIG = Path('/etc/keepsite/cloudflare.json')
+DEFAULT_STATE = Path('/var/lib/keepsite-ddns/state.json')
 
 
 class DDNSError(Exception):

@@ -69,7 +69,7 @@ async function boundedExit(promise, milliseconds) {
 
 async function execute(args, output) {
   const token = randomBytes(16).toString('hex');
-  const headers = { 'X-MemoVerse-Fixture': 'p2p-browser-fixture', 'X-MemoVerse-Fixture-Run': token };
+  const headers = { 'X-Keepsite-Fixture': 'p2p-browser-fixture', 'X-Keepsite-Fixture-Run': token };
   const ownership = path.join(ROOT, '.cache', `m6-run-${token}.json`);
   const report = {
     schemaVersion: 1, createdAt: new Date().toISOString(), passed: false,
@@ -90,26 +90,26 @@ async function execute(args, output) {
     return response.json();
   };
   const harness = (device, method, argument) => device.page.evaluate(async ({ method, argument }) => {
-    const client = window.__memoVerseBenchmark;
+    const client = window.__keepsiteBenchmark;
     if (!client || typeof client[method] !== 'function') throw new Error('Missing public benchmark harness');
     return client[method](argument);
   }, { method, argument });
   const quiet = async devices => {
     await waitFor(async () => (await Promise.all(devices.map(async device => {
       const state = await harness(device, 'status');
-      const observed = await device.page.evaluate(() => window.__memoVerseObserver.status());
+      const observed = await device.page.evaluate(() => window.__keepsiteObserver.status());
       return !state.running && !state.inflight && !state.peer.activeTransfers && !observed.activePCs && !observed.activeChannels;
     }))).every(Boolean), 'all media tasks and native connections closed', 10000);
   };
   const phase = async (id, devices, action) => {
-    for (const device of devices) await device.page.evaluate(id => window.__memoVerseObserver.start(id), id);
+    for (const device of devices) await device.page.evaluate(id => window.__keepsiteObserver.start(id), id);
     await control('phase', { phaseId: id, action: 'start' });
     let result, actionError;
     try { result = await action(); await quiet(devices); }
     catch (error) { actionError = error; }
     const http = await control('phase', { phaseId: id, action: 'stop' });
     const observations = {};
-    for (const device of devices) observations[device.label] = await device.page.evaluate(() => window.__memoVerseObserver.stop());
+    for (const device of devices) observations[device.label] = await device.page.evaluate(() => window.__keepsiteObserver.stop());
     const measured = { id, result, http, observations, ...(actionError ? { error: String(actionError.message) } : {}) };
     if (http.overflow || http.incomplete) measured.error = 'HTTP phase did not complete';
     return measured;
@@ -128,7 +128,7 @@ async function execute(args, output) {
     // Playwright creates profiles in the runner's os.tmpdir(), before spawn.
     for (const key of Object.keys(previousTemp)) process.env[key] = temporary;
     child = spawn(args.python, ['-B', path.join(ROOT, 'demo/tests/benchmark-server.py')], {
-      cwd: ROOT, env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1', MEMOVERSE_P2P_RUN_TOKEN: token, MEMOVERSE_M6_TICKET_COUNT: String(args.count), TEMP: temporary, TMP: temporary, TMPDIR: temporary }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: ROOT, env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1', KEEPSITE_P2P_RUN_TOKEN: token, KEEPSITE_M6_TICKET_COUNT: String(args.count), TEMP: temporary, TMP: temporary, TMPDIR: temporary }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
     });
     exitPromise = new Promise(resolve => { child.once('exit', (code, signal) => { childResult = { code, signal }; resolve(childResult); }); child.once('error', error => { childResult = { error: error.message }; resolve(childResult); }); });
     for (const stream of [child.stdout, child.stderr]) stream.on('data', chunk => { if (childLog.length < 128000) childLog += chunk.toString().slice(0, 128000 - childLog.length); });
@@ -153,7 +153,7 @@ async function execute(args, output) {
       const manifest = await manifestResponse.json();
       validateManifest(manifest, args.count, session.userId);
       const page = await context.newPage(); await page.goto('/');
-      await page.waitForFunction(() => Boolean(window.__memoVerseBenchmark));
+      await page.waitForFunction(() => Boolean(window.__keepsiteBenchmark));
       return { browser, context, page, label, manifest };
     }
     for (const mode of report.method.cases) for (const concurrency of report.method.taskConcurrencies) {
@@ -191,7 +191,7 @@ async function execute(args, output) {
           cell.primeVerification = await harness(target, 'verify', { assetIds });
           if (!cell.primeVerification.ok || prime.result.tasks.some(task => task.status !== 'cached')) throw new Error('Target warmup failed');
           await harness(target, 'dispose'); await quiet(devices);
-          await target.page.reload(); await target.page.waitForFunction(() => Boolean(window.__memoVerseBenchmark));
+          await target.page.reload(); await target.page.waitForFunction(() => Boolean(window.__keepsiteBenchmark));
           const reboot = await phase(id + '-reload', devices, async () => {
             const boot = await harness(target, 'boot', { peerWanted: true });
             await waitFor(async () => { const state = await harness(target, 'status'); return state.peer.enabled && state.peer.inventoryCount === args.sample; }, 'reloaded peer cache inventory');

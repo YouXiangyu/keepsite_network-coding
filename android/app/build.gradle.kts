@@ -6,7 +6,7 @@ plugins {
 }
 
 val productionOrigin = "https://keepsite.space"
-val debugOrigin = providers.gradleProperty("memoverse.debugBaseUrl").orElse(productionOrigin).get().trimEnd('/')
+val debugOrigin = providers.gradleProperty("keepsite.debugBaseUrl").orElse(productionOrigin).get().trimEnd('/')
 if (debugOrigin != productionOrigin) {
     val uri = URI(debugOrigin)
     require(uri.scheme == "http" && uri.host in setOf("127.0.0.1", "localhost", "::1", "[::1]") && uri.rawUserInfo == null && uri.rawQuery == null && uri.rawFragment == null && uri.rawPath.isNullOrEmpty()) {
@@ -15,11 +15,11 @@ if (debugOrigin != productionOrigin) {
 }
 
 android {
-    namespace = "io.github.youxiangyu.memoverse"
+    namespace = "io.github.youxiangyu.keepsite"
     compileSdk = 37
     buildToolsVersion = "36.0.0"
     defaultConfig {
-        applicationId = "io.github.youxiangyu.memoverse"
+        applicationId = "io.github.youxiangyu.keepsite"
         minSdk = 26
         targetSdk = 36
         versionCode = 1

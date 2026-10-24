@@ -51,17 +51,17 @@ class SyncNotificationHub:
             raise RuntimeError("Sync hub already started")
         self._stopping.clear()
         self.server_id = await asyncio.to_thread(self._server_id)
-        self.channel = "memoverse:sync:v1:" + self.server_id
+        self.channel = "keepsite:sync:v1:" + self.server_id
         self._loop = asyncio.get_running_loop()
         self._calibrate_wake = asyncio.Event()
         self._unsubscribers.append(self.store.subscribe_changes(self._committed))
         self._unsubscribers.append(self.auth.subscribe_revocations(self._revoked_session))
         if self.client is not None:
             for target in (self._publisher, self._subscriber):
-                thread = threading.Thread(target=target, name="memoverse-sync-" + target.__name__[1:], daemon=True)
+                thread = threading.Thread(target=target, name="keepsite-sync-" + target.__name__[1:], daemon=True)
                 thread.start()
                 self._threads.append(thread)
-        self._calibration = asyncio.create_task(self._calibrate_loop(), name="memoverse-sync-calibration")
+        self._calibration = asyncio.create_task(self._calibrate_loop(), name="keepsite-sync-calibration")
 
     async def stop(self):
         self._stopping.set()

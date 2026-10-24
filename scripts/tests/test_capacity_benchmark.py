@@ -28,10 +28,10 @@ class CapacityBenchmarkTests(unittest.TestCase):
         sentinel = self.root / "keep.txt"
         sentinel.write_text("do not remove", encoding="utf-8")
         # Poison ambient defaults: explicit injection must ignore these locations.
-        with patch.dict(os.environ, {"MEMOVERSE_DATA_DIR": str(self.root / "must-not-open-data"),
-                                     "MEMOVERSE_STORAGE": "s3",
-                                     "MEMOVERSE_S3_BUCKET": "must-not-access-cloud",
-                                     "MEMOVERSE_REDIS_URL": "redis://must-not-connect.invalid:6379/0"}):
+        with patch.dict(os.environ, {"KEEPSITE_DATA_DIR": str(self.root / "must-not-open-data"),
+                                     "KEEPSITE_STORAGE": "s3",
+                                     "KEEPSITE_S3_BUCKET": "must-not-access-cloud",
+                                     "KEEPSITE_REDIS_URL": "redis://must-not-connect.invalid:6379/0"}):
             report = benchmark.run_benchmark(self.root, counts=(4, 8), warmup=1, samples=2, sql_samples=2)
         self.assertEqual(len(report["cases"]), 4)
         self.assertEqual(report["application_schema_version"], 3)
@@ -77,13 +77,13 @@ class CapacityBenchmarkTests(unittest.TestCase):
         self.assertEqual({path.name for path in self.root.iterdir()}, {"keep.txt"})
 
     def test_existing_database_root_is_rejected_without_reading_or_changing_it(self):
-        database = self.root / "memoverse.sqlite3"
+        database = self.root / "keepsite.sqlite3"
         database.write_bytes(b"not a database: an untouched sentinel")
         with patch.object(benchmark, "create_app", side_effect=AssertionError("must not open")):
             with self.assertRaisesRegex(ValueError, "existing account workspace"):
                 benchmark.run_benchmark(self.root, counts=(1,), warmup=0, samples=1, sql_samples=1)
         self.assertEqual(database.read_bytes(), b"not a database: an untouched sentinel")
-        self.assertEqual({path.name for path in self.root.iterdir()}, {"memoverse.sqlite3"})
+        self.assertEqual({path.name for path in self.root.iterdir()}, {"keepsite.sqlite3"})
 
     def test_invalid_arguments_do_not_create_a_scratch_directory(self):
         destination = self.root / "not-created"

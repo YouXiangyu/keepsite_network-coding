@@ -182,10 +182,10 @@ def test_partial_start_failure_releases_every_successfully_acquired_resource(mon
         else:
             original_start = threading.Thread.start
             def start(thread):
-                if thread.name == "memoverse-sync-subscriber":
+                if thread.name == "keepsite-sync-subscriber":
                     raise RuntimeError("injected second thread startup failure")
                 result = original_start(thread)
-                if thread.name == "memoverse-sync-publisher":
+                if thread.name == "keepsite-sync-publisher":
                     started.append(thread)
                 return result
             monkeypatch.setattr(threading.Thread, "start", start)
@@ -216,15 +216,15 @@ def test_watermark_failure_and_server_change_close_connections():
 
 
 def test_real_redis_cross_hub_notifications_and_reconnect_calibration():
-    url = os.environ.get("MEMOVERSE_TEST_REDIS_URL")
+    url = os.environ.get("KEEPSITE_TEST_REDIS_URL")
     if not url:
         if os.environ.get("CI"):
-            pytest.fail("CI must provide MEMOVERSE_TEST_REDIS_URL for real sync PubSub coverage")
+            pytest.fail("CI must provide KEEPSITE_TEST_REDIS_URL for real sync PubSub coverage")
         pytest.skip("Local real Redis URL not configured")
 
     async def run():
         shared_one, shared_two = RedisSharedState(url=url), RedisSharedState(url=url)
-        subscriber_name = "memoverse-sync-test-" + uuid.uuid4().hex
+        subscriber_name = "keepsite-sync-test-" + uuid.uuid4().hex
         # Fresh pool, before any connections exist. A unique server-side name lets
         # the test disconnect only its own PubSub socket without touching readers.
         shared_two.client.connection_pool.connection_kwargs["client_name"] = subscriber_name

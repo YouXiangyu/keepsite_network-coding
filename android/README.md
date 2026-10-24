@@ -1,6 +1,16 @@
-# MemoVerse Android
+# keepsite Android
 
-独立 Kotlin 原生客户端，包名 `io.github.youxiangyu.memoverse`。工程位于 `demo/` 之外，使用 Android Views、ViewBinding 和现有 schema 3 业务、分页同步与 WebRTC v1 协议。产品范围以 [项目定义与决策主文档](../docs/项目定义与决策主文档.md) 和 [开发计划](../docs/开发计划.md) 为准。
+独立 Kotlin 原生客户端，包名 `io.github.youxiangyu.keepsite`。工程位于 `demo/` 之外，使用 Android Views、ViewBinding 和现有 schema 3 业务、分页同步与 WebRTC v1 协议。产品范围以 [项目定义与决策主文档](../docs/项目定义与决策主文档.md) 和 [开发计划](../docs/开发计划.md) 为准。
+
+## 改名与现有资料迁移
+
+2026-10-24 起，应用名为 `keepsite`，包名和回调 scheme 均为 `io.github.youxiangyu.keepsite`，Keystore 别名为 `keepsite-session-v1`。这是独立应用身份；安装新包会与旧包并存，不覆盖或清除旧应用。旧应用的私有会话、草稿和缓存受 Android 沙箱隔离，新包不能直接读取；本次也不安装、卸载或清除设备数据。
+
+迁移前在旧应用逐个账号核对草稿：保存并确认服务端已收录的电影票可在新包使用同一 Google 或邮箱登录方式恢复，图片按云端或服务端实际保存状态重新获取。新包必须重新登录，不复制旧 cookie、Keystore 或未完成的 Google 票据。后端需要与新请求头、cookie 和回调协议一同发布；仅安装新包不能证明生产登录已可用。
+
+未同步草稿先在旧应用手动备份：记录所有填写字段，保留系统相册中的原票文件；若照片只剩旧应用私有副本，保持旧应用及其数据原样，先通过旧应用完成保存并确认，或另行提供并验证旧包的显式导出功能后再迁移。当前旧包没有通用草稿导出按钮，不把系统备份、截图或新包首次启动当作完整草稿导出。保存结果未知时先在旧包核对，避免重新录入造成重复。确认原票和字段均已导出后，在新包重新选择原票并录入字段；验证同账号云端记录和草稿恢复完成前不要卸载旧包。
+
+下方历史验收记录及其 APK 文件名属于改名前版本，不代表本次新包已完成真机、Google 或云端验收。
 
 ## 工具链与本机构建
 
@@ -31,20 +41,20 @@ APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。本机 debug key 位于
 
 ## 服务地址与测试入口
 
-默认服务地址为 `https://keepsite.space`。release 构建固定使用该 HTTPS 地址，生产清单禁止明文流量。debug 构建才允许通过 `memoverse.debugBaseUrl` 指向 HTTP loopback；不接受任意公网 HTTP 地址、用户信息、路径、查询或 fragment。
+默认服务地址为 `https://keepsite.space`。release 构建固定使用该 HTTPS 地址，生产清单禁止明文流量。debug 构建才允许通过 `keepsite.debugBaseUrl` 指向 HTTP loopback；不接受任意公网 HTTP 地址、用户信息、路径、查询或 fragment。
 
 本机原生互通夹具使用 `http://127.0.0.1:4180`。构建测试 APK：
 
 ```powershell
-.\android\gradlew.bat -p android --no-daemon '-Pmemoverse.debugBaseUrl=http://127.0.0.1:4180' :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug
+.\android\gradlew.bat -p android --no-daemon '-Pkeepsite.debugBaseUrl=http://127.0.0.1:4180' :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug
 ```
 
 该命令只构建，不启动服务器或设备。互通测试另需受本轮随机 token 保护的合成服务、明确选择的测试设备和本轮端口转发；测试后只关闭自己创建的服务、浏览器、转发与模拟器。不要把本机测试地址用于正式 APK，也不要为运行本机测试启动 EC2。
 
 ## 账号、图片与前后台
 
-- HTTP 与 WebSocket 使用同一后端会话。原生写请求明确标记 `X-MemoVerse-Client: android`，仍发送固定 Origin 与会话 CSRF；该标记不是身份凭据，也不豁免用户归属检查。
-- Google 登录交给系统浏览器，返回 `io.github.youxiangyu.memoverse:/oauth/callback`。App 校验固定 URI、单值 state 与有效期，用自己保存的 S256 verifier 兑换一次性票据；不在回调 URI 中接收 Cognito token，也不从浏览器复制会话 cookie。
+- HTTP 与 WebSocket 使用同一后端会话。原生写请求明确标记 `X-Keepsite-Client: android`，仍发送固定 Origin 与会话 CSRF；该标记不是身份凭据，也不豁免用户归属检查。
+- Google 登录交给系统浏览器，返回 `io.github.youxiangyu.keepsite:/oauth/callback`。App 校验固定 URI、单值 state 与有效期，用自己保存的 S256 verifier 兑换一次性票据；不在回调 URI 中接收 Cognito token，也不从浏览器复制会话 cookie。
 - 图片选择使用系统 Photo Picker，读取用户明确选择的 URI 并复制为私有草稿。不申请整个照片库、外部存储、相机或麦克风权限。未确认上传的草稿与可回收媒体缓存分开保存。
 - 前台是设备传输基线。进入后台、退出或换号会撤销旧网络与 peer 生命周期；旧代请求不能发布新状态。返回前台重新确认会话并补拉游标，不承诺锁屏、后台或进程关闭后持续 P2P。
 - 原图与海报长期保存由服务端云存状态确认；本机按账号缓存，预算 128 MiB。文件按 SHA-256、长度、类型与图片尺寸校验，成功提交后才标为缓存完成。空间或写入失败可临时展示，不伪称已缓存；清本机缓存不删除云端记录。
@@ -54,7 +64,7 @@ APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。本机 debug key 位于
 
 复用现行 `backend/peer_contracts.py` 与 Web 客户端协议。设备登记仅发送 `name`，不向严格 v1 消息擅自添加 `platform` 或缓存计数；服务端未提供的设备属性保持未知。
 
-每次传输一个可靠有序 DataChannel，名称为 `memoverse-{transferId}`。二进制整帧最多 16 KiB，头部是大端序 `uint32 offset + uint32 payloadLength`，没有额外 `seq` 或 `meta` 消息。控制顺序为 `get → 分块/ack → end → verified`。背压使用 256/64 KiB 高低水位；发送端以 `send()` 真正接受的字节推进偏移，接收端校验完成后等待确认排空再关闭。
+每次传输一个可靠有序 DataChannel，名称为 `keepsite-{transferId}`。二进制整帧最多 16 KiB，头部是大端序 `uint32 offset + uint32 payloadLength`，没有额外 `seq` 或 `meta` 消息。控制顺序为 `get → 分块/ack → end → verified`。背压使用 256/64 KiB 高低水位；发送端以 `send()` 真正接受的字节推进偏移，接收端校验完成后等待确认排空再关闭。
 
 每个页面/原生实例发送与接收合计最多两条，媒体加载最多四条。一次获取的总 peer 预算为 12 秒，连接最多 4 秒、停滞最多 2 秒，仅允许一次连续前缀续传；重试不重置总预算。源文件再次校验，发送过程中持续检查引用和可共享性，清缓存或删除后不继续从旧内存副本发送。当前只接受服务器返回的空 ICE 列表和 `turnEnabled=false`，不自行启用 STUN/TURN。
 

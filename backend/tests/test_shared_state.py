@@ -137,6 +137,18 @@ def test_m3_processing_states_and_safe_attribution_survive_cache(cache, status):
     assert get(cache) is None and not put(cache, payload)
 
 
+def test_tmdb_attribution_survives_cache_and_malformed_metadata_is_rejected(cache):
+    payload = snapshot()
+    source = {"provider": "tmdb", "sourcePage": "https://www.themoviedb.org/movie/535167",
+              "sourceFile": "/Poster0123.jpg", "termsUrl": "https://www.themoviedb.org/api-terms-of-use", "fetchedAt": 1}
+    ticket = payload["data"]["tickets"][0]
+    ticket["media"]["poster"] = {**ticket["media"]["original"], "source": source}
+    assert put(cache, payload) and get(cache) == payload
+    source["sourceFile"] = "/../private.jpg"
+    raw_write(cache, payload)
+    assert get(cache) is None and not put(cache, payload)
+
+
 def test_missing_capability_reason_and_nontext_processing_error_are_not_cached(cache):
     payload = snapshot()
     del payload["capabilities"]["processingUnavailableReason"]
@@ -183,11 +195,11 @@ def test_cache_loss_and_recreated_clients_can_rebuild_from_source_snapshot():
 
 
 def test_disabled_or_invalid_environment_does_not_connect(monkeypatch, caplog):
-    monkeypatch.delenv("MEMOVERSE_REDIS_URL", raising=False)
+    monkeypatch.delenv("KEEPSITE_REDIS_URL", raising=False)
     cache = RedisSharedState.from_env()
     assert cache.client is None and get(cache) is None and not put(cache)
     cache.close()
-    monkeypatch.setenv("MEMOVERSE_REDIS_URL", "invalid://secret-password@host")
+    monkeypatch.setenv("KEEPSITE_REDIS_URL", "invalid://secret-password@host")
     disabled = RedisSharedState.from_env()
     assert disabled.client is None
     assert "secret-password" not in caplog.text
@@ -209,10 +221,10 @@ def test_connection_budget_overrides_url_options_and_close_releases_owned_pool(m
 
 
 def test_real_redis_roundtrip_loss_and_cross_client_visibility():
-    url = os.environ.get("MEMOVERSE_TEST_REDIS_URL")
+    url = os.environ.get("KEEPSITE_TEST_REDIS_URL")
     if not url:
         if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
-            pytest.fail("CI must provide MEMOVERSE_TEST_REDIS_URL; real Redis coverage cannot be skipped")
+            pytest.fail("CI must provide KEEPSITE_TEST_REDIS_URL; real Redis coverage cannot be skipped")
         pytest.skip("No local Redis service configured; real Redis is required in Application CI")
     # An unavailable configured service is a failure, not a skip/fallback pass.
     first = RedisSharedState(url=url)

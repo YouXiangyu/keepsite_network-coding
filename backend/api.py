@@ -63,7 +63,7 @@ def install_routes(app: FastAPI, store, sync_http):
         with store.transaction() as db:
             asset = dict(store.referenced_asset(db, current_user(request), asset_id))
         url, expires_at, transport = f"/api/media/{asset['id']}", now_ms() + 60_000, "server"
-        if isinstance(store.storage, S3ObjectStore) and os.environ.get("MEMOVERSE_DIRECT_DOWNLOAD") == "1":
+        if isinstance(store.storage, S3ObjectStore) and os.environ.get("KEEPSITE_DIRECT_DOWNLOAD") == "1":
             url, expires_at = store.storage.download_url(asset["object_key"])
             transport = "s3"
         return {"url": url, "expiresAt": expires_at, "transport": transport,
@@ -97,5 +97,5 @@ def install_routes(app: FastAPI, store, sync_http):
     @app.get("/api/backup")
     def backup(request: Request):
         archive = create_account_backup(store, current_user(request))
-        return FileResponse(archive, media_type="application/zip", filename="memoverse-account-backup.zip",
+        return FileResponse(archive, media_type="application/zip", filename="keepsite-account-backup.zip",
                             background=BackgroundTask(archive.unlink, missing_ok=True))

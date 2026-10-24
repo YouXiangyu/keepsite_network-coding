@@ -60,7 +60,7 @@ class PeerService:
         self.process_id = uuid.uuid4().hex
         self.registry = PeerRegistry(self.client, server_id, store.storage.cache_identity)
         scope = json.dumps([server_id, store.storage.cache_identity], separators=(",", ":"))
-        self.channel_prefix = "memoverse:peer:v1:" + hashlib.sha256(scope.encode()).hexdigest() + ":"
+        self.channel_prefix = "keepsite:peer:v1:" + hashlib.sha256(scope.encode()).hexdigest() + ":"
         self._loop = self._task = self._thread = None
         self._stopping, self._ready = threading.Event(), threading.Event()
         self._lock = threading.Lock()
@@ -97,10 +97,10 @@ class PeerService:
         self._unsubscribers.append(self.store.subscribe_changes(self._committed))
         self._unsubscribers.append(self.auth.subscribe_revocations(self._revoked))
         if self.client is not None:
-            thread = threading.Thread(target=self._subscriber, name="memoverse-peer-subscriber", daemon=True)
+            thread = threading.Thread(target=self._subscriber, name="keepsite-peer-subscriber", daemon=True)
             thread.start()
             self._thread = thread
-        self._task = asyncio.create_task(self._pump(), name="memoverse-peer-maintenance")
+        self._task = asyncio.create_task(self._pump(), name="keepsite-peer-maintenance")
 
     async def stop(self):
         self._stopping.set()

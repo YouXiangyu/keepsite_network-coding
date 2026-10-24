@@ -26,7 +26,7 @@ assert.match(control.runToken, /^[a-f0-9]{32}$/);
 const owned = JSON.parse(await readFile(resolve(root, `.cache/native-run-${control.runToken}.json`), 'utf8'));
 assert.equal(owned.port, 4180); assert.match(owned.runId, /^native-browser-[a-z0-9_]{8}$/);
 const origin = control.origin;
-const headers = { 'X-MemoVerse-Fixture': 'native-browser-fixture', 'X-MemoVerse-Fixture-Run': control.runToken };
+const headers = { 'X-Keepsite-Fixture': 'native-browser-fixture', 'X-Keepsite-Fixture-Run': control.runToken };
 const health = await fetch(origin + '/api/health', { signal: AbortSignal.timeout(10000) }).then(r => r.json());
 assert.equal(health.fixture, 'native-loopback'); assert.equal(health.cloud, false);
 
@@ -41,18 +41,18 @@ async function fixture(path, body, { diagnostic = false } = {}) {
   return result;
 }
 async function seed() {
-  const response = await fetch(origin + '/api/auth/login', { method: 'POST', signal: AbortSignal.timeout(10000), headers: { Origin: origin, 'X-MemoVerse-Client': 'web', 'Content-Type': 'application/json' },
+  const response = await fetch(origin + '/api/auth/login', { method: 'POST', signal: AbortSignal.timeout(10000), headers: { Origin: origin, 'X-Keepsite-Client': 'web', 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: 'alice@example.test', password: 'TestTicket123!' }) });
   assert.equal(response.status, 200);
   const session = await response.json();
   const cookie = response.headers.getSetCookie().map(value => value.split(';')[0]).join('; ');
   assert(session.authenticated && cookie);
   try {
-    const seeded = await fetch(origin + '/__test/bootstrap', { method: 'POST', signal: AbortSignal.timeout(30000), headers: { ...headers, Origin: origin, 'X-MemoVerse-Client': 'web', 'X-CSRF-Token': session.csrfToken, Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ count: 2 }) });
+    const seeded = await fetch(origin + '/__test/bootstrap', { method: 'POST', signal: AbortSignal.timeout(30000), headers: { ...headers, Origin: origin, 'X-Keepsite-Client': 'web', 'X-CSRF-Token': session.csrfToken, Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ count: 2 }) });
     assert.equal(seeded.status, 200);
     return seeded.json();
   } finally {
-    const logout = await fetch(origin + '/api/auth/logout', { method: 'POST', signal: AbortSignal.timeout(10000), headers: { Origin: origin, 'X-MemoVerse-Client': 'web', 'X-CSRF-Token': session.csrfToken, Cookie: cookie, 'Content-Type': 'application/json' }, body: '{}' });
+    const logout = await fetch(origin + '/api/auth/logout', { method: 'POST', signal: AbortSignal.timeout(10000), headers: { Origin: origin, 'X-Keepsite-Client': 'web', 'X-CSRF-Token': session.csrfToken, Cookie: cookie, 'Content-Type': 'application/json' }, body: '{}' });
     assert.equal(logout.status, 200, 'Seed session cleanup failed');
   }
 }
@@ -70,7 +70,7 @@ const output = await checkedNewOutput(option('--output') || '');
 assert(output.startsWith(resolve(root, '.cache') + '\\') || output.startsWith(resolve(root, '.cache') + '/'), 'Output must be a new directory inside this workspace cache');
 await mkdir(output);
 assert.deepEqual(Object.keys((await fixture('/__test/progress')).phases), [], 'Start a fresh owned fixture for each interop attempt');
-const adb = process.env.MEMOVERSE_ADB || 'D:/300-tools/Android/Sdk/platform-tools/adb.exe';
+const adb = process.env.KEEPSITE_ADB || 'D:/300-tools/Android/Sdk/platform-tools/adb.exe';
 function command(arguments_, { timeout = 180000 } = {}) {
   const child = spawn(adb, ['-s', serial, ...arguments_], { windowsHide: true, env: { ...process.env, ANDROID_USER_HOME: resolve(root, '.cache/m7-android-user') }, stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = '', stderr = '', failure;
@@ -95,7 +95,7 @@ if (physical) {
   assert.notEqual((await command(['shell', 'getprop', 'ro.kernel.qemu']).result).stdout.trim(), '1', 'Physical mode must select a physical device');
 } else {
   const avdName = (await command(['emu', 'avd', 'name']).result).stdout.split('\n')[0].replaceAll('\r', '');
-  assert.equal(avdName, 'MemoVerseM7');
+  assert.equal(avdName, 'keepsiteM7');
 }
 const { chromium } = createRequire(resolve(root, 'demo/package.json'))('playwright');
 const selected = { userId: manifest.userId, media: manifest.items[0].media };
@@ -108,8 +108,8 @@ function apkPath(flag, fallback) {
   return path;
 }
 const apkFiles = {
-  'io.github.youxiangyu.memoverse': apkPath('--apk', 'android/app/build/outputs/apk/debug/app-debug.apk'),
-  'io.github.youxiangyu.memoverse.test': apkPath('--test-apk', 'android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk'),
+  'io.github.youxiangyu.keepsite': apkPath('--apk', 'android/app/build/outputs/apk/debug/app-debug.apk'),
+  'io.github.youxiangyu.keepsite.test': apkPath('--test-apk', 'android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk'),
 };
 async function hashes() {
   const files = new Map();
@@ -211,7 +211,7 @@ async function browser() {
         }); }
       };
     });
-    const login = await context.request.post('/api/auth/login', { headers: { Origin: origin, 'X-MemoVerse-Client': 'web' }, data: { email: 'alice@example.test', password: 'TestTicket123!' } });
+    const login = await context.request.post('/api/auth/login', { headers: { Origin: origin, 'X-Keepsite-Client': 'web' }, data: { email: 'alice@example.test', password: 'TestTicket123!' } });
     assert(login.ok());
     const page = await context.newPage(); await page.goto('/devices');
     await until(async () => (await page.getByTestId('peer-status').getAttribute('data-enabled')) === 'true', 'Web peer not registered');
@@ -220,7 +220,7 @@ async function browser() {
 }
 async function cached(device, selection = selected) {
   return device.page.evaluate(async ({ userId, media }) => {
-    const database = await new Promise((resolve_, reject) => { const request = indexedDB.open('memoverse-media-cache-v1', 1); request.onsuccess = () => resolve_(request.result); request.onerror = () => reject(request.error); });
+    const database = await new Promise((resolve_, reject) => { const request = indexedDB.open('keepsite-media-cache-v1', 1); request.onsuccess = () => resolve_(request.result); request.onerror = () => reject(request.error); });
     try {
       if (!database.objectStoreNames.contains('media')) return null;
       const record = await new Promise((resolve_, reject) => { const query = database.transaction('media', 'readonly').objectStore('media').get([userId, media.sha256]); query.onsuccess = () => resolve_(query.result); query.onerror = () => reject(query.error); });
@@ -252,7 +252,7 @@ try {
   report.webSource = await cached(source); assert.equal(report.webSource.sha256, selected.media.sha256);
   await fixture('/__test/progress', { phase: 'web_ready', data: { assetId: selected.media.assetId, sha256: selected.media.sha256 } });
   console.log('Web source ready; starting real Android interop instrumentation');
-  instrumentation = command(['shell', 'am', 'instrument', '-w', '-r', '-e', 'class', 'io.github.youxiangyu.memoverse.core.NativeInteropInstrumentedTest#nativeWebRoundTripAndAccountIsolation', '-e', 'runToken', control.runToken, 'io.github.youxiangyu.memoverse.test/androidx.test.runner.AndroidJUnitRunner']);
+  instrumentation = command(['shell', 'am', 'instrument', '-w', '-r', '-e', 'class', 'io.github.youxiangyu.keepsite.core.NativeInteropInstrumentedTest#nativeWebRoundTripAndAccountIsolation', '-e', 'runToken', control.runToken, 'io.github.youxiangyu.keepsite.test/androidx.test.runner.AndroidJUnitRunner']);
   instrumentation.result.then(() => { instrumentFinished = true; }, () => { instrumentFinished = true; });
   const native = await until(async () => {
     const status = await fixture('/__test/progress');
@@ -307,7 +307,7 @@ try {
     if (result.status === 'rejected') cleanupErrors.push('Owned Chromium process did not close');
   }
   if (instrumentation && !instrumentSucceeded) {
-    try { await command(['shell', 'am', 'force-stop', 'io.github.youxiangyu.memoverse'], { timeout: 10000 }).result; }
+    try { await command(['shell', 'am', 'force-stop', 'io.github.youxiangyu.keepsite'], { timeout: 10000 }).result; }
     catch { cleanupErrors.push('Could not stop the owned failed Android instrumentation'); }
     if (!instrumentFinished) instrumentation.child.kill();
     await instrumentation.result.catch(() => {}); // This settles only after exact child close.

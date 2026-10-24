@@ -206,5 +206,5 @@ async function dispose() {
 }
 
 export const benchmark = { boot, status, setPeerWanted, run, verify, dispose };
-declare global { interface Window { __memoVerseBenchmark: typeof benchmark } }
-requireLocalFixture(); window.__memoVerseBenchmark = benchmark;
+declare global { interface Window { __keepsiteBenchmark: typeof benchmark } }
+requireLocalFixture(); window.__keepsiteBenchmark = benchmark;

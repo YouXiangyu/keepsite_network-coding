@@ -3,7 +3,7 @@ import type { MediaRef } from './data';
 import type { PeerAsset, PeerMediaPort } from './media/peerProtocol';
 
 export const CACHE_LIMIT = 128 * 1024 * 1024;
-export const CACHE_DATABASE = 'memoverse-media-cache-v1';
+export const CACHE_DATABASE = 'keepsite-media-cache-v1';
 interface CachedMedia { accountId: string; sha256: string; blob: Blob; size: number; mimeType: string; accessedAt: number }
 type Guard = () => void;
 const abortError = () => new DOMException('图片读取已取消。', 'AbortError');

@@ -384,7 +384,7 @@ export class PeerMedia implements PeerMediaPort {
         let attached = false;
         const abort = () => reject(abortError()); transfer.controller.signal.addEventListener('abort', abort, { once: true });
         pc.ondatachannel = event => {
-          if (attached || event.channel.label !== 'memoverse-' + transfer.id || !event.channel.ordered || event.channel.maxRetransmits !== null || event.channel.maxPacketLifeTime !== null) { event.channel.close(); reject(new Error('设备数据通道配置无效。')); return; }
+          if (attached || event.channel.label !== 'keepsite-' + transfer.id || !event.channel.ordered || event.channel.maxRetransmits !== null || event.channel.maxPacketLifeTime !== null) { event.channel.close(); reject(new Error('设备数据通道配置无效。')); return; }
           attached = true; transfer.channel = event.channel; this.observeLate(event.channel, transfer);
           event.channel.addEventListener('open', () => { transfer.progressAt = now(); transfer.record.connectionMs = now() - connectedAt; }, { once: true });
           if (event.channel.readyState === 'open') { transfer.progressAt = now(); transfer.record.connectionMs = now() - connectedAt; }
@@ -430,7 +430,7 @@ export class PeerMedia implements PeerMediaPort {
           transfer.record.discoveryMs = now() - discoveryAt; transfer.record.resumeOffset = prefix.offset;
           const early = this.early.get(transfer.id); if (early) { this.early.delete(transfer.id); this.authorize(transfer, early); }
           const authorizationAt = now(); await transfer.authorized; transfer.record.authorizationMs = now() - authorizationAt; this.guardTransfer(transfer);
-          const connectedAt = now(), pc = this.connection(transfer), channel = pc.createDataChannel('memoverse-' + transfer.id, { ordered: true }); transfer.channel = channel; this.observeLate(channel, transfer);
+          const connectedAt = now(), pc = this.connection(transfer), channel = pc.createDataChannel('keepsite-' + transfer.id, { ordered: true }); transfer.channel = channel; this.observeLate(channel, transfer);
           const receiving = new Promise<Blob>((resolve, reject) => {
             const current = transfer!; let attached = false;
             const abortReceive = () => reject(abortError()); current.controller.signal.addEventListener('abort', abortReceive, { once: true });

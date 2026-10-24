@@ -60,7 +60,7 @@ class LinuxActivationProcesses(unittest.TestCase):
         source = source.replace('! -f "$TEST_CURRENT"', '! -e "$TEST_CURRENT"')
         self.current.unlink()
         self.current.symlink_to(self.old)
-        enabled = self.etc / 'nginx/sites-enabled/memoverse'
+        enabled = self.etc / 'nginx/sites-enabled/keepsite'
         enabled.unlink()
         enabled.symlink_to(self.site)
         source = source.replace('systemctl() {', 'fake_systemctl() {', 1)
@@ -72,9 +72,10 @@ checkpoint() {
   fi
 }
 systemctl() {
+  if [[ "${1:-} ${3:-}" == 'is-active memoverse.service' ]]; then return 1; fi
   fake_systemctl "$@"
   local result=$?
-  if [[ "${1:-} ${2:-}" == 'stop memoverse' ]]; then
+  if [[ "${1:-} ${2:-}" == 'stop keepsite' ]]; then
     if [[ -f "$TEST_ROOT/reached" && "$TEST_HOLD_ROLLBACK" == 1 ]]; then
       : > "$TEST_ROOT/recovering"
       while [[ ! -f "$TEST_ROOT/recover" ]]; do command sleep 0.02; done
@@ -85,7 +86,7 @@ systemctl() {
 }
 mv() {
   command mv "$@" || return $?
-  if [[ "${@: -1}" == */memoverse.service ]]; then checkpoint unit; fi
+  if [[ "${@: -1}" == */keepsite.service ]]; then checkpoint unit; fi
   if [[ "${@: -1}" == "$TEST_CURRENT" ]]; then checkpoint link; fi
 }
 '''
@@ -192,7 +193,7 @@ mv() {
         self.assertEqual(process.returncode, 143, out + err)
         self.assert_restored()
         commands = self.log.read_text()
-        self.assertNotIn('systemctl restart memoverse', commands)
+        self.assertNotIn('systemctl restart keepsite', commands)
         self.assertNotIn('systemctl start nginx', commands)
         self.assertIn('application active=0; nginx active=0', err)
 

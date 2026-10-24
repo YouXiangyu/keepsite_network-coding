@@ -10,7 +10,7 @@
         android:icon="@drawable/ic_ticket"
         android:supportsRtl="true"
         android:usesCleartextTraffic="false"
-        android:theme="@style/Theme.MemoVerse">
+        android:theme="@style/Theme.keepsite">
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -20,7 +20,7 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="io.github.youxiangyu.memoverse" />
+                <data android:scheme="io.github.youxiangyu.keepsite" />
             </intent-filter>
         </activity>
     </application>

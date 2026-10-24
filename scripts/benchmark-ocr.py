@@ -105,7 +105,7 @@ def generate(destination, font_path):
 
 
 def worker(messages, directory, models, samples):
-    os.environ["MEMOVERSE_OCR_MODEL_DIR"] = models
+    os.environ["KEEPSITE_OCR_MODEL_DIR"] = models
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["OPENBLAS_NUM_THREADS"] = "1"
     import psutil

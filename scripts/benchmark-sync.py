@@ -143,7 +143,7 @@ def run_case(source, temp_root, protocol, count):
         raise ValueError("Unsupported protocol or ticket count (3..10000)")
     source = checked_path(source, "source-root")
     parent = checked_path(temp_root, "temp-root")
-    if (parent / "memoverse.sqlite3").exists() or (parent / "workspace/memoverse.sqlite3").exists():
+    if any((folder / name).exists() for folder in (parent, parent / "workspace") for name in ("keepsite.sqlite3", "memoverse.sqlite3")):
         raise ValueError("temp-root must not contain an existing account workspace")
     hashes = source_hashes(source)
     # A legacy protocol is a measurement fixture, never a production fallback.

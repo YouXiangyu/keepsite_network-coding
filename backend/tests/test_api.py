@@ -295,7 +295,7 @@ def test_csrf_and_account_body_injection_do_not_mutate(client):
 def test_legacy_schema_is_refused_before_any_directory_write(tmp_path, version):
     root = tmp_path / "legacy"
     root.mkdir()
-    path = root / "memoverse.sqlite3"
+    path = root / "keepsite.sqlite3"
     with sqlite3.connect(path) as db:
         db.execute("CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT)")
         db.execute("INSERT INTO meta VALUES('schema_version',?)", (version,))
@@ -306,13 +306,49 @@ def test_legacy_schema_is_refused_before_any_directory_write(tmp_path, version):
     assert set(root.iterdir()) == {path}
 
 
+@pytest.mark.parametrize("has_current", [False, True])
+def test_legacy_database_filename_requires_offline_migration_before_any_write(tmp_path, has_current):
+    root = tmp_path / "legacy-name"
+    root.mkdir()
+    legacy = root / "memoverse.sqlite3"
+    legacy.write_bytes(b"original database must remain untouched")
+    if has_current:
+        (root / "keepsite.sqlite3").write_bytes(b"ambiguous second database")
+    before = {path.name: path.read_bytes() for path in root.iterdir()}
+    with pytest.raises(RuntimeError, match="offline keepsite migration"):
+        create_app(root, object_store=object())
+    assert {path.name: path.read_bytes() for path in root.iterdir()} == before
+
+
+@pytest.mark.parametrize("setting", ["DATA_DIR", "STORAGE", "COGNITO_CLIENT_ID", "SESSION_KEY"])
+def test_legacy_environment_cannot_start_an_empty_or_unconfigured_application(tmp_path, monkeypatch, setting):
+    root = tmp_path / "never-created"
+    secret = "private-value-must-not-be-printed"
+    monkeypatch.setenv("MEMOVERSE_" + setting, secret)
+    monkeypatch.setenv("KEEPSITE_" + setting, "already-renamed")
+    with pytest.raises(RuntimeError, match="Legacy MEMOVERSE_.*environment") as failure:
+        create_app(root, object_store=object())
+    assert secret not in str(failure.value)
+    assert not root.exists()
+
+
+def test_new_data_directory_environment_opens_keepsite_database(tmp_path, monkeypatch):
+    root = tmp_path / "configured-keepsite"
+    monkeypatch.setenv("KEEPSITE_DATA_DIR", str(root))
+    app = create_app(auth_provider=FakeAuthFactory(), object_store=LocalObjectStore(tmp_path / "objects"),
+                     shared_state=RedisSharedState(), run_recovery=False, run_processing=False)
+    assert app.state.store.database == root / "keepsite.sqlite3"
+    assert app.state.store.database.is_file()
+    assert app.title == "keepsite Movie Ticket API"
+
+
 def test_incomplete_restore_cannot_start(tmp_path):
     root = tmp_path / "incomplete"
     root.mkdir()
     (root / "RESTORE_INCOMPLETE").write_text("pending")
     with pytest.raises(RuntimeError, match="Incomplete"):
         create_app(root, object_store=object())
-    assert not (root / "memoverse.sqlite3").exists()
+    assert not (root / "keepsite.sqlite3").exists()
 
 
 def test_deleted_media_requires_a_fresh_upload_before_new_reference(client):

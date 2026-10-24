@@ -1,7 +1,7 @@
 import { expect, test, chromium, type Browser, type BrowserContext, type Page } from '@playwright/test';
 
 const origin = 'http://127.0.0.1:4177';
-const fixtureHeaders = { 'X-MemoVerse-Fixture': 'p2p-browser-fixture', 'X-MemoVerse-Fixture-Run': process.env.MEMOVERSE_P2P_RUN_TOKEN! };
+const fixtureHeaders = { 'X-Keepsite-Fixture': 'p2p-browser-fixture', 'X-Keepsite-Fixture-Run': process.env.KEEPSITE_P2P_RUN_TOKEN! };
 type Fault = 'none' | 'corrupt' | 'interrupt' | 'stall' | 'relay-only';
 type Fixture = { userId: string; media: { assetId: string; sha256: string; size: number; mimeType: string } };
 type Endpoint = { browser: Browser; context: BrowserContext; page: Page; fixture: Fixture; label: string };
@@ -91,7 +91,7 @@ async function load(device: Endpoint) {
 async function cached(device: Endpoint) {
   return device.page.evaluate(async ({ userId, media }) => {
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open('memoverse-media-cache-v1', 1);
+      const request = indexedDB.open('keepsite-media-cache-v1', 1);
       request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error);
     });
     try {
@@ -142,9 +142,9 @@ async function pair(group: string, sourceFault: Fault = 'none', targetFault: Fau
 test('two independent Chromium processes transfer verified bytes directly without a server media read', async ({}, testInfo) => {
   const devices = await pair('direct');
   try {
-    const foreignToken = fixtureHeaders['X-MemoVerse-Fixture-Run'] === '0'.repeat(32) ? '1'.repeat(32) : '0'.repeat(32);
+    const foreignToken = fixtureHeaders['X-Keepsite-Fixture-Run'] === '0'.repeat(32) ? '1'.repeat(32) : '0'.repeat(32);
     expect((await devices.source.context.request.post('/__test/shutdown', {
-      headers: { ...fixtureHeaders, 'X-MemoVerse-Fixture-Run': foreignToken },
+      headers: { ...fixtureHeaders, 'X-Keepsite-Fixture-Run': foreignToken },
     })).status()).toBe(403);
     expect((await devices.source.context.request.get('/api/health')).ok()).toBe(true);
     await load(devices.target);

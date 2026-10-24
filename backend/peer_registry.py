@@ -126,7 +126,7 @@ class PeerRegistry:
         _text(server_id, 512)
         _text(storage_identity, 4096)
         self.scope = hashlib.sha256(_encode([server_id, storage_identity]).encode()).hexdigest()
-        self.prefix = "memoverse:peers:v1:" + self.scope + ":"
+        self.prefix = "keepsite:peers:v1:" + self.scope + ":"
 
     def _account_key(self, user_id):
         return self.prefix + "account:" + hashlib.sha256(_text(user_id, 512).encode()).hexdigest()

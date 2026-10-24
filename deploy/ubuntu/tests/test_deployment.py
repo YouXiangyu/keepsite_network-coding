@@ -109,18 +109,18 @@ class ActivationTests(unittest.TestCase):
         (self.etc / 'nginx/sites-available').mkdir(parents=True)
         (self.etc / 'nginx/sites-enabled').mkdir()
         (self.etc / 'systemd/system').mkdir(parents=True)
-        self.env = self.etc / 'memoverse.env'
-        self.site = self.etc / 'nginx/sites-available/memoverse'
-        self.unit = self.etc / 'systemd/system/memoverse.service'
-        self.next_env = self.etc / 'memoverse.env.next'
-        self.next_site = self.etc / 'nginx/sites-available/memoverse.next'
+        self.env = self.etc / 'keepsite.env'
+        self.site = self.etc / 'nginx/sites-available/keepsite'
+        self.unit = self.etc / 'systemd/system/keepsite.service'
+        self.next_env = self.etc / 'keepsite.env.next'
+        self.next_site = self.etc / 'nginx/sites-available/keepsite.next'
         self.environment = '\n'.join([
-            'MEMOVERSE_DATA_DIR=/var/lib/memoverse-v3', 'MEMOVERSE_STORAGE=s3',
-            'MEMOVERSE_S3_BUCKET=private-fixture', 'AWS_REGION=ap-northeast-1',
-            'MEMOVERSE_COGNITO_REGION=ap-northeast-1', 'MEMOVERSE_COGNITO_USER_POOL_ID=ap-northeast-1_test',
-            'MEMOVERSE_COGNITO_CLIENT_ID=client', 'MEMOVERSE_COGNITO_DOMAIN=https://auth.example.test',
-            'MEMOVERSE_PUBLIC_URL=https://example.test',
-            'MEMOVERSE_SESSION_KEY=' + base64.urlsafe_b64encode(b'a' * 32).decode(),
+            'KEEPSITE_DATA_DIR=/var/lib/keepsite-v3', 'KEEPSITE_STORAGE=s3',
+            'KEEPSITE_S3_BUCKET=private-fixture', 'AWS_REGION=ap-northeast-1',
+            'KEEPSITE_COGNITO_REGION=ap-northeast-1', 'KEEPSITE_COGNITO_USER_POOL_ID=ap-northeast-1_test',
+            'KEEPSITE_COGNITO_CLIENT_ID=client', 'KEEPSITE_COGNITO_DOMAIN=https://auth.example.test',
+            'KEEPSITE_PUBLIC_URL=https://example.test',
+            'KEEPSITE_SESSION_KEY=' + base64.urlsafe_b64encode(b'a' * 32).decode(),
         ]) + '\n'
         self.env.write_text(self.environment)
         self.next_env.write_text(self.environment + 'CONFIG_REVISION=new\n')
@@ -129,25 +129,26 @@ class ActivationTests(unittest.TestCase):
         self.unit.write_text('actual-previous-unit')
         for release in (self.new, self.old):
             (release / 'deploy/ubuntu').mkdir(parents=True)
-            (release / 'deploy/ubuntu/memoverse.service').write_text('new-unit')
+            (release / 'deploy/ubuntu/keepsite.service').write_text('new-unit')
         self.current = self.root / 'current'
         self.current.write_text(self.old.as_posix())
         self.log = self.root / 'commands.log'
         # Only adapt root guard/host path. All deployment control flow is unchanged.
         source = (ROOT / 'deploy/ubuntu/activate.sh').read_text(encoding='utf-8')
-        source = source.replace('$EUID', '0').replace('/opt/memoverse', self.root.as_posix()).replace('/etc/', self.etc.as_posix() + '/')
+        source = source.replace('$EUID', '0').replace('/opt/keepsite', self.root.as_posix()).replace('/etc/', self.etc.as_posix() + '/')
         # Windows cannot create the Linux nginx symlink; simulate its presence
         # only at the fixed site-link check, retaining all target validation.
-        source = source.replace('[[ -L ' + self.etc.as_posix() + '/nginx/sites-enabled/memoverse', '[[ -e ' + self.etc.as_posix() + '/nginx/sites-enabled/memoverse')
-        (self.etc / 'nginx/sites-enabled/memoverse').write_text('fixture-enabled-link')
+        source = source.replace('[[ -L ' + self.etc.as_posix() + '/nginx/sites-enabled/keepsite', '[[ -e ' + self.etc.as_posix() + '/nginx/sites-enabled/keepsite')
+        (self.etc / 'nginx/sites-enabled/keepsite').write_text('fixture-enabled-link')
         stubs = r'''
 systemctl() {
   printf 'systemctl %s\n' "$*" >> "$TEST_LOG"
   current=$(cat "$TEST_CURRENT" 2>/dev/null || true)
+  if [[ "$1" == is-active && "$3" == memoverse.service ]]; then [[ "$MODE" == old_service_active ]]; return; fi
   if [[ "$1" == is-active && "$MODE" == stopped_* ]]; then return 1; fi
   if [[ "$1" == stop && "$MODE" == stop_fail ]]; then return 1; fi
   if [[ "$1" == enable && "$MODE" == enable_fail ]]; then return 1; fi
-  if [[ "$1" == is-active && "$3" == memoverse && ! -f "$TEST_CURRENT" ]]; then return 1; fi
+  if [[ "$1" == is-active && "$3" == keepsite && ! -f "$TEST_CURRENT" ]]; then return 1; fi
   if [[ "$1" == reload && "$2" == nginx ]]; then
     if [[ "$MODE" == rollback_nginx_fail || ( "$MODE" == nginx_reload_fail && "$(cat "$TEST_SITE")" == PUBLIC_SESSION ) ]]; then return 1; fi
   fi
@@ -170,7 +171,7 @@ curl() {
     *) printf '{"status":"ok"}' ;;
   esac
 }
-readlink() { if [[ "${@: -1}" == */sites-enabled/memoverse ]]; then printf '%s\n' "$TEST_SITE"; else cat "$TEST_CURRENT" 2>/dev/null; fi; }
+readlink() { if [[ "${@: -1}" == */sites-enabled/keepsite ]]; then printf '%s\n' "$TEST_SITE"; else cat "$TEST_CURRENT" 2>/dev/null; fi; }
 realpath() { printf '%s\n' "$1"; }
 stat() {
   case "$2" in
@@ -251,7 +252,7 @@ sleep() { :; }
         self.assertEqual(self.site.read_text(), 'PRIVATE_BASIC')
         commands = self.log.read_text()
         # Only the failed new-version start was attempted, never the old one.
-        self.assertEqual(commands.count('systemctl restart memoverse'), 1)
+        self.assertEqual(commands.count('systemctl restart keepsite'), 1)
         self.assertNotIn('systemctl start nginx', commands)
         self.assertIn('application active=0; nginx active=0', result.stderr)
 
@@ -299,11 +300,11 @@ sleep() { :; }
         self.unit.write_text('new-unit')
         result = self.run_activation('success', configuration=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('systemctl restart memoverse', self.log.read_text())
+        self.assertIn('systemctl restart keepsite', self.log.read_text())
         self.assertEqual(self.env.read_text(), self.next_env.read_text())
 
     def test_restart_failure_restores_actual_old_environment_unit_and_private_site(self):
-        self.env.write_text('MEMOVERSE_DATA_DIR=/var/lib/memoverse\n')
+        self.env.write_text('KEEPSITE_DATA_DIR=/var/lib/keepsite\n')
         old_env = self.env.read_text()
         result = self.run_activation('restart_fail_new', configuration=True)
         self.assertEqual(result.returncode, 1, result.stderr)
@@ -328,14 +329,14 @@ sleep() { :; }
         self.assertEqual(self.unit.read_text(), 'actual-previous-unit')
         commands = self.log.read_text()
         self.assertLess(commands.rindex('systemctl stop nginx'), commands.rindex('systemctl start nginx'))
-        self.assertLess(commands.rindex('systemctl start nginx'), commands.rindex('systemctl restart memoverse'))
+        self.assertLess(commands.rindex('systemctl start nginx'), commands.rindex('systemctl restart keepsite'))
 
     def test_private_nginx_rollback_failure_does_not_start_old_application(self):
         result = self.run_activation('rollback_nginx_fail', configuration=True)
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertIn('ROLLBACK FAILED', result.stderr)
         commands = self.log.read_text()
-        self.assertEqual(commands.count('systemctl restart memoverse'), 1)
+        self.assertEqual(commands.count('systemctl restart keepsite'), 1)
         self.assertIn('systemctl stop nginx', commands)
 
     def test_candidate_permissions_or_syntax_fail_before_stopping_live_app(self):
@@ -344,18 +345,47 @@ sleep() { :; }
                 self.log.write_text('')
                 result = self.run_activation(mode, configuration=True)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertNotIn('systemctl stop memoverse', self.log.read_text())
+                self.assertNotIn('systemctl stop keepsite', self.log.read_text())
                 self.assertEqual(self.env.read_text(), self.environment)
                 self.assertEqual(self.site.read_text(), 'PRIVATE_BASIC')
 
     def test_wrong_candidate_data_root_fails_without_touching_legacy_data(self):
-        for legacy in ('/var/lib/memoverse', '/var/lib/memoverse-v2'):
+        for legacy in ('/var/lib/keepsite', '/var/lib/keepsite-v2'):
             with self.subTest(legacy=legacy):
-                self.next_env.write_text(self.environment.replace('/var/lib/memoverse-v3', legacy))
+                self.next_env.write_text(self.environment.replace('/var/lib/keepsite-v3', legacy))
                 result = self.run_activation('success', configuration=True)
                 self.assertNotEqual(result.returncode, 0)
-                self.assertNotIn('systemctl stop memoverse', self.log.read_text())
+                self.assertNotIn('systemctl stop keepsite', self.log.read_text())
                 self.assertEqual(self.current.read_text(), self.old.as_posix())
+
+    def test_running_old_service_blocks_new_activation(self):
+        result = self.run_activation('old_service_active', configuration=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Stop the old application', result.stderr)
+        self.assertNotIn('systemctl restart keepsite', self.log.read_text())
+        self.assertEqual(self.current.read_text(), self.old.as_posix())
+
+    def test_old_data_without_migrated_database_blocks_empty_start(self):
+        legacy = self.root / 'old-schema3'
+        legacy.mkdir()
+        (legacy / 'memoverse.sqlite3').write_bytes(b'keep untouched')
+        source = self.script.read_text(encoding='utf-8').replace("Path('/var/lib/memoverse-v3')", f"Path({legacy.as_posix()!r})")
+        source = source.replace("Path('/var/lib/keepsite-v3/keepsite.sqlite3')", f"Path({(self.root / 'not-migrated.sqlite3').as_posix()!r})")
+        self.script.write_text(source, encoding='utf-8')
+        result = self.run_activation('success', configuration=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('explicit offline keepsite migration', result.stderr)
+        self.assertEqual((legacy / 'memoverse.sqlite3').read_bytes(), b'keep untouched')
+        self.assertEqual(self.current.read_text(), self.old.as_posix())
+
+    def test_old_enabled_nginx_site_blocks_ambiguous_virtual_host(self):
+        legacy = self.etc / 'nginx/sites-enabled/memoverse'
+        legacy.write_text('preserved old site')
+        result = self.run_activation('success', configuration=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('explicitly disable the old enabled Nginx site', result.stderr)
+        self.assertEqual(legacy.read_text(), 'preserved old site')
+        self.assertEqual(self.current.read_text(), self.old.as_posix())
 
 
 class PrepareOnlyTests(unittest.TestCase):

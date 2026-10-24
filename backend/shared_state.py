@@ -133,7 +133,7 @@ class RedisSharedState:
 
     @classmethod
     def from_env(cls):
-        url = os.environ.get("MEMOVERSE_REDIS_URL", "").strip()
+        url = os.environ.get("KEEPSITE_REDIS_URL", "").strip()
         try:
             return cls(url=url or None)
         except (ValueError, TypeError, RedisError):
@@ -147,7 +147,7 @@ class RedisSharedState:
                 or not _integer(revision) or not isinstance(storage_identity, str) or not storage_identity):
             raise ValueError("Snapshot identity is incomplete")
         scope = json.dumps([user_id, server_id, storage_identity], ensure_ascii=False, separators=(",", ":"))
-        return f"memoverse:snapshot:v{FORMAT_VERSION}:{hashlib.sha256(scope.encode()).hexdigest()}:{revision}"
+        return f"keepsite:snapshot:v{FORMAT_VERSION}:{hashlib.sha256(scope.encode()).hexdigest()}:{revision}"
 
     def get_snapshot(self, user_id, server_id, revision, storage_identity):
         if self.client is None:

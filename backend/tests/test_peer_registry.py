@@ -445,10 +445,10 @@ def test_corrupted_disposable_redis_records_fail_closed_with_safe_codes(registry
 
 
 def test_real_redis_atomic_limits_expiry_and_recovery(monkeypatch):
-    url = os.environ.get("MEMOVERSE_TEST_REDIS_URL")
+    url = os.environ.get("KEEPSITE_TEST_REDIS_URL")
     if not url:
         if os.environ.get("CI"):
-            pytest.fail("CI must provide MEMOVERSE_TEST_REDIS_URL for the peer registry")
+            pytest.fail("CI must provide KEEPSITE_TEST_REDIS_URL for the peer registry")
         pytest.skip("Local real Redis URL not configured")
     shared = RedisSharedState(url=url)
     registry = PeerRegistry(shared.client, "peer-test-" + uuid.uuid4().hex, "isolated-test-storage")

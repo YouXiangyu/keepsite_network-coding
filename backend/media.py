@@ -143,7 +143,7 @@ class UploadRecovery:
     def __init__(self, store, *, interval=30):
         self.store, self.interval = store, interval
         self.stopping = threading.Event()
-        self.thread = threading.Thread(target=self._run, name="memoverse-upload-recovery", daemon=True)
+        self.thread = threading.Thread(target=self._run, name="keepsite-upload-recovery", daemon=True)
 
     def start(self):
         self.thread.start()

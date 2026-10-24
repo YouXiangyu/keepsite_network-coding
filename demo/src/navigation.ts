@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 
-const eventName = 'memoverse:navigate';
+const eventName = 'keepsite:navigate';
 export function navigate(path: string, replace = false) {
   if (!path.startsWith('/') || path.startsWith('//') || path.includes('\\')) throw new Error('页面地址无效。');
-  const depth = Number(window.history.state?.memoverseDepth ?? 0) + (replace ? 0 : 1);
-  window.history[replace ? 'replaceState' : 'pushState']({ memoverseDepth: depth }, '', path);
+  const depth = Number(window.history.state?.keepsiteDepth ?? 0) + (replace ? 0 : 1);
+  window.history[replace ? 'replaceState' : 'pushState']({ keepsiteDepth: depth }, '', path);
   window.dispatchEvent(new Event(eventName));
 }
 export function useLocationPath() {

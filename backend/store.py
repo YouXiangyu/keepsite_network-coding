@@ -38,7 +38,12 @@ def now_ms():
 def require_schema3_root(root: Path):
     if (root / "RESTORE_INCOMPLETE").exists():
         raise RuntimeError("Incomplete restoration: do not start this data directory.")
-    database = root / "memoverse.sqlite3"
+    if (root / "memoverse.sqlite3").exists():
+        raise RuntimeError(
+            "Legacy database filename memoverse.sqlite3 detected: run the offline keepsite migration "
+            "into a new data directory before starting. Original data was not changed."
+        )
+    database = root / "keepsite.sqlite3"
     if not database.exists():
         return
     try:
@@ -53,7 +58,7 @@ def require_schema3_root(root: Path):
 class Store:
     def __init__(self, root: Path, *, storage: ObjectStore):
         require_schema3_root(root)
-        existing = root / "memoverse.sqlite3"
+        existing = root / "keepsite.sqlite3"
         if existing.exists():
             with closing(sqlite3.connect(existing.resolve().as_uri() + "?mode=ro", uri=True)) as db:
                 binding = db.execute("SELECT value FROM meta WHERE key='storage_binding'").fetchone()
@@ -69,7 +74,7 @@ class Store:
         self._change_lock = threading.Lock()
         for folder in (self.root, self.root / "tmp", self.root / "exports"):
             folder.mkdir(parents=True, exist_ok=True)
-        self.database = self.root / "memoverse.sqlite3"
+        self.database = self.root / "keepsite.sqlite3"
         with closing(self.connect()) as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript("""

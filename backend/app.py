@@ -13,6 +13,7 @@ from starlette.concurrency import run_in_threadpool
 from . import accounts
 from .api import install_routes
 from .backups import BackupError
+from .configuration import require_current_environment
 from .media import MAX_IMAGE_BYTES, UploadRecovery
 from .object_storage import ObjectMissing, StorageError, configured_store
 from .store import Store, StoreError, require_schema3_root
@@ -26,7 +27,8 @@ log = logging.getLogger(__name__)
 
 def create_app(data_dir: Path | None = None, *, auth_provider=None, object_store=None, shared_state=None,
                run_recovery=True, run_processing=True, processing_factory=None):
-    root = Path(data_dir or os.environ.get("MEMOVERSE_DATA_DIR", ROOT / "backend/data-v3"))
+    require_current_environment()
+    root = Path(data_dir or os.environ.get("KEEPSITE_DATA_DIR", ROOT / "backend/data-v3"))
     require_schema3_root(root)
     storage = object_store if object_store is not None else configured_store(root)
     store = Store(root, storage=storage)
@@ -65,7 +67,7 @@ def create_app(data_dir: Path | None = None, *, auth_provider=None, object_store
                     finally:
                         await run_in_threadpool(storage.close)
 
-    app = FastAPI(title="MemoVerse Movie Ticket API", version="0.7.0", lifespan=lifespan)
+    app = FastAPI(title="keepsite Movie Ticket API", version="0.7.0", lifespan=lifespan)
     app.state.store = store
     app.state.shared_state, app.state.upload_recovery = shared_state, recovery
     app.state.processing_worker = processing

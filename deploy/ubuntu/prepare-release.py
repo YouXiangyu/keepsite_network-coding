@@ -164,10 +164,10 @@ def main():
         raise SystemExit('Root and exact commit/artifact identity required')
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}', args.domain):
         raise SystemExit('Invalid domain')
-    release = Path('/opt/memoverse/releases') / args.commit
+    release = Path('/opt/keepsite/releases') / args.commit
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, interrupted)
-    with deployment_lock(Path('/opt/memoverse/activation-backups/.lock')):
+    with deployment_lock(Path('/opt/keepsite/activation-backups/.lock')):
         if not prepare_artifact(args.archive, release, args.sha256):
             command = ['bash', str(release / 'deploy/ubuntu/install.sh'), '--release', str(release), '--domain', args.domain, '--execute']
             if args.initialize_host:

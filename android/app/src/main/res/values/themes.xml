@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.MemoVerse" parent="Theme.MaterialComponents.Light.NoActionBar">
+    <style name="Theme.keepsite" parent="Theme.MaterialComponents.Light.NoActionBar">
         <item name="colorPrimary">@color/mv_primary</item>
         <item name="colorPrimaryVariant">@color/mv_accent</item>
         <item name="colorOnPrimary">@color/mv_background</item>
@@ -11,20 +11,20 @@
         <item name="android:textColorSecondary">@color/mv_muted</item>
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">true</item>
-        <item name="materialAlertDialogTheme">@style/ThemeOverlay.MemoVerse.Dialog</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.keepsite.Dialog</item>
     </style>
-    <style name="ThemeOverlay.MemoVerse.Dialog" parent="ThemeOverlay.MaterialComponents.MaterialAlertDialog">
-        <item name="shapeAppearanceOverlay">@style/ShapeAppearance.MemoVerse.Dialog</item>
+    <style name="ThemeOverlay.keepsite.Dialog" parent="ThemeOverlay.MaterialComponents.MaterialAlertDialog">
+        <item name="shapeAppearanceOverlay">@style/ShapeAppearance.keepsite.Dialog</item>
         <item name="colorPrimary">@color/mv_ink</item>
         <item name="colorSecondary">@color/mv_ink</item>
-        <item name="buttonBarPositiveButtonStyle">@style/MemoVerse.DialogButton</item>
-        <item name="buttonBarNegativeButtonStyle">@style/MemoVerse.DialogButton</item>
+        <item name="buttonBarPositiveButtonStyle">@style/keepsite.DialogButton</item>
+        <item name="buttonBarNegativeButtonStyle">@style/keepsite.DialogButton</item>
     </style>
-    <style name="ShapeAppearance.MemoVerse.Dialog" parent="">
+    <style name="ShapeAppearance.keepsite.Dialog" parent="">
         <item name="cornerFamily">rounded</item>
         <item name="cornerSize">16dp</item>
     </style>
-    <style name="MemoVerse.DialogButton" parent="Widget.MaterialComponents.Button.TextButton.Dialog">
+    <style name="keepsite.DialogButton" parent="Widget.MaterialComponents.Button.TextButton.Dialog">
         <item name="android:textColor">@color/mv_ink</item>
         <item name="android:textAllCaps">false</item>
         <item name="android:textSize">15sp</item>

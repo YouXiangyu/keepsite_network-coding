@@ -1,4 +1,4 @@
-# MemoVerse Android 界面设计规范
+# keepsite Android 界面设计规范
 
 创建日期：2026-10-24。更新日期：2026-10-24。
 
@@ -9,9 +9,9 @@
 | 内容 | 位置 |
 | --- | --- |
 | 颜色 | `android/app/src/main/res/values/colors.xml` |
-| 字号、间距、圆角、尺寸 | `android/app/src/main/java/io/github/youxiangyu/memoverse/ui/Design.kt` |
-| 文字、按钮、输入框、卡片、列表行等组件 | `android/app/src/main/java/io/github/youxiangyu/memoverse/ui/Widgets.kt` |
-| 对话框圆角与按钮文字 | `android/app/src/main/res/values/themes.xml`（`ThemeOverlay.MemoVerse.Dialog`） |
+| 字号、间距、圆角、尺寸 | `android/app/src/main/java/io/github/youxiangyu/keepsite/ui/Design.kt` |
+| 文字、按钮、输入框、卡片、列表行等组件 | `android/app/src/main/java/io/github/youxiangyu/keepsite/ui/Widgets.kt` |
+| 对话框圆角与按钮文字 | `android/app/src/main/res/values/themes.xml`（`ThemeOverlay.keepsite.Dialog`） |
 | 底栏背景圆角 | `android/app/src/main/res/drawable/navigation_background.xml` |
 | 图标 | `android/app/src/main/res/drawable/ic_*.xml`，描边颜色引用 `@color/mv_ink` / `@color/mv_muted` |
 

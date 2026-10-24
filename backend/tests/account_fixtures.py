@@ -87,7 +87,7 @@ def signed_in(client, name="alice"):
     return client
 
 
-WRITE_HEADERS = {"X-CSRF-Token": "test-csrf", "X-MemoVerse-Client": "web", "Origin": ORIGIN}
+WRITE_HEADERS = {"X-CSRF-Token": "test-csrf", "X-Keepsite-Client": "web", "Origin": ORIGIN}
 
 
 def image_bytes(color="red", format="PNG"):

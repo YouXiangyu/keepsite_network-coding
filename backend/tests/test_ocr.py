@@ -30,7 +30,7 @@ def test_english_and_missing_year():
 
 
 def test_availability_never_downloads_or_loads_engine(monkeypatch, tmp_path):
-    monkeypatch.setenv("MEMOVERSE_OCR_MODEL_DIR", str(tmp_path))
+    monkeypatch.setenv("KEEPSITE_OCR_MODEL_DIR", str(tmp_path))
     monkeypatch.setattr(ocr, "_load_engine", lambda *args: (_ for _ in ()).throw(AssertionError("engine loaded")))
     assert ocr.availability()["available"] is False
 
@@ -38,7 +38,7 @@ def test_availability_never_downloads_or_loads_engine(monkeypatch, tmp_path):
 def test_wrong_hash_is_rejected(monkeypatch, tmp_path):
     for model in [*ocr.MANIFEST["models"].values(), ocr.MANIFEST["dictionary"]]:
         (tmp_path / model["filename"]).write_bytes(b"not the fixed model")
-    monkeypatch.setenv("MEMOVERSE_OCR_MODEL_DIR", str(tmp_path))
+    monkeypatch.setenv("KEEPSITE_OCR_MODEL_DIR", str(tmp_path))
     assert ocr.availability()["available"] is False
 
 
@@ -58,12 +58,12 @@ def test_bare_split_or_ambiguous_dates_are_not_showtime(lines):
 
 
 def test_real_pinned_model_without_any_runtime_download(monkeypatch):
-    directory = os.environ.get("MEMOVERSE_TEST_OCR_MODEL_DIR")
+    directory = os.environ.get("KEEPSITE_TEST_OCR_MODEL_DIR")
     if not directory:
         if os.environ.get("CI"):
             pytest.fail("CI must prepare and test the pinned OCR models")
         pytest.skip("Real OCR model directory not configured")
-    monkeypatch.setenv("MEMOVERSE_OCR_MODEL_DIR", directory)
+    monkeypatch.setenv("KEEPSITE_OCR_MODEL_DIR", directory)
     from rapidocr.utils.download_file import DownloadFile
 
     def no_download(*args, **kwargs):

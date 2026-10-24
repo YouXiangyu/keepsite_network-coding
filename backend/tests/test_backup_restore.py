@@ -204,7 +204,7 @@ def test_interrupted_publication_never_exposes_a_partial_destination(exported, t
         assert target == destination and not target.exists()
         assert source.parent.parent == destination.parent
         assert (source / "RESTORE_INCOMPLETE").is_file()
-        assert (source / "memoverse.sqlite3").is_file()
+        assert (source / "keepsite.sqlite3").is_file()
         assert (source / "objects/media").is_dir()
         raise OSError("injected publication failure")
     monkeypatch.setattr(filesystem, "publish_directory_noreplace", fail)
@@ -223,7 +223,7 @@ def test_interruption_after_atomic_publication_keeps_guarded_destination(exporte
         publish(source, target)
         assert not source.exists()
         assert (target / "RESTORE_INCOMPLETE").is_file()
-        assert (target / "memoverse.sqlite3").is_file()
+        assert (target / "keepsite.sqlite3").is_file()
         raise KeyboardInterrupt("injected post-publication interruption")
     monkeypatch.setattr(filesystem, "publish_directory_noreplace", interrupt)
     with pytest.raises(KeyboardInterrupt, match="injected"):
@@ -246,7 +246,7 @@ def test_marker_removal_failure_keeps_guard_and_all_restored_files(exported, tmp
     with pytest.raises(PermissionError, match="injected"):
         restore_account_backup(archive, destination, user_id=USERS["alice"]["id"])
     assert (destination / "RESTORE_INCOMPLETE").is_file()
-    assert (destination / "memoverse.sqlite3").is_file()
+    assert (destination / "keepsite.sqlite3").is_file()
     assert next((destination / "objects/media").glob(payload["originalAssetId"] + ".*")).is_file()
     with pytest.raises(RuntimeError, match="Incomplete"):
         create_app(destination, object_store=object())

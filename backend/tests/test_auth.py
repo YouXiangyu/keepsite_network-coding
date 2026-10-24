@@ -19,8 +19,8 @@ import pytest
 
 from backend.auth import AuthConfig, AuthError, AuthService, CognitoProvider, NoRedirect, RateLimiter, install_auth
 
-PUBLIC = 'https://memoverse.test'
-HEADERS = {'Origin': PUBLIC, 'X-MemoVerse-Client': 'web'}
+PUBLIC = 'https://keepsite.test'
+HEADERS = {'Origin': PUBLIC, 'X-Keepsite-Client': 'web'}
 PASSWORD = 'StrongPass!123'
 
 
@@ -128,8 +128,8 @@ def login(auth, **body):
 
 def test_unconfigured_is_closed_and_does_not_create_provider(tmp_path, monkeypatch):
     for key in ('REGION', 'USER_POOL_ID', 'CLIENT_ID', 'DOMAIN'):
-        monkeypatch.delenv('MEMOVERSE_COGNITO_' + key, raising=False)
-    monkeypatch.delenv('MEMOVERSE_SESSION_KEY', raising=False)
+        monkeypatch.delenv('KEEPSITE_COGNITO_' + key, raising=False)
+    monkeypatch.delenv('KEEPSITE_SESSION_KEY', raising=False)
     monkeypatch.setattr('backend.auth.boto3.client', lambda *args, **kwargs: pytest.fail('Unconfigured auth must not connect'))
     app = FastAPI()
     service = install_auth(app, tmp_path)
@@ -143,6 +143,34 @@ def test_unconfigured_is_closed_and_does_not_create_provider(tmp_path, monkeypat
         assert service._provider is None
 
 
+def test_legacy_auth_environment_requires_explicit_migration_before_database_write(tmp_path, monkeypatch):
+    root = tmp_path / 'not-created'
+    monkeypatch.setenv('MEMOVERSE_SESSION_KEY', 'private-value')
+    with pytest.raises(RuntimeError, match='migrate configuration') as failure:
+        install_auth(FastAPI(), root)
+    assert 'private-value' not in str(failure.value)
+    assert not root.exists()
+
+
+def test_auth_environment_uses_keepsite_names(auth, monkeypatch):
+    for field, value in (
+        ('COGNITO_REGION', auth.config.region), ('COGNITO_USER_POOL_ID', auth.config.pool_id),
+        ('COGNITO_CLIENT_ID', auth.config.client_id), ('COGNITO_DOMAIN', auth.config.domain),
+        ('PUBLIC_URL', auth.config.public_url), ('SESSION_KEY', auth.config.session_key),
+        ('GOOGLE_ENABLED', 'true'),
+    ):
+        monkeypatch.setenv('KEEPSITE_' + field, value)
+    assert AuthConfig.from_env() == auth.config
+
+
+def test_old_client_header_cannot_authorize_new_write_protocol(auth):
+    response = auth.client.post('/api/auth/login',
+        headers={'Origin': PUBLIC, 'X-MemoVerse-Client': 'web'},
+        json={'email': 'person@example.com', 'password': PASSWORD})
+    assert response.status_code == 403
+    assert not auth.provider.actions
+
+
 def test_anonymous_business_is_rejected_health_is_public(auth):
     assert auth.client.get('/api/health').status_code == 200
     assert auth.client.get('/api/protected').status_code == 401
@@ -154,9 +182,10 @@ def test_login_cookie_tokens_encryption_csrf_and_callback(auth):
     assert result.status_code == 200
     body = result.json()
     assert body['authenticated'] and body['user']['email'] == 'person@example.com'
+    assert body['user']['id'] == hashlib.sha256((auth.config.issuer + '\0' + auth.provider.subject).encode()).hexdigest()
     assert auth.provider.actions[-1][-1] == ' StrongPass!123 '
     cookie = result.headers['set-cookie']
-    assert '__Host-memoverse_session=' in cookie and 'HttpOnly' in cookie and 'Secure' in cookie and 'SameSite=lax' in cookie and 'Domain=' not in cookie
+    assert '__Host-keepsite_session=' in cookie and 'HttpOnly' in cookie and 'Secure' in cookie and 'SameSite=lax' in cookie and 'Domain=' not in cookie
     sid = auth.client.cookies.get(auth.service.cookie_name)
     assert len(sid) == 43 and '.' not in sid
     with auth.service.db() as db:

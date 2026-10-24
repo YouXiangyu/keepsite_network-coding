@@ -15,7 +15,7 @@ from backend.auth import AuthError, hashed
 from backend.native_auth import APP_RETURN_URI, MAX_FLOWS
 from test_auth import auth, signing_key, login, PUBLIC, HEADERS, PASSWORD
 
-ANDROID = {'Origin': PUBLIC, 'X-MemoVerse-Client': 'android'}
+ANDROID = {'Origin': PUBLIC, 'X-Keepsite-Client': 'android'}
 
 
 def proof():
@@ -54,7 +54,7 @@ def completed(auth, browser, values):
     result = callback(auth, browser, params)
     assert result.status_code == 303
     uri = urlsplit(result.headers['location'])
-    assert uri.scheme == 'io.github.youxiangyu.memoverse' and uri.netloc == '' and uri.path == '/oauth/callback'
+    assert uri.scheme == 'io.github.youxiangyu.keepsite' and uri.netloc == '' and uri.path == '/oauth/callback'
     query = parse_qs(uri.query)
     assert set(query) == {'ticket', 'state'} and query['state'] == [values['state']]
     return query['ticket'][0], params
@@ -204,7 +204,7 @@ def test_callback_replay_after_completion_keeps_binding_and_never_sends_app_erro
         ticket = parse_qs(urlsplit(first.headers['location']).query)['ticket'][0]
         if consumed:
             assert redeem(auth, ticket, values).status_code == 200
-        browser.cookies.set(native.cookie_name, binding, domain='memoverse.test', path='/')
+        browser.cookies.set(native.cookie_name, binding, domain='keepsite.test', path='/')
         replay = callback(auth, browser, params)
         assert replay.headers['location'] == PUBLIC + '/?auth_error=google_login_failed'
         assert 'set-cookie' not in replay.headers
@@ -303,7 +303,7 @@ def test_native_payload_rejects_duplicates_redirect_injection_and_oversize(auth)
     raw = json.dumps(body)[:-1] + ',"state":"' + values['state'] + '"}'
     assert auth.client.post('/api/auth/native/google/start', headers=ANDROID, content=raw).status_code == 422
     assert auth.client.post('/api/auth/native/google/start', headers=ANDROID, content='x' * 4097).status_code == 422
-    assert APP_RETURN_URI == 'io.github.youxiangyu.memoverse:/oauth/callback'
+    assert APP_RETURN_URI == 'io.github.youxiangyu.keepsite:/oauth/callback'
 
 
 def test_native_pending_flow_capacity_is_bounded_and_expiry_reclaims_it(auth):

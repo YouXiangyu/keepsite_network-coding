@@ -338,8 +338,8 @@ def run(args):
     before = source_hashes()
     font, models = args.font.resolve(strict=True), args.models.resolve(strict=True)
     # Task-scoped process configuration is inherited by the real OCR children.
-    old_model_dir = os.environ.get("MEMOVERSE_OCR_MODEL_DIR")
-    os.environ["MEMOVERSE_OCR_MODEL_DIR"] = str(models)
+    old_model_dir = os.environ.get("KEEPSITE_OCR_MODEL_DIR")
+    os.environ["KEEPSITE_OCR_MODEL_DIR"] = str(models)
     try:
         from backend.ocr import availability, MANIFEST
         if not availability()["available"]:
@@ -378,9 +378,9 @@ def run(args):
                           "checks": report["checks"], "timings": report["timings"]}, ensure_ascii=False), flush=True)
     finally:
         if old_model_dir is None:
-            os.environ.pop("MEMOVERSE_OCR_MODEL_DIR", None)
+            os.environ.pop("KEEPSITE_OCR_MODEL_DIR", None)
         else:
-            os.environ["MEMOVERSE_OCR_MODEL_DIR"] = old_model_dir
+            os.environ["KEEPSITE_OCR_MODEL_DIR"] = old_model_dir
 
 
 def main():
