@@ -77,7 +77,7 @@
 | `src/MediaProvider.tsx`、`src/mediaCache.ts` | 账号媒体生命周期、校验、IndexedDB、LRU、读取队列和清理状态 |
 | `src/app/routes.ts`、`src/navigation.ts` | 唯一新路由与浏览器历史 |
 
-`src/mobile/` 与 mobile runtime lock 是独立归档，不在生产依赖图；其依赖仅为归档测试保留。Android 工程在 Web 完成后的 M7 于 `demo/` 之外建立。
+旧手机模拟器及其专属测试、素材和依赖已移除；历史实现可从 Git 追溯。Android 工程在 `demo/` 之外维护。
 
 ## 开发与验证
 

@@ -5,11 +5,9 @@
   "type": "module",
   "scripts": {
     "check:runtime": "node scripts/check-web-runtime.mjs",
-    "update:runtime-lock": "node scripts/update-mobile-runtime-lock.mjs",
     "test:runtime": "npm run test:web",
     "test:web": "playwright test --config=playwright.web.config.ts",
     "test:reliability": "npm run build && playwright test --config=playwright.reliability.config.ts",
-    "test:mobile-archive": "playwright test --config=playwright.config.ts",
     "test:p2p": "playwright test --config=playwright.p2p.config.ts",
     "test:unit": "node --test tests/api.test.mjs tests/data.test.mjs tests/media-cache.test.mjs tests/account-sync.test.mjs tests/data-channel.test.mjs tests/peer-media.test.mjs",
     "test:sites": "node --test tests/sites-worker.test.mjs",
@@ -22,10 +20,6 @@
   "dependencies": {
     "@phosphor-icons/react": "2.1.10",
     "@radix-ui/react-dialog": "1.1.19",
-    "@radix-ui/react-dropdown-menu": "2.1.20",
-    "@radix-ui/react-icons": "1.3.2",
-    "@use-gesture/react": "10.3.1",
-    "motion": "12.42.2",
     "react": "19.2.7",
     "react-dom": "19.2.7"
   },

@@ -102,17 +102,6 @@ class ObjectStore:
     def put_bytes(self, key: str, value: bytes, sha256: str, content_type: str):
         self._put(key, io.BytesIO(value), len(value), sha256, content_type)
 
-    def download(self, key: str, destination: Path, sha256: str):
-        digest = hashlib.sha256()
-        total = 0
-        with closing(self.open(key)) as incoming, destination.open("xb") as outgoing:
-            while chunk := incoming.read():
-                outgoing.write(chunk)
-                digest.update(chunk)
-                total += len(chunk)
-            if total != incoming.size or digest.hexdigest() != sha256:
-                raise StorageError("Object integrity check failed")
-
     def open(self, key: str) -> ObjectReader:
         raise NotImplementedError
 
