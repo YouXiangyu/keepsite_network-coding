@@ -1,5 +1,17 @@
 # keepsite 项目运行信息
 
+## 2026-10-25 自动发布管理组件安装与磁盘清理
+
+用户选择第三种自动部署方案，持续授权 main 经检查后由 CI 构建、EC2 开机/每五分钟拉取制品；不自动合并 PR、不自动开机、不调整 58 分钟关机时间。实现提交 81ca045，SDK 客户端显式关闭修复 a07db35；root 管理组件已安装，源代码和发布工作流仍在 PR #11，工作流合入 main 前尚不能宣称 GitHub 自动发布已启用。
+
+独立 IAM Policy Autopilot 从两段实际 SDK 代码生成基线并收窄到私有桶 deploy/keepsite/* 前缀。EC2 角色新增 KeepsiteDeploymentRead（GetObject、受 prefix 限制的 ListBucket），原媒体权限保留；新增 keepsite-github-main-publisher（GetObject/PutObject/受 prefix 限制 ListBucket），无删除、ACL 或 KMS 权限。OIDC audience=sts.amazonaws.com，实际 immutable subject 只信任 repo:YouXiangyu@148185441/network-coding@1423372245:ref:refs/heads/main，没有长期 AWS 密钥。源码、helper、SDK 管理 venv 均在 root-owned /opt/keepsite/admin，不从业务可写环境加载。
+
+keepsite-autodeploy.timer 已 enabled/active，OnBootSec=2min、OnUnitInactiveSec=5min；首次真实 S3 检查返回 no_candidate。当前已验证 v0.1 发布包另存为部署前缀基线，在实例上完整读取并校验 12812800 bytes 和 SHA256=14fb797e37e9786be774db78f33c0cb57411066ec936c2d4d9608192177331c2 后写 latest.json，指向已运行 5b8e35d，仅供验证，不切换业务版本。随后临近关机时返回 shutdown_window，证明窗口保护生效；原 auto-stop 到期仍为 2026-10-25 23:59:53，未延长。尚未验证 GitHub OIDC 首次发布和开机后候选自动激活，须工作流合入 main 后继续核对。
+
+worker 与 publisher 已独立审查，20 项定点测试通过，含哈希拒绝、无更新不重启、准确 main/workflow/App/check suite 门禁、两次失败限制、认证健康、enable 失败重试、prepare 后重新核对十分钟窗口及 SDK 关闭。首版不自动删除任何 release；空间不足停止。源代码已提交推送，最新提交 CI 须重新核对，不能沿用旧 head 的结果。
+
+用户另明确授权删除用不到的历史内容。核对旧 memoverse 服务 inactive/disabled、当前所有可读进程 cwd/exe/fd/maps 无目标引用后，删除 /opt/memoverse/releases 下五个已核验旧发布、旧 current 链接及 /opt/memoverse/shared/cache（旧 3D 依赖/模型/安装缓存），并清空 apt 下载缓存。当前 keepsite 5b8e35d、上一回滚版 810f900、keepsite 共享缓存、原票、数据库、各数据备份和旧 initial-template 均保留。10 GiB 卷的根文件系统约 8.65 GiB，当前应用连依赖约 128 MiB；主要旧占用来自系统、2 GiB swap、历史发布及旧模型缓存。释放约 2.02 GiB，安装管理 SDK 后可用约 3.20 GiB（3440336896 bytes）。清理证据在 output/autodeploy-2026-10-25/disk-cleanup.json，没有扩大到 S3 用户媒体或其他云资源。
+
 ## 2026-10-25 再次开机与自动部署方案评估
 
 用户明确要求再开机一次，并提出 main 更新自动部署、比较 GitHub Actions 与 Linux cron 的方案。通过官方 AWS MCP 核对账户和实例后启动同一 keepsite 实例；本次 LaunchTime 为北京时间 23:01:48，后续状态检查 2/2 通过，固定 IP 仍为 13.230.217.247，DNS、应用、Nginx 和开机 publish 均正常，HTTPS 200 且证书校验通过。实际应用仍为 v0.1 5b8e35d，未合并 PR #11 或切换应用发布。
