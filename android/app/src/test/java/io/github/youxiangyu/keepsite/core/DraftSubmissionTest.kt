@@ -9,7 +9,7 @@ class DraftSubmissionTest {
     private fun receipt() = JSONObject().put("serverId", "server").put("operationId", operation).put("committedCursor", 7)
 
     @Test fun uploadRejectionAndStatusConflictReleaseOnlyTheUploadStage() {
-        for (status in listOf(409, 413, 422)) {
+        for (status in listOf(409, 413, 415, 422)) {
             for (ticketPending in listOf(false, true)) {
                 var uploadPending = true
                 var ticketWrites = 0
