@@ -37,3 +37,11 @@ android/**/build/
 android/local.properties
 android/*.jks
 android/*.keystore
+
+# Local exports, test reports, distributable packages and signing keys
+/output/
+/test-results/
+*.apk
+*.aab
+*.jks
+*.keystore

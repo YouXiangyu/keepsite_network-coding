@@ -100,14 +100,8 @@ AAR 本身未包含 LICENSE/NOTICE，因此工程在 `app/src/main/assets/licens
 
 ## 验证状态
 
-2026-10-24 视觉第二轮：票夹采用真实错列、搜索/排序、紧凑片名日期和轻量底栏；显式刷新可重试失败图片且保留搜索，灰字对比度与触达区域已校验。34 JVM、Lint 0错误/13警告、最终同一真机5项UI通过，使用用户授权参考裁图的隔离账号验收。当前包位于 `.cache/visual-redesign-20261024/`；`memoverse-https-debug.apk` 为默认 HTTPS 开发签名包。详见 [视觉证据](../docs/evidence/visual-redesign-20261024.json)。UI测试需要向新媒体回归传入本轮 `runToken`；测试只隔离自身Activity的自动填充会话，不改变系统设置或生产行为。下方为此前检查点。
+原生客户端已纳入 V0，包名为 `io.github.youxiangyu.keepsite`。2026-10-24 的改名阶段通过 47 项 JVM 测试、构建及 Lint（0 错误、13 警告）；更早的视觉阶段覆盖模拟器、单台真机 UI 和 Android↔Web 双向传图。不同提交的结果不合并为最新版本完整验收。
 
-2026-10-24 更新：本轮应用代码通过 34 JVM、Lint（0 错误、10 警告）、360dp/大字号/800dp 平板共 9 次模拟器 UI，以及模拟器和一台用户授权 Android 16 真机的 CRUD、账号隔离、真实 JNI/DataChannel 双向传图。Web 已修复完成确认提前关闭竞态。真机完整 UI 仪器测试最终 3/3 通过；测试启动期间临时采用后台 Activity 启动权限，并在 finally 释放，API 29 以下保留原路径。输入、旋转、重建及后台恢复断言未放宽，独立审查通过。详见 [本轮证据](../docs/evidence/mobile-delivery-20261024.json) 和开发计划；下述 2026-10-23 内容为历史检查点。
+新版已在用户手机安装，用户反馈两台手机简单使用正常。完整故障矩阵、跨 NAT/TURN、16 KiB 真机及正式签名分发仍待完成。详细范围和原始历史入口见 [V0 验证摘要](../docs/V0验证摘要.md)。构建生成的 APK 不进入 Git，开发签名包不等于正式发布包。
 
-默认 HTTPS 验收包位于 `.cache/mobile-delivery-20261024/memoverse-https-debug.apk`，开发签名，连接 `https://keepsite.space`；服务器尚未部署新版。已测 loopback 包和测试包在同目录。互通校验器可用 `--physical --serial <明确授权设备>`，以及 `--apk` / `--test-apk` 指定工作区内保存的 APK；仍核对安装制品 SHA、随机夹具 token 和前后源码哈希。先确认目标设备没有未知的同包用户数据，不使用卸载或 `pm clear` 掩盖冲突。
-
-2026-10-23 保存为 `codex/android-native-progress` 的 **M7 WIP 检查点**，不属于已验收版本。最近一轮 `assembleDebug`、`assembleDebugAndroidTest`、**34 项 JVM 测试**通过；`lintDebug` 为 0 错误、10 警告。已有 APK 是仅供本机夹具使用的 4180 构建，尚未生成供用户验收的默认 HTTPS 包。
-
-平板返回前台曾因复用已被服务器关闭的闲置连接而失败。修正后，JSON 和媒体 GET 在既有超时内允许 OkHttp 恢复连接，写请求保持不自动重试；WS 回调保留原始代次和连接归属。原失败场景在实际后台停留 6001ms 后自动恢复，严格断言通过且未手动刷新；534ms 的记录包含连续 500ms 的健康状态等待，不作为网络性能测量。最新 APK 的完整 UI 矩阵、真实 Android↔Web 双向传图和原生 CRUD 仪器联调仍未完成。检查点证据与下一步见 [开发计划](../docs/开发计划.md) 和 [有限验证记录](../docs/evidence/android-m7-checkpoint-20261023.json)。
-
-两台 Android 真机验收由用户执行。真实 Google/邮箱、私有 S3/CORS、实际票据、跨网络、免费 TURN、16 KiB 设备，以及正式发布签名与分发均不能由本机合成夹具或模拟器替代。本阶段没有启动、发布或调整 EC2，也没有改变 58 分钟自动关机约定。
+测试安装前确认目标设备和包名，不以卸载或清数据掩盖冲突。真实登录、私有 S3/恢复和实际票据不能由合成夹具结果替代。
