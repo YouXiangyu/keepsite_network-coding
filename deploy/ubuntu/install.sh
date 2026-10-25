@@ -21,7 +21,7 @@ Plan for Ubuntu 24.04:
   Host initialization requested: $INITIALIZE_HOST (apt/user/global logs only when 1).
   Prepare keepsite service user and $RELEASE Python 3.12 venv.
   Link release .cache to /opt/keepsite/shared/cache; prepare separate account data at /var/lib/keepsite-v3; preserve all old /var/lib/memoverse* directories.
-  Install pinned application and CPU OCR dependencies. Models require a separate explicit preparation; this installer does not download them.
+  Install pinned application dependencies only; ticket recognition uses the configured remote API, with no local model download or CPU fallback.
   Initial host setup writes log limits; no environment or authentication defaults are created.
   Do NOT change current symlink, start application, enable a public Nginx site,
   create credentials/TLS/swap, or modify DNS. Planned origin: https://$DOMAIN

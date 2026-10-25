@@ -56,6 +56,9 @@ APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。本机 debug key 位于
 - HTTP 与 WebSocket 使用同一后端会话。原生写请求明确标记 `X-Keepsite-Client: android`，仍发送固定 Origin 与会话 CSRF；该标记不是身份凭据，也不豁免用户归属检查。
 - Google 登录交给系统浏览器，返回 `io.github.youxiangyu.keepsite:/oauth/callback`。App 校验固定 URI、单值 state 与有效期，用自己保存的 S256 verifier 兑换一次性票据；不在回调 URI 中接收 Cognito token，也不从浏览器复制会话 cookie。
 - 图片选择使用系统 Photo Picker，读取用户明确选择的 URI 并复制为私有草稿。不申请整个照片库、外部存储、相机或麦克风权限。未确认上传的草稿与可回收媒体缓存分开保存。
+- JPEG、PNG、WebP 保持原始字节；HEIC/HEIF 在支持解码的 Android 9+ 设备上先转换为 JPEG，手机相册源文件保持不变，云端只保存转换结果。Android 8 或缺少对应解码能力的设备提示先在相册导出 JPEG，不承诺仅凭系统版本一定可解码。其他格式仍明确拒绝。
+- 输入仍限 12 MiB、4000 万像素。HEIC/HEIF 在解码分配前缩至最长边 3072、最多 600 万像素，软件 sRGB 解码，由平台处理旋转与镜像，再以质量 90 保存 JPEG；透明区域使用白底，转换结果也限 12 MiB。界面明确提示转换，不把转换结果描述成源 HEIC 原件。
+- 单次读取与转换最多等待 20 秒；进入后台、退出账号或关闭客户端会取消导入。导入与 provider 资源关闭使用固定有界线程，不在界面线程等待 provider 关闭。极端 provider 若拒绝取消和关闭，不再为后续选择创建新线程，提示稍后重试；仍可编辑票根。失败或过期导入不能替换已有草稿照片与字段。
 - 前台是设备传输基线。进入后台、退出或换号会撤销旧网络与 peer 生命周期；旧代请求不能发布新状态。返回前台重新确认会话并补拉游标，不承诺锁屏、后台或进程关闭后持续 P2P。
 - 原图与海报长期保存由服务端云存状态确认；本机按账号缓存，预算 128 MiB。文件按 SHA-256、长度、类型与图片尺寸校验，成功提交后才标为缓存完成。空间或写入失败可临时展示，不伪称已缓存；清本机缓存不删除云端记录。
 - 写操作保留 `operationId`，上传保留 `uploadId`；超时先核对结果，再补拉到 `{serverId, committedCursor}` 屏障。不增加离线 CRUD。
@@ -99,6 +102,8 @@ WebRTC 打包标签 `v150.7871.01` 指向提交 `45d64c8be316b89e139d20ea5160202
 AAR 本身未包含 LICENSE/NOTICE，因此工程在 `app/src/main/assets/licenses/` 附带固定提交的 WebRTC BSD 许可、PATENTS 授权、打包仓库 MIT 许可和完整维护者第三方通知；这些文本随 APK 放入 `assets/licenses/`。来源、版本、原始字节数与 SHA-256 见 [sources.json](app/src/main/assets/licenses/sources.json)。通知使用对应发布提交的原文，不混用 `main` 最新内容；这不等同于重新审计每个传递原生组件。
 
 ## 验证状态
+
+2026-10-25 HEIC 导入修复：56 项 JVM 测试通过、无失败或跳过，主 APK 与仪器 APK 构建通过，Lint 为 0 错误、10 警告；最终纯提示文案变更重新构建通过。新增真实 HEIC、旋转与镜像仪器用例已编译，但本机隔离模拟器未能启动 Android 系统，用例尚未执行，不能视作真实解码或卡死场景已验收。API 26/27 拒绝路径、实际问题照片及完整草稿界面恢复仍待设备验证；没有安装到用户手机或发布服务器。
 
 原生客户端已纳入 V0，包名为 `io.github.youxiangyu.keepsite`。2026-10-24 的改名阶段通过 47 项 JVM 测试、构建及 Lint（0 错误、13 警告）；更早的视觉阶段覆盖模拟器、单台真机 UI 和 Android↔Web 双向传图。不同提交的结果不合并为最新版本完整验收。
 

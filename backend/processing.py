@@ -1,4 +1,4 @@
-"""Redis Streams delivery with durable SQL leases and terminable CPU OCR."""
+"""Redis Streams delivery with durable SQL leases and terminable Qwen recognition."""
 from contextlib import closing
 import hashlib
 import json
@@ -16,15 +16,15 @@ from pydantic import ValidationError
 from redis.exceptions import RedisError, ResponseError
 
 from . import processing_repository as repository
-from .contracts import TicketFields
 from .media import MAX_IMAGE_BYTES, image_info
 from .object_storage import S3ObjectStore, StorageError
 from .store import now_ms
+from .ticket_recognition import RecognitionError, validate_fields
 
 log = logging.getLogger(__name__)
-OCR_TIMEOUT_SECONDS = 45
+RECOGNITION_TIMEOUT_SECONDS = 45
 # Checked at stage/stream-return boundaries; synchronous S3 body reads are not
-# forcibly interruptible by this budget. Only the OCR child has a hard timeout.
+# forcibly interruptible by this budget. Only the recognition child has a hard timeout.
 ATTEMPT_TIMEOUT_SECONDS = 85
 TEMP_RETENTION_SECONDS = 24 * 60 * 60
 TEMP_NAME = re.compile(r"^[a-f0-9]{32}\.image$")
@@ -38,23 +38,30 @@ class ProcessingFailed(Exception):
     pass
 
 
-def _ocr_child(raw, output):
+def _recognition_child(raw, output):
     try:
-        for name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
-            os.environ[name] = "1"
-        from .ocr import recognize
-        output.send({"fields": recognize(raw)})
-    except BaseException:
-        output.send({"error": True})
+        try:
+            from .ticket_recognition import recognize
+            result = {"fields": recognize(raw)}
+        except RecognitionError as error:
+            result = {"error": error.code}
+        except BaseException:
+            result = {"error": "invalid_response"}
+        try:
+            output.send(result)
+        except (OSError, EOFError):
+            pass  # The owner may already have stopped or timed out this attempt.
     finally:
         output.close()
 
 
-def run_isolated_ocr(raw, *, stopping=lambda: False, timeout=OCR_TIMEOUT_SECONDS, target=None):
+def run_isolated_recognition(raw, *, stopping=lambda: False, timeout=RECOGNITION_TIMEOUT_SECONDS, target=None):
     """Every attempt owns its process and pipe; timeout/stop terminates the process."""
+    if stopping():
+        raise ProcessingInterrupted()
     context = multiprocessing.get_context("spawn")
     incoming, outgoing = context.Pipe(duplex=False)
-    process = context.Process(target=target or _ocr_child, args=(raw, outgoing), daemon=True)
+    process = context.Process(target=target or _recognition_child, args=(raw, outgoing), daemon=True)
     started = False
     try:
         process.start()
@@ -69,9 +76,11 @@ def run_isolated_ocr(raw, *, stopping=lambda: False, timeout=OCR_TIMEOUT_SECONDS
                     message = incoming.recv()
                 except EOFError:
                     raise ProcessingFailed() from None
-                if not isinstance(message, dict) or "error" in message:
+                if not isinstance(message, dict):
                     raise ProcessingFailed()
-                return TicketFields.model_validate(message.get("fields")).model_dump(exclude_unset=True)
+                if "error" in message:
+                    raise RecognitionError(message["error"])
+                return validate_fields(message.get("fields"))
             if not process.is_alive():
                 raise ProcessingFailed()
         raise ProcessingFailed()
@@ -133,12 +142,12 @@ class ProcessingQueue:
 
 
 class ProcessingWorker:
-    def __init__(self, store, shared_state, *, provider=None, ocr_runner=None, ocr_status=None):
+    def __init__(self, store, shared_state, *, provider=None, recognition_runner=None, recognition_status=None):
         self.store = store
         self.stopping, self.waking = threading.Event(), threading.Event()
         self.owner = str(uuid.uuid4())
         self.provider = provider
-        self.ocr_runner = ocr_runner or run_isolated_ocr
+        self.recognition_runner = recognition_runner or run_isolated_recognition
         self.thread = threading.Thread(target=self._loop, name="keepsite-ticket-processing", daemon=True)
         self.queue = None
         self._scanner = None
@@ -149,11 +158,11 @@ class ProcessingWorker:
         elif shared_state.client is None:
             reason = "Redis 处理队列尚未配置。"
         else:
-            if ocr_status is None:
-                from .ocr import availability
-                ocr_status = availability()
-            if not ocr_status["available"]:
-                reason = ocr_status.get("reason") or "OCR 模型尚未就绪。"
+            if recognition_status is None:
+                from .ticket_recognition import availability
+                recognition_status = availability()
+            if not recognition_status["available"]:
+                reason = recognition_status.get("reason") or "电影票识别接口尚未就绪。"
         if reason is None:
             if self.provider is None:
                 from .tmdb_posters import configured_provider
@@ -236,7 +245,7 @@ class ProcessingWorker:
             if prepared is False:
                 completed = repository.fail(self.store, job, interrupted=True)
             else:
-                # Publishing never repeats OCR/download/upload. Its artifact is
+                # Publishing never repeats recognition/download/upload. Its artifact is
                 # durable, and a later lease can independently verify and publish.
                 for attempt in range(3):
                     try:
@@ -250,6 +259,8 @@ class ProcessingWorker:
                     completed = repository.fail(self.store, job, interrupted=True)
         except ProcessingInterrupted:
             completed = repository.fail(self.store, job, interrupted=True)
+        except RecognitionError as error:
+            completed = repository.fail(self.store, job, retryable=error.retryable)
         except (ProcessingFailed, StorageError, OSError, ValidationError):
             completed = repository.fail(self.store, job)
         except sqlite3.Error:
@@ -281,7 +292,8 @@ class ProcessingWorker:
             return prepared
         if job["ocr_fields"] is None:
             raw = self._original(job, stopping)
-            candidates = self.ocr_runner(raw, stopping=stopping, timeout=min(OCR_TIMEOUT_SECONDS, max(0.1, deadline - time.monotonic())))
+            check()
+            candidates = self.recognition_runner(raw, stopping=stopping, timeout=min(RECOGNITION_TIMEOUT_SECONDS, max(0.1, deadline - time.monotonic())))
             check()
             fields = repository.save_ocr(self.store, job, candidates)
             if fields is None:

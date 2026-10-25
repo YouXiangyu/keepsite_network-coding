@@ -24,6 +24,7 @@ class AppRepository(context: Context) : AppController {
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
     private val mediaWorkers = Executors.newFixedThreadPool(4)
+    private val photoImporter = PhotoImporter(this.context.contentResolver)
     private val listeners = CopyOnWriteArrayList<(AppState) -> Unit>()
     private val mediaJobs = CopyOnWriteArrayList<MediaJob>()
     private val secrets = SecretStore(context)
@@ -100,6 +101,7 @@ class AppRepository(context: Context) : AppController {
     }
     override fun clearNotice() = publish { it.copy(error = "", message = "") }
     override fun setForeground(foreground: Boolean) {
+        if (!foreground) photoImporter.cancel()
         synchronized(lock) {
             if (closed || this.foreground == foreground) return
             this.foreground = foreground
@@ -268,6 +270,7 @@ class AppRepository(context: Context) : AppController {
     }
     private fun randomProof(): String = Base64.encodeToString(ByteArray(32).also(SecureRandom()::nextBytes), Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
     override fun logout() {
+        photoImporter.cancel()
         synchronized(lock) {
             if (closed) return
             api.cancelRequests(); stopAccount(); secrets.clear("google-proof")
@@ -344,22 +347,20 @@ class AppRepository(context: Context) : AppController {
     override fun selectPhoto(uri: Uri) = run("正在读取照片") { expected ->
         val active = draft ?: throw ApiFailure(message = "请先新建或编辑票根。")
         if (active.awaitingConfirmation) throw ApiFailure(message = "请先核对上次提交结果。")
-        val bytes = context.contentResolver.openInputStream(uri)?.use { stream ->
-            val output = java.io.ByteArrayOutputStream(); val buffer = ByteArray(16 * 1024)
-            while (true) {
-                guard(expected); val size = stream.read(buffer); if (size < 0) break
-                if (output.size().toLong() + size > MAX_IMAGE_BYTES) throw ApiFailure(message = "图片超过 12 MiB。")
-                output.write(buffer, 0, size)
-            }
-            output.toByteArray()
-        } ?: throw ApiFailure(message = "无法读取所选照片。")
-        val ref = ImageFiles.inspect(bytes); guard(expected)
+        val prepared = photoImporter.read(uri)
+        val bytes = prepared.bytes
+        val ref = prepared.media
+        guard(expected)
         val file = File(draftDirectory(), "photo-${UUID.randomUUID()}")
         try {
             FileOutputStream(file).use { out -> out.write(bytes); out.fd.sync() }
-            guard(expected)
-            setDraft(active.copy(photo = file, mime = ref.mimeType, uploadId = UUID.randomUUID().toString(), uploaded = null))
-            active.photo?.delete()
+            synchronized(lock) {
+                guard(expected)
+                if (draft !== active) throw CancellationException()
+                setDraft(active.copy(photo = file, mime = ref.mimeType, uploadId = UUID.randomUUID().toString(), uploaded = null))
+                active.photo?.delete()
+                if (prepared.converted) publish { it.copy(message = "HEIC/HEIF 已转为 JPEG；较大图片会缩小，手机源文件未修改，云端仅保存转换结果。") }
+            }
         } catch (failure: Exception) { file.delete(); throw failure }
     }
     private fun applied(operationId: String): Receipt? {
@@ -520,6 +521,7 @@ class AppRepository(context: Context) : AppController {
         return job
     }
     override fun close() {
+        photoImporter.close()
         synchronized(lock) {
             if (closed) return
             closed = true; foreground = false; api.cancelRequests(); stopAccount(); api.close()

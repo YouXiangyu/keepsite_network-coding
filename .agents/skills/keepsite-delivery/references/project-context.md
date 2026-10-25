@@ -1,4 +1,24 @@
 # keepsite 项目运行信息
+## 2026-10-25 千问识别配置与独立联调（未发布应用代码）
+
+用户明确以本人北京百炼工作空间的 `qwen3.7-flash` 替换本地 OCR（D-081），并授权将提供的 Key 配置到本机与 EC2。Key 仅保存于本机 `.cache/server/keepsite-qwen.env`（当前用户与 SYSTEM 访问，Git 忽略）及服务器 `/etc/keepsite.env`（root:root 0600），不记录值或哈希。配置项为 `KEEPSITE_QWEN_API_KEY`、`KEEPSITE_QWEN_BASE_URL`、`KEEPSITE_QWEN_MODEL`；本机文件按后端 README 显式加载到进程，不全局写入注册表。浏览器核对了官方模型页和工作空间调用示例，保留原“免费额度用完即停”设置。
+
+本机手工兼容接口、源码识别适配器的 45 秒隔离进程、EC2 keepsite 服务身份均完成一次合成票面五字段调用验证；这些是单样本连通与结构验证，不是实际票据准确率或性能基准。安全明细在本机 `output/qwen-recognition-2026-10-25/`。服务器测试临时客户端已移除，没有写业务库、上传用户照片或更改 S3/Cognito/TMDB 配置。
+
+本次仅为配置维护启动 `i-0e9ba9bc6f4b1c019`，状态检查 2/2 通过，核验时 IP 为 `13.114.44.30`。`keepsite-auto-stop.timer` enabled/active，仍为 OnBootSec=58min，本次到期为北京时间 2026-10-25 19:03:16，未延长或重置；实例 shutdown behavior 已核对为 stop。后续状态和 IP 必须重新查询。
+
+实际 `/opt/keepsite/current` 仍指向 `810f900cd6f3d664cf96af3095b44a5bbea197ff`，没有切换应用发布链接或手动重启应用服务。千问新代码须完成独立审查、测试、提交及后续明确授权发布后才进入生产流水线；不能把凭据已配置写成线上 OCR 已替换。旧 CPU 模型、依赖副本、数据库及回滚发布均保留。
+
+## 2026-10-25 V0 基线与测试 EC2 清理
+
+用户确认当前版本为 V0。附注标签 `v0` 已推送并读回核对，指向 `main@2cb7b06b73cc4adbb6a42320872b022635489cec`；后续修复从该基线继续。
+
+用户明确确认两台旧测试实例及各自根磁盘均无需保留数据，允许永久删除、不创建快照。东京账号 `125647512944` 下的 `i-0f636c3e4868d24d7`（t3.nano，名称含 test）和 `i-06f3d9b03ffbf42aa`（未命名 t3.micro）已终止；读回均为 `terminated`。两块随实例删除的 8 GiB gp3 卷 `vol-07f1c7efbe59aaf5d`、`vol-081d1d6d77d3f04db` 按 volume-id 过滤查询结果为空。执行前核对账号、停止状态、无实例角色、准确卷映射、DeleteOnTermination 和无 Auto Scaling 归属；没有扩展删除安全组、密钥或其他云资源。
+
+keepsite 的 `i-0e9ba9bc6f4b1c019` 与 10 GiB 卷 `vol-0bb6aa01805d28c75` 保留，清理后实例读回为 `stopped`。本次未启动、部署或更改其 58 分钟自动关机策略，也未改 S3、Cognito 或业务数据。清理明细保存在本机 `output/aws-test-cleanup-2026-10-25/`，不纳入 Git。
+
+当日 AWS Pricing API 核实东京 gp3 容量价为 `0.096 USD/GB-month`。删除 16 GiB 测试磁盘预计减少抵扣前容量费用 `1.536 USD/月`，keepsite 10 GiB 约 `0.96 USD/月`；实际按持有时间、抵扣和税费结算。该估算不是新增收费或全部云资源月费用承诺。
+
 ## 2026-10-25 阶段收尾与用户试用反馈
 
 当前进入主要开发完成后的测试、debug 与修复阶段，不把这一结论等同于所有文档验收项完成。2026-10-24 后续已在连接的手机安装 `io.github.youxiangyu.keepsite`，确认前台为新包，票夹及《流浪地球2》海报正常显示；旧应用及数据保留。2026-10-25 用户反馈对两台手机简单使用后感觉没有明显问题，记录为用户简单试用反馈，不据此宣称并发修改、断网重连、跨网络和全部双真机矩阵已完成。
@@ -54,9 +74,9 @@ TMDB 只读令牌已从本机 `.cache/server/keepsite-tmdb.env` 安全配置到�
 | 实例 ID / 名称 / 可用区 | `i-0e9ba9bc6f4b1c019` / `memoverse-keepsite` / `ap-northeast-1a` |
 | 规格 | `t3.small`：x86_64、2 vCPU、2 GB RAM；CPU credits 为 standard，避免 surplus credit 费用 |
 | 系统与磁盘 | Canonical Ubuntu 24.04；10 GB 加密 gp3 根卷 `vol-0bb6aa01805d28c75`，旧 20 GB 卷已删除 |
-| 最近运行状态 | 2026-10-24 发布核验时实例为 running，公网 IP `52.196.89.220`，自动关机到期为北京时间 23:53:26。该状态只代表当时核验；2026-10-18 19:46 的 stopped 是更早一次停机。操作前必须重新查询 |
+| 最近运行状态 | 2026-10-25 千问配置维护时 running，状态检查 2/2 通过；自动关机到期北京时间 19:03:16。仅代表本次核验，操作前重新查询 |
 | 最近应用运行提交 | `810f900cd6f3d664cf96af3095b44a5bbea197ff`，`/opt/keepsite/current` 与当时 MainPID 的 cwd 一致。此前线上观测版本是 `2e74f23408afb26410c45b6c86515cd7964c3f13` |
-| 公网 IPv4 | 2026-10-24 发布核验为 `52.196.89.220`。动态地址在停机后释放；`54.150.236.186`、`43.207.114.190`、`18.181.150.249`、`13.230.191.15` 是更早地址。每次启动必须重新查询 |
+| 公网 IPv4 | 2026-10-25 配置核验为 `13.114.44.30`；2026-10-24 的 `52.196.89.220` 及其他旧地址仅供历史定位。动态地址在停机后释放，每次启动重新查询 |
 | Launch template / 新建默认版本 | `lt-016bca8507ac81480` / `2`，根盘默认 10 GB |
 | 安全组 / SSH key pair | `sg-0f472ac3891c65681` / `memoverse-ec2-20261017` |
 | SSH 用户 | `ubuntu` |
@@ -68,7 +88,7 @@ TMDB 只读令牌已从本机 `.cache/server/keepsite-tmdb.env` 安全配置到�
 | Cognito 网站客户端 / 登录域名 | `4eitpctiqil0pjgv0no8j1i8if` / `https://keepsite-125647512944.auth.ap-northeast-1.amazoncognito.com`；无客户端密钥，Google 与 COGNITO 已启用 |
 | Google 登录项目 | `keepsite-auth-20261018`。控制台显示名仍是 `MemoVerse Login`，本次没有修改 Google 品牌。Web OAuth 只回调 Cognito 的 `/oauth2/idpresponse`，应用保持外部测试模式 |
 
-管理端公网 IP 受 EC2 安全组 SSH 规则限制。连接失败先核对当前规则和管理端 IP，不直接放宽到所有来源。账户原有另外两台停止的测试实例不属于本项目，不得顺手启动、改规格或清理。
+管理端公网 IP 受 EC2 安全组 SSH 规则限制。连接失败先核对当前规则和管理端 IP，不直接放宽到所有来源。账户原有另外两台测试实例已按上方 2026-10-25 用户授权清理记录终止；该次授权不扩展到 keepsite 或其他资源。
 
 ## 本机与服务器路径
 
@@ -88,10 +108,10 @@ TMDB 只读令牌已从本机 `.cache/server/keepsite-tmdb.env` 安全配置到�
 | Google OAuth 凭据 | 本机 `.cache/server/google-oauth.json`，仅本机用户可读；已安全配置到 Cognito，临时 S3 传输副本已按版本删除并核验为空 |
 | 应用环境 | 正式文件 `/etc/keepsite.env`；候选 `/etc/keepsite.env.next`。本机候选 `.cache/server/account.env.next`。含会话加密密钥，不输出或纳入 Git。旧 `/etc/memoverse.env` 保留 |
 | DDNS 服务 / 程序 / 状态 | `keepsite-ddns.service` / `/opt/keepsite/admin/sync-cloudflare-dns.py` / `/var/lib/keepsite-ddns/state.json`。旧 `memoverse-ddns.service` 与 `/var/lib/memoverse-ddns/state.json` 保留 |
-| 本机模型与推理依赖 | 当前 CPU OCR 固定模型为 `.cache/ocr-models/ppocrv6-tiny`，依赖在 `backend/.venv`；旧 `.cache/models`、`.cache/anyimage`、`.cache/anyimage-deps` 保留 |
+| 本机识别配置与历史模型 | 新源码使用 `.cache/server/keepsite-qwen.env`，依赖在 `backend/.venv`；已退役 CPU 模型 `.cache/ocr-models/ppocrv6-tiny`、旧 `.cache/models`、`.cache/anyimage`、`.cache/anyimage-deps` 保留，不作为新发布运行前置 |
 | 部署入口 | `scripts/deploy-ubuntu.ps1`，`Server` 必填，默认计划模式，`-Execute` 执行；`-PrepareOnly` 只准备，`-EnvironmentPath /etc/keepsite.env.next` 与 `-NginxPath /etc/nginx/sites-available/keepsite.next` 指定候选配置；新机另加 `-InitializeHost` |
 | 一次性数据迁移 | `scripts/package-server-data.py`，SQLite backup API + 文件 SHA-256 清单 |
-| Linux 安装 / 模型准备 | `deploy/ubuntu/install.sh` / `scripts/prepare-ocr.py`（默认只显示计划）；不再运行旧 AnyImage 准备链 |
+| Linux 安装 / 识别配置 | `deploy/ubuntu/install.sh` 仅安装基本依赖；千问三项环境由受限文件单独配置，不自动写入凭据。新运行链不再准备 CPU/AnyImage 模型，旧生产版本事实见上文 |
 | 发布目录 / 当前链接 | `/opt/keepsite/releases/<完整commit>` / `/opt/keepsite/current`。旧 `/opt/memoverse/current` 保留到切换前 |
 | 服务器持久数据（最近已部署版本） | `/var/lib/keepsite-v3`。旧 `/var/lib/memoverse-v2` 与 `/var/lib/memoverse` 保留 |
 | 服务器共享模型缓存 | `/opt/keepsite/shared/cache`。旧 `/opt/memoverse/shared/cache` 保留，新版不覆盖旧模型目录 |

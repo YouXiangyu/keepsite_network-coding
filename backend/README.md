@@ -10,7 +10,7 @@ M4 沿用独立 SQLite schema 3，通过固定分页快照、持久增量和 Web
 - 新账号创建空票夹，无初始化模板、社交、分类、标签、徽章或浮雕任务。原 AnyImage worker 不再加载；不安装或下载旧模型。
 - 票根包含片名、影院、影厅、座位和放映时间，允许为空。放映时间只接受可靠的本地 ISO 分钟格式 `YYYY-MM-DDTHH:mm`。字段来源、时间、版本、输入版本与删除墓碑单独保存。
 - 按字段在线修改；同字段按服务端事务应用顺序生效，不同字段分别保留。每次写入携带稳定 `operationId`；相同操作重放返回已确认的同步屏障，不同载荷复用操作标识返回 409。删除墓碑阻止旧请求复活记录。
-- 原票和海报分别引用；纠错不提前撤下既有有效海报。配置私有 S3、Redis 与固定 OCR 模型后，自动登记 OCR/海报任务；缺少条件时 `capabilities.processing=false`，并通过 `processingUnavailableReason` 说明原因，不伪造识别结果。设备 P2P 留待 M5。
+- 原票和海报分别引用；纠错不提前撤下既有有效海报。配置私有 S3、Redis、远程视觉识别接口和海报来源后，自动登记识别/海报任务；缺少条件时 `capabilities.processing=false`，并通过 `processingUnavailableReason` 说明原因，不伪造识别结果。设备 P2P 留待 M5。
 - 票根变更、操作幂等和 `ticket_changes` 在同一事务提交；每账号 `revision` 是持久变更游标，创建、修改、删除都保存完整票根快照，删除快照包含墓碑。上传核对不占用票根游标。`sync_baselines` 标记历史边界：M1 旧库、隔离迁移和备份恢复从其当前 revision 建立基线，不伪造之前的增量。
 
 ## 登录方式绑定
@@ -47,15 +47,17 @@ S3 核对使用 `HeadObject(ChecksumMode=ENABLED)` 返回的原生完整 `Checks
 
 Redis I/O 只发生在完成的 SQL 事务之间；写操作直接提交数据库，不等待 Redis。连接和读超时均为 0.5 秒、零自动重试，生命周期关闭连接池。缓存 miss 使用批量媒体、处理状态和出处查询，避免每张票单独查资产。完整能力配置参与缓存身份，未配置原因变化不会复用旧提示。在线设备状态仍未实现。
 
-## OCR 与海报处理
+## 远程票据识别与海报处理
 
 `processing_jobs` 与创建/修改票根在同一事务登记。原票或用户片名/放映时间变化时推进 `inputVersion`、取消旧任务并登记新任务；处理和有限重试期间保留既有海报，最终 `no_match` 或 `failed` 时在同一事务撤销旧海报引用与来源、发布增量并恢复原票封面，不直接删除存储对象。更换原票时清空旧 OCR 来源字段，保留用户及迁移来源。OCR 只返回五字段候选，非空可靠结果才能写入，不能覆盖 user/migration 来源；全文不持久保存或写日志。
 
 任务由 Redis Streams 消费者组投递，消息仅含 jobId。数据库每 10 秒允许补投未完成任务，队列删除、入队中断和重复消息不丢处理意图；消费者通过 90 秒 SQL 租约、递增 token、当前 job、账号、原图和 inputVersion 校验发布资格。计算/网络均在写事务外，每任务最多 3 次尝试、总窗口 10 分钟。即使 Redis 持续失联，过期任务也由独立 SQL 检查收敛为 failed。原票保存响应不等待 OCR。
 
-每次 OCR 尝试使用独立 spawn 子进程，最多 45 秒；停止/超时终止并回收进程和管道。子进程在导入 OCR 之前限定 OMP/OpenBLAS/MKL 线程为 1，OCR 引擎也使用单 CPU 线程；每任务包含模型冷启动成本。模型目录由 `KEEPSITE_OCR_MODEL_DIR` 明确指定，固定依赖、文件与字典哈希见 `ocr-models.json`，不在运行时下载模型。
+票据识别由 `backend/ticket_recognition.py` 调用用户配置的远程视觉 API，当前用户选择的模型标识为 `qwen3.7-flash`。只使用已有 `httpx` 依赖，不安装模型 SDK、RapidOCR 或 ONNX Runtime，也不下载 CPU 模型或回退到本地 OCR。服务器私密环境必须明确设置 `KEEPSITE_QWEN_API_KEY`、`KEEPSITE_QWEN_BASE_URL` 和 `KEEPSITE_QWEN_MODEL`，不内置服务地址或模型默认值；API Key 只在服务端读取，不进入客户端、Git、日志、请求 URL 或业务响应。配置可用不代表服务商已验证该模型权限、余额或响应能力，真实接口可用性仍须实际核验。
 
-85 秒尝试预算和停止信号在阶段边界、流读取返回后检查；它们不是整个 S3 网络操作的硬截止。botocore 的 5 秒读取超时针对 socket 等待，持续低速且不空闲的流可能让一次聚合读取超过该墙钟预算。当前不通过私有 StreamingBody 接口或强杀 Python 线程绕过限制；只有 OCR 子进程能在 45 秒硬终止。SQL 租约/输入版本仍拒绝超期结果发布，服务关停不延长 EC2 倒计时。真实 S3 慢流耗时和退出行为属于后续测量边界，不能由 fixture 测试宣称已经保证严格端到端超时。
+每次识别尝试使用独立 spawn 子进程，最多 45 秒，包含图片准备、HTTPS 请求和结构化字段校验；停止/超时终止并回收进程和管道。原票会发送给配置的第三方识别服务，可能产生 API 费用；失败时保留原票和用户填写字段，沿用有限重试与失败状态，不启用本地替代模型。数据库的 `ocr_fields`、字段来源 `ocr` 和处理状态 `ocr` 保留为既有自动识别契约，不代表仍在执行 CPU 推理。
+
+85 秒尝试预算和停止信号在阶段边界、流读取返回后检查；它们不是整个 S3 网络操作的硬截止。botocore 的 5 秒读取超时针对 socket 等待，持续低速且不空闲的流可能让一次聚合读取超过该墙钟预算。当前不通过私有 StreamingBody 接口或强杀 Python 线程绕过限制；只有识别子进程能在 45 秒硬终止。SQL 租约/输入版本仍拒绝超期结果发布，服务关停不延长 EC2 倒计时。真实 S3 慢流耗时和退出行为属于后续测量边界，不能由 fixture 测试宣称已经保证严格端到端超时。
 
 海报来源由后端 `KEEPSITE_POSTER_PROVIDER` 明确选择：默认 `commons` 保留原 Wikimedia Commons 匹配；`tmdb` 使用 TMDB 电影 API，并从私密环境读取 `KEEPSITE_TMDB_READ_ACCESS_TOKEN`。只读令牌通过 Bearer 请求头发送，仅限 TMDB API 主机，不发给图片 CDN；不进入客户端、Git、请求 URL 或业务响应；缺少配置时明确显示处理不可用。不会在匹配失败后串联不同来源猜测封面。TMDB 检查规范化片名、原名或经过 API 验证的别名，同名作品不按热度选择；可用片名中的显式年份消歧，放映时间不被当成首映年份。网络地址、响应大小、下载类型和实际图片均受校验。
 
@@ -140,8 +142,34 @@ backend/.venv/Scripts/python.exe -B scripts/restore-account-backup.py --archive 
 
 Python 3.12/3.13，依赖使用 `backend/.venv`。测试均在隔离目录，认证/S3 为显式 fixture；真实身份服务及真机验收另行执行。
 
+本机识别配置位于 Git 忽略、权限受限的 `.cache/server/keepsite-qwen.env`，每行使用不带引号的 `KEY=value`。应用不会自动读取该文件；在已经配置好 Cognito、S3、Redis 等环境的仓库根目录终端，可用下例仅加载三个识别变量到当前进程并启动后端，不执行环境文件或输出配置值，也不写用户注册表。退出后恢复终端原有的三个变量。
+
+```powershell
+$qwenNames = @('KEEPSITE_QWEN_API_KEY', 'KEEPSITE_QWEN_BASE_URL', 'KEEPSITE_QWEN_MODEL')
+$qwenLines = Get-Content -LiteralPath '.cache/server/keepsite-qwen.env' -ErrorAction Stop
+$previousQwenEnvironment = @{}
+foreach ($qwenName in $qwenNames) {
+    $previousQwenEnvironment[$qwenName] = [Environment]::GetEnvironmentVariable($qwenName, 'Process')
+}
+try {
+    foreach ($qwenName in $qwenNames) {
+        $qwenMatches = @($qwenLines | Where-Object { $_.StartsWith($qwenName + '=') })
+        if ($qwenMatches.Count -ne 1) { throw "识别配置项缺失或重复：$qwenName" }
+        [Environment]::SetEnvironmentVariable($qwenName, $qwenMatches[0].Substring($qwenName.Length + 1), 'Process')
+    }
+    & 'backend/.venv/Scripts/python.exe' -B -m uvicorn backend.app:create_app --factory --host 127.0.0.1 --port 8000
+} finally {
+    foreach ($qwenName in $qwenNames) {
+        [Environment]::SetEnvironmentVariable($qwenName, $previousQwenEnvironment[$qwenName], 'Process')
+    }
+    Remove-Variable qwenLines, qwenMatches, previousQwenEnvironment -ErrorAction SilentlyContinue
+}
+```
+
 ```powershell
 backend/.venv/Scripts/python.exe -B -m pytest backend/tests scripts/tests/test_ticket_migration.py scripts/tests/test_capacity_benchmark.py --basetemp .cache/pytest-movie-tickets-unique -q
 ```
 
-测试目录必须使用新的任务专属路径。核心覆盖认证隔离、字段/幂等/墓碑、上传核对、持久变更、备份、Redis 降级和 SDK 离线签名，以及 Streams 丢失/重复、租约 fencing、有限重试、OCR 子进程超时、海报发布恢复和临时清理边界。fakeredis 不代替真实 Redis，真实 Redis/Streams 测试由 CI 提供服务，本机缺连接时显式跳过。真实 OCR 合成样本测量与 Commons 抓取证据见开发计划；它们不代替真实票据准确率、t3.small、S3 或设备同步验收。
+测试目录必须使用新的任务专属路径。核心覆盖认证隔离、字段/幂等/墓碑、上传核对、持久变更、备份、Redis 降级和 SDK 离线签名，以及 Streams 丢失/重复、租约 fencing、有限重试、识别子进程超时、海报发布恢复和临时清理边界。CI 默认使用离线识别 mock，不需要 API Key、不调用付费接口，也不下载 CPU 模型。fakeredis 不代替真实 Redis，真实 Redis/Streams 测试由 CI 提供服务，本机缺连接时显式跳过。历史 CPU OCR 测量只证明对应旧版本，不能用于新模型准确率或费用结论。
+
+`scripts/synthetic-tickets.py` 只生成合成票据，不识别或联网。`scripts/benchmark-processing.py` 默认只显示计划；真实远程识别测量必须同时提供 `--execute --allow-remote-recognition`，且仅发送脚本生成的 20 张票据，可能因有限重试产生更多请求。其账户、Redis、对象存储和海报仍使用隔离夹具，报告区分远程识别与离线注入，不构成真实 S3、真实票据或 EC2 容量验收。旧 CPU 模型准备和测量脚本已退役，历史源码及证据从对应 Git 提交追溯；本机旧模型、服务器共享模型与旧发布目录不随代码清理删除。

@@ -9,4 +9,3 @@ PyJWT[crypto]==2.15.1
 cryptography==50.0.2
 redis==8.1.0
 httpx==0.28.1
--r requirements-ocr.txt

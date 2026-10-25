@@ -18,9 +18,11 @@ from backend.app import create_app
 from backend.backups import BackupError, create_account_backup, restore_account_backup
 from backend.object_storage import S3ObjectStore, StorageError
 from backend.posters import PosterCandidate
-from backend.processing import ProcessingWorker, ProcessingFailed, run_isolated_ocr, TEMP_RETENTION_SECONDS
+from backend.processing import (ProcessingWorker, ProcessingFailed, ProcessingInterrupted,
+                                run_isolated_recognition, TEMP_RETENTION_SECONDS)
 from backend import processing_repository as repository
 from backend.shared_state import RedisSharedState
+from backend.ticket_recognition import RecognitionError
 from account_fixtures import account_snapshot
 from account_fixtures import ORIGIN, USERS, WRITE_HEADERS, FakeAuthFactory, image_bytes, signed_in
 from test_api import create, upload, patch, delete, make_app, applied
@@ -71,8 +73,8 @@ def pipeline(root, *, provider=None, runner=None, cache=None):
         calls.append(raw)
         return {"title": "Example", "cinema": "OCR影院", "hall": "1厅", "seat": "A1", "showtime": "2026-10-22T19:30"}
     def factory(store, shared):
-        return ProcessingWorker(store, shared, provider=provider, ocr_runner=runner or recognize,
-                                ocr_status={"available": True, "reason": None})
+        return ProcessingWorker(store, shared, provider=provider, recognition_runner=runner or recognize,
+                                recognition_status={"available": True, "reason": None})
     app = create_app(root / "data", object_store=storage, auth_provider=FakeAuthFactory(), shared_state=cache,
                      run_recovery=False, run_processing=False, processing_factory=factory)
     with TestClient(app, base_url=ORIGIN) as client:
@@ -97,11 +99,11 @@ def ticket(client):
 
 
 def test_creation_commits_intent_without_waiting_and_stream_worker_publishes(tmp_path):
-    with pipeline(tmp_path) as (client, app, worker, fake, provider, ocr_calls):
+    with pipeline(tmp_path) as (client, app, worker, fake, provider, recognition_calls):
         state, _ = create(client)
         assert state["tickets"][0]["processing"] == {"status": "queued", "error": None}
         assert state["capabilities"]["processing"] is True and state["capabilities"]["processingUnavailableReason"] is None
-        assert not ocr_calls and not provider.calls
+        assert not recognition_calls and not provider.calls
         assert worker.queue.client.exists(worker.queue.stream) == 0
         assert worker.run_once()
         result = ticket(client)
@@ -110,7 +112,7 @@ def test_creation_commits_intent_without_waiting_and_stream_worker_publishes(tmp
         assert result["media"]["poster"]["cloudStatus"] == "saved"
         assert result["media"]["poster"]["source"]["provider"] == "wikimedia_commons"
         assert result["version"] == 4  # creation, OCR claim, OCR fields/poster stage, published poster
-        assert len(ocr_calls) == len(provider.calls) == 1
+        assert len(recognition_calls) == len(provider.calls) == 1
         assert len(fake.objects) == 2
         assert worker.queue.client.xpending(worker.queue.stream, worker.queue.GROUP)["pending"] == 0
         assert list((app.state.store.root / "tmp" / "processing").glob("*.image")) == []
@@ -139,7 +141,7 @@ def test_missing_tmdb_read_token_disables_processing_with_explicit_reason(tmp_pa
     storage = S3ObjectStore("test-bucket", "ap-northeast-1", client=FakeS3Client())
     cache = RedisSharedState(client=fakeredis.FakeRedis())
     def factory(store, shared):
-        return ProcessingWorker(store, shared, ocr_status={"available": True, "reason": None})
+        return ProcessingWorker(store, shared, recognition_status={"available": True, "reason": None})
     app = create_app(tmp_path / "data", object_store=storage, auth_provider=FakeAuthFactory(), shared_state=cache,
                      run_recovery=False, run_processing=False, processing_factory=factory)
     with TestClient(app, base_url=ORIGIN) as client:
@@ -148,6 +150,45 @@ def test_missing_tmdb_read_token_disables_processing_with_explicit_reason(tmp_pa
         assert state["capabilities"]["processing"] is False
         assert "TMDB" in state["capabilities"]["processingUnavailableReason"]
         create(client)
+        with app.state.store.transaction() as db:
+            assert db.execute("SELECT COUNT(*) FROM processing_jobs").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("code,attempts", [("configuration_rejected", 1), ("quota_exhausted", 1),
+                                           ("invalid_response", 1), ("rate_limited", 3), ("service_unavailable", 3)])
+def test_recognition_errors_stop_permanent_failures_and_bound_transient_calls(tmp_path, code, attempts):
+    calls = []
+    def recognize(raw, **kwargs):
+        calls.append(raw)
+        raise RecognitionError(code)
+    with pipeline(tmp_path, runner=recognize) as (client, app, worker, fake, provider, _):
+        create(client, fields={"title": "Keep user title", "seat": "User seat"})
+        for _ in range(attempts):
+            force_due(app.state.store, current_job(app.state.store)["id"])
+            worker.run_once()
+        result = ticket(client)
+        assert result["processing"]["status"] == "failed"
+        assert result["fields"]["title"] == "Keep user title" and result["fields"]["seat"] == "User seat"
+        assert result["media"]["original"]["cloudStatus"] == "saved"
+        assert len(calls) == attempts and not provider.calls and len(fake.objects) == 1
+        assert worker.queue.client.xpending(worker.queue.stream, worker.queue.GROUP)["pending"] == 0
+        assert current_job(app.state.store)["attempts"] == attempts
+        assert not repository.due_jobs(app.state.store)
+
+
+def test_missing_recognition_configuration_does_not_require_a_cpu_model_or_enqueue(tmp_path, monkeypatch):
+    for name in ("KEEPSITE_QWEN_API_KEY", "KEEPSITE_QWEN_BASE_URL", "KEEPSITE_QWEN_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    def factory(store, shared):
+        return ProcessingWorker(store, shared, provider=PosterFixture())
+    app = create_app(tmp_path / "data", object_store=S3ObjectStore("test-bucket", "ap-northeast-1", client=FakeS3Client()),
+                     auth_provider=FakeAuthFactory(), shared_state=RedisSharedState(client=fakeredis.FakeRedis()),
+                     run_recovery=False, run_processing=False, processing_factory=factory)
+    with TestClient(app, base_url=ORIGIN) as client:
+        signed_in(client)
+        state, _ = create(client)
+        assert state["capabilities"]["processing"] is False
+        assert "识别" in state["capabilities"]["processingUnavailableReason"]
         with app.state.store.transaction() as db:
             assert db.execute("SELECT COUNT(*) FROM processing_jobs").fetchone()[0] == 0
 
@@ -170,7 +211,7 @@ def test_processing_retry_is_idempotent_and_owner_scoped(tmp_path):
 
 
 def test_queue_loss_and_duplicate_delivery_rebuild_from_sql_without_duplicate_work(tmp_path):
-    with pipeline(tmp_path) as (client, app, worker, fake, provider, ocr_calls):
+    with pipeline(tmp_path) as (client, app, worker, fake, provider, recognition_calls):
         create(client)
         job = current_job(app.state.store)
         worker.reconcile()
@@ -183,7 +224,7 @@ def test_queue_loss_and_duplicate_delivery_rebuild_from_sql_without_duplicate_wo
         worker.queue.publish(job["id"])
         worker.run_once()
         worker.run_once()
-        assert len(ocr_calls) == len(provider.calls) == 1
+        assert len(recognition_calls) == len(provider.calls) == 1
         assert fake.writes == 2
         assert current_job(app.state.store)["attempts"] == 1
 
@@ -205,7 +246,7 @@ def test_two_consumers_and_expired_leases_fence_old_results(tmp_path):
 
 
 def test_prepared_poster_survives_publication_failure_without_refetch(tmp_path, monkeypatch):
-    with pipeline(tmp_path) as (client, app, worker, fake, provider, ocr_calls):
+    with pipeline(tmp_path) as (client, app, worker, fake, provider, recognition_calls):
         create(client)
         original_finish = repository.finish
         monkeypatch.setattr(repository, "finish", lambda *args: (_ for _ in ()).throw(sqlite3.OperationalError("database unavailable")))
@@ -217,7 +258,7 @@ def test_prepared_poster_survives_publication_failure_without_refetch(tmp_path, 
         force_due(app.state.store, job["id"])
         worker.run_once()
         assert ticket(client)["processing"]["status"] == "ready"
-        assert len(provider.calls) == len(ocr_calls) == 1
+        assert len(provider.calls) == len(recognition_calls) == 1
         assert fake.writes == 2
 
 
@@ -463,11 +504,51 @@ def _slow_child(raw, output):
     time.sleep(30)
 
 
-def test_ocr_timeout_terminates_owned_process_and_closes_resources():
+def _result_child(raw, output):
+    code = raw.decode("ascii")
+    fields = {"title": "Example", "cinema": "", "hall": "", "seat": "", "showtime": ""}
+    try:
+        output.send({"fields": fields} if code == "fields" else {"error": code})
+    finally:
+        output.close()
+
+
+@pytest.mark.parametrize("code,retryable", [("quota_exhausted", False), ("configuration_rejected", False),
+                                           ("service_unavailable", True)])
+def test_isolated_recognition_preserves_only_safe_error_categories(code, retryable):
+    before = {child.pid for child in multiprocessing.active_children()}
+    with pytest.raises(RecognitionError) as caught:
+        run_isolated_recognition(code.encode(), timeout=10, target=_result_child)
+    assert caught.value.code == code and caught.value.retryable is retryable
+    assert {child.pid for child in multiprocessing.active_children()} <= before
+
+
+def test_isolated_recognition_validates_five_fields_and_reaps_its_child():
+    before = {child.pid for child in multiprocessing.active_children()}
+    assert run_isolated_recognition(b"fields", timeout=10, target=_result_child) == {
+        "title": "Example", "cinema": "", "hall": "", "seat": "", "showtime": ""}
+    assert {child.pid for child in multiprocessing.active_children()} <= before
+
+
+def test_cancelled_recognition_never_starts_a_child_or_provider_call(monkeypatch):
+    monkeypatch.setattr(multiprocessing, "get_context", lambda *args: pytest.fail("Cancelled input started recognition"))
+    with pytest.raises(ProcessingInterrupted):
+        run_isolated_recognition(b"synthetic", stopping=lambda: True)
+
+
+def test_stop_during_recognition_terminates_owned_process():
+    before = {child.pid for child in multiprocessing.active_children()}
+    calls = iter([False, False, True])
+    with pytest.raises(ProcessingInterrupted):
+        run_isolated_recognition(b"synthetic", stopping=lambda: next(calls, True), timeout=10, target=_slow_child)
+    assert {child.pid for child in multiprocessing.active_children()} <= before
+
+
+def test_recognition_timeout_terminates_owned_process_and_closes_resources():
     before = {child.pid for child in multiprocessing.active_children()}
     started = time.monotonic()
     with pytest.raises(ProcessingFailed):
-        run_isolated_ocr(b"synthetic", timeout=0.05, target=_slow_child)
+        run_isolated_recognition(b"synthetic", timeout=0.05, target=_slow_child)
     assert time.monotonic() - started < 8
     assert {child.pid for child in multiprocessing.active_children()} <= before
 
@@ -552,7 +633,7 @@ def test_real_redis_stream_group_delivery_and_queue_loss(tmp_path):
 @pytest.mark.parametrize("after_write", [False, True], ids=["put-failed", "put-response-lost"])
 def test_poster_upload_recovery_reuses_durable_artifact_without_refetch(tmp_path, monkeypatch, after_write):
     from botocore.exceptions import ReadTimeoutError
-    with pipeline(tmp_path) as (client, app, worker, fake, provider, ocr_calls):
+    with pipeline(tmp_path) as (client, app, worker, fake, provider, recognition_calls):
         create(client)
         original_put = fake.put_object
         def fail(**kwargs):
@@ -569,7 +650,7 @@ def test_poster_upload_recovery_reuses_durable_artifact_without_refetch(tmp_path
         force_due(app.state.store, pending["id"])
         worker.run_once()
         assert ticket(client)["processing"]["status"] == "ready"
-        assert len(provider.calls) == len(ocr_calls) == 1
+        assert len(provider.calls) == len(recognition_calls) == 1
         assert fake.writes == 2
 
 

@@ -5,7 +5,7 @@ import org.json.JSONObject
 /** Upload rejections never resolve a ticket mutation that may already have committed. */
 internal fun <T> prepareDraftUpload(prepare: () -> T, rejected: () -> Unit): T = try { prepare() }
 catch (failure: ApiFailure) {
-    if (failure.status in setOf(409, 413, 422)) rejected()
+    if (failure.status in setOf(409, 413, 415, 422)) rejected()
     throw failure
 }
 
