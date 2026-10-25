@@ -1,4 +1,14 @@
 # keepsite 项目运行信息
+## 2026-10-25 V0 基线与测试 EC2 清理
+
+用户确认当前版本为 V0。附注标签 `v0` 已推送并读回核对，指向 `main@2cb7b06b73cc4adbb6a42320872b022635489cec`；后续修复从该基线继续。
+
+用户明确确认两台旧测试实例及各自根磁盘均无需保留数据，允许永久删除、不创建快照。东京账号 `125647512944` 下的 `i-0f636c3e4868d24d7`（t3.nano，名称含 test）和 `i-06f3d9b03ffbf42aa`（未命名 t3.micro）已终止；读回均为 `terminated`。两块随实例删除的 8 GiB gp3 卷 `vol-07f1c7efbe59aaf5d`、`vol-081d1d6d77d3f04db` 按 volume-id 过滤查询结果为空。执行前核对账号、停止状态、无实例角色、准确卷映射、DeleteOnTermination 和无 Auto Scaling 归属；没有扩展删除安全组、密钥或其他云资源。
+
+keepsite 的 `i-0e9ba9bc6f4b1c019` 与 10 GiB 卷 `vol-0bb6aa01805d28c75` 保留，清理后实例读回为 `stopped`。本次未启动、部署或更改其 58 分钟自动关机策略，也未改 S3、Cognito 或业务数据。清理明细保存在本机 `output/aws-test-cleanup-2026-10-25/`，不纳入 Git。
+
+当日 AWS Pricing API 核实东京 gp3 容量价为 `0.096 USD/GB-month`。删除 16 GiB 测试磁盘预计减少抵扣前容量费用 `1.536 USD/月`，keepsite 10 GiB 约 `0.96 USD/月`；实际按持有时间、抵扣和税费结算。该估算不是新增收费或全部云资源月费用承诺。
+
 ## 2026-10-25 阶段收尾与用户试用反馈
 
 当前进入主要开发完成后的测试、debug 与修复阶段，不把这一结论等同于所有文档验收项完成。2026-10-24 后续已在连接的手机安装 `io.github.youxiangyu.keepsite`，确认前台为新包，票夹及《流浪地球2》海报正常显示；旧应用及数据保留。2026-10-25 用户反馈对两台手机简单使用后感觉没有明显问题，记录为用户简单试用反馈，不据此宣称并发修改、断网重连、跨网络和全部双真机矩阵已完成。
@@ -68,7 +78,7 @@ TMDB 只读令牌已从本机 `.cache/server/keepsite-tmdb.env` 安全配置到�
 | Cognito 网站客户端 / 登录域名 | `4eitpctiqil0pjgv0no8j1i8if` / `https://keepsite-125647512944.auth.ap-northeast-1.amazoncognito.com`；无客户端密钥，Google 与 COGNITO 已启用 |
 | Google 登录项目 | `keepsite-auth-20261018`。控制台显示名仍是 `MemoVerse Login`，本次没有修改 Google 品牌。Web OAuth 只回调 Cognito 的 `/oauth2/idpresponse`，应用保持外部测试模式 |
 
-管理端公网 IP 受 EC2 安全组 SSH 规则限制。连接失败先核对当前规则和管理端 IP，不直接放宽到所有来源。账户原有另外两台停止的测试实例不属于本项目，不得顺手启动、改规格或清理。
+管理端公网 IP 受 EC2 安全组 SSH 规则限制。连接失败先核对当前规则和管理端 IP，不直接放宽到所有来源。账户原有另外两台测试实例已按上方 2026-10-25 用户授权清理记录终止；该次授权不扩展到 keepsite 或其他资源。
 
 ## 本机与服务器路径
 
