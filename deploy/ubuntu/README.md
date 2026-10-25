@@ -106,4 +106,4 @@ backend/.venv/Scripts/python.exe -B -m unittest discover -s deploy/ubuntu/tests 
 python3 -B -m unittest discover -s deploy/ubuntu/tests -v
 ```
 
-CI 仅证明隔离进程与控制流，不验证真实服务、身份提供方或生产数据。真实发布必须另行验收并维护[EC2 部署记录](../../docs/EC2部署验收.md)。
+CI 仅证明隔离进程与控制流，不验证真实服务、身份提供方或生产数据。真实发布必须另行验收并维护[项目运行信息](../../.agents/skills/keepsite-delivery/references/project-context.md)。
