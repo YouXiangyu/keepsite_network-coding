@@ -172,6 +172,28 @@ def test_only_five_bounded_strings_and_complete_showtime_can_be_published(fields
     assert caught.value.code == "invalid_response" and caught.value.retryable is False
 
 
+@pytest.mark.parametrize("title,expected", [
+    ("奥德赛（2D 英文版）", "奥德赛"),
+    ("奥德赛 (3D) 中文配音", "奥德赛"),
+    ("流浪地球2（国语版）", "流浪地球2"),
+    ("电影第二部（中文版）", "电影第二部"),
+    ("电影第三部 英文版", "电影第三部"),
+    ("电影第四部 (2D)", "电影第四部"),
+    ("Example Part II", "Example Part II"),
+    ("英语课", "英语课"),
+    ("英语", "英语"),
+])
+def test_model_title_cleanup_publishes_the_movie_name_and_preserves_other_fields(title, expected):
+    fields = {**FIELDS, "title": title}
+    assert recognition.parse_response(envelope(json.dumps(fields))) == {**fields, "title": expected}
+    assert fields["title"] == title
+
+
+def test_presentation_cleanup_cannot_make_an_oversized_model_answer_valid():
+    with pytest.raises(RecognitionError):
+        recognition.parse_response(envelope(json.dumps({**FIELDS, "title": "E" * 116 + " (2D)"})))
+
+
 @pytest.mark.parametrize("content", [
     '```json\n{"title":"film"}\n```', '[{"title":"film"}]',
     '{"title":"first","title":"second","cinema":"","hall":"","seat":"","showtime":""}',
