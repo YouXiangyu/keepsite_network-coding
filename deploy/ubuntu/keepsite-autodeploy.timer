@@ -1,0 +1,11 @@
+[Unit]
+Description=Check keepsite main artifacts after boot and every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+AccuracySec=5s
+Unit=keepsite-autodeploy.service
+
+[Install]
+WantedBy=timers.target

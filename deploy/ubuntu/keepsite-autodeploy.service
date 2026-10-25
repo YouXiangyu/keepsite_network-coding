@@ -1,0 +1,20 @@
+[Unit]
+Description=Pull a checked keepsite main release from private S3
+Wants=network-online.target
+After=network-online.target keepsite.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/opt/keepsite/admin/autodeploy-venv/bin/python -B /opt/keepsite/admin/pull-release.py --execute
+TimeoutStartSec=9min
+TimeoutStopSec=90
+KillMode=mixed
+StateDirectory=keepsite-autodeploy
+StateDirectoryMode=0700
+Environment=AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_CONFIG_FILE=/dev/null
+UnsetEnvironment=AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE
+StandardOutput=journal
+StandardError=journal
