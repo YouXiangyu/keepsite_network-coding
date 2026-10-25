@@ -1,4 +1,18 @@
 # keepsite 项目运行信息
+## 2026-10-25 v0.1 发布与线上千问切换
+
+用户明确授权合并当前 PR、发布 v0.1 APK/标签并部署主线，并在 GitHub Codex 审查一直运行时明确取消本次等待要求。PR #10 先合入 PR #9，PR #9 以 merge commit `5b8e35d59cd1d4c9f08bfc6c5075744c3e7dec2e` 合入 main；其内容与已验证组合 head `31a58b1d6248b1b268fec46bbfa0faea7a8e8ad8` 相同，Backend、Frontend、Android、deployment-recovery 共八项 CI 均成功。本次是用户明确例外，不将仍在运行的 GitHub Codex 审查写成通过，也不修改后续默认合并流程；实现阶段独立审查已完成，本次临时验收脚本另经子代理只读复核。
+
+附注标签 `v0.1` 已推送并读回核对，指向上述应用提交；保留 `v0`。正式 [GitHub Release v0.1](https://github.com/YouXiangyu/network-coding/releases/tag/v0.1) 于北京时间 21:26:18 发布，包含 `keepsite-v0.1-android-debug.apk`、`SHA256SUMS.txt` 和 `apk-verification.json`，远端大小和 SHA-256 均读回一致。APK 为 versionName 0.1.0 / versionCode 2，沿用既有开发证书、debuggable，API 为 `https://keepsite.space`，不是正式商店签名包。主线重新构建通过，Android 源树与已完成 56 项 JVM 测试及 Lint 的组合版本一致。真实问题 HEIC、API 26/27 和完整双真机矩阵仍待用户验收，不把合成票面验证作为真实识别准确率证明。
+
+原配置维护开机已按 58 分钟规则自动停止；用户对上次延长的回答以“审查需要 EC2”为条件，该条件不成立，未延长。本次为已授权部署重新启动同一实例，2/2 状态检查通过，核验公网地址 `43.207.138.243`。当次 `keepsite-auto-stop.timer` enabled/active，OnBootSec=58min，正常关机到期北京时间 2026-10-25 22:15:00，shutdown behavior=stop，未延长或重置；后续状态/IP 必须现场查询。SSH 通过已信任的 `memoverse-i-0e9ba9bc6f4b1c019` 别名严格校验，本机新别名尚未登记，不关闭主机校验。
+
+通过 `scripts/deploy-ubuntu.ps1` 先 prepare-only 后激活；实际 current 链接及 keepsite MainPID cwd 均为上述应用提交，NRestarts=0。配置回滚信息为 `/opt/keepsite/activation-backups/activation-2TrtNVB1`。切换前 SQLite online backup 与完整性/FK 检查通过，新备份 `/opt/keepsite/predeploy-backups/v0.1-20261025T132117Z-33c3735d`（root:root，目录 0700、文件 0600）；此前有效备份仍保留。一次失败尝试留下的准确空目录已用 rmdir 清理，未扩大删除。
+
+新发布运行环境没有 RapidOCR、ONNX Runtime 或 backend.ocr，仅使用千问 VLM；旧模型缓存及旧发布用于回滚而保留。使用实际发布代码、服务身份和现有受限环境完成合成票面五字段识别（约 2.291 秒），无真实用户照片上传。HTTPS 页面/health、HTTP→HTTPS、匿名票夹/媒体/备份 401、临时空账号登录与 processing capability、退出均通过；两轮临时 Cognito 身份与自身空元数据已清理，无 QA 票根/S3 对象。原 2 个用户、3 张票根、4 个资产及数据库完整性保持。首轮验收受本机代理/虚拟 DNS 的 198.18.* 地址影响，后续仅在验收进程绑定已核实实例地址并保留 TLS 域名/证书校验，不修改系统 DNS。
+
+本机安全证据集中于 `output/release-v0.1/`，凭据不入 Git 或 APK。此节作为发布后的运行记录单独提交，不改变 v0.1 应用代码，不为文档记录制造额外线上版本；线上应用与标签的源码提交保持一致。保留 EC2 供用户验收，到期正常关机；代理验证通过不等于用户确认提前停机。
+
 ## 2026-10-25 千问识别配置与独立联调（未发布应用代码）
 
 用户明确以本人北京百炼工作空间的 `qwen3.7-flash` 替换本地 OCR（D-081），并授权将提供的 Key 配置到本机与 EC2。Key 仅保存于本机 `.cache/server/keepsite-qwen.env`（当前用户与 SYSTEM 访问，Git 忽略）及服务器 `/etc/keepsite.env`（root:root 0600），不记录值或哈希。配置项为 `KEEPSITE_QWEN_API_KEY`、`KEEPSITE_QWEN_BASE_URL`、`KEEPSITE_QWEN_MODEL`；本机文件按后端 README 显式加载到进程，不全局写入注册表。浏览器核对了官方模型页和工作空间调用示例，保留原“免费额度用完即停”设置。
@@ -74,9 +88,9 @@ TMDB 只读令牌已从本机 `.cache/server/keepsite-tmdb.env` 安全配置到�
 | 实例 ID / 名称 / 可用区 | `i-0e9ba9bc6f4b1c019` / `memoverse-keepsite` / `ap-northeast-1a` |
 | 规格 | `t3.small`：x86_64、2 vCPU、2 GB RAM；CPU credits 为 standard，避免 surplus credit 费用 |
 | 系统与磁盘 | Canonical Ubuntu 24.04；10 GB 加密 gp3 根卷 `vol-0bb6aa01805d28c75`，旧 20 GB 卷已删除 |
-| 最近运行状态 | 2026-10-25 千问配置维护时 running，状态检查 2/2 通过；自动关机到期北京时间 19:03:16。仅代表本次核验，操作前重新查询 |
-| 最近应用运行提交 | `810f900cd6f3d664cf96af3095b44a5bbea197ff`，`/opt/keepsite/current` 与当时 MainPID 的 cwd 一致。此前线上观测版本是 `2e74f23408afb26410c45b6c86515cd7964c3f13` |
-| 公网 IPv4 | 2026-10-25 配置核验为 `13.114.44.30`；2026-10-24 的 `52.196.89.220` 及其他旧地址仅供历史定位。动态地址在停机后释放，每次启动重新查询 |
+| 最近运行状态 | 2026-10-25 v0.1 发布核验 running，状态检查 2/2 通过；自动关机到期北京时间 22:15:00。仅代表本次核验，操作前重新查询 |
+| 最近应用运行提交 | v0.1 `5b8e35d59cd1d4c9f08bfc6c5075744c3e7dec2e`，current 与 MainPID cwd 一致。此前版本 `810f900cd6f3d664cf96af3095b44a5bbea197ff` 保留回滚 |
+| 公网 IPv4 | 2026-10-25 v0.1 发布核验为 `43.207.138.243`；当日早先 `13.114.44.30` 及其他旧地址仅供历史定位。动态地址在停机后释放，每次启动重新查询 |
 | Launch template / 新建默认版本 | `lt-016bca8507ac81480` / `2`，根盘默认 10 GB |
 | 安全组 / SSH key pair | `sg-0f472ac3891c65681` / `memoverse-ec2-20261017` |
 | SSH 用户 | `ubuntu` |
@@ -102,7 +116,7 @@ TMDB 只读令牌已从本机 `.cache/server/keepsite-tmdb.env` 安全配置到�
 | 初始化模板 | 本机 `.cache/initial-template-v1`。旧服务器模板 `/opt/memoverse/shared/initial-template-v1` 保留用于历史回滚；新版账号从空票夹开始，不使用该模板 |
 | 本机网页 / API | `http://127.0.0.1:4173` / `http://127.0.0.1:8000` |
 | SSH 私钥 / 已知主机 | `.cache/server/ssh/id_rsa` / `.cache/server/ssh/known_hosts` |
-| SSH 主机身份别名 | 当前部署使用 `keepsite-i-0e9ba9bc6f4b1c019`。旧别名 `memoverse-i-0e9ba9bc6f4b1c019` 对应同一实例密钥，不得为改名关闭严格校验 |
+| SSH 主机身份别名 | v0.1 使用已信任的 `memoverse-i-0e9ba9bc6f4b1c019` 严格校验；本机 `keepsite-i-0e9ba9bc6f4b1c019` 尚未登记。均指同一实例，不得为改名关闭校验 |
 | 站点测试账号与口令 | `.cache/server/access.json`，只记录位置，不读取或输出明文来做一般巡检 |
 | Cloudflare DDNS 配置 | 本机 `.cache/server/cloudflare.json`；当前服务读取 `/etc/keepsite/cloudflare.json`。旧安装目标 `/etc/memoverse/cloudflare.json` 保留。Token 只允许本域名 DNS 编辑 |
 | Google OAuth 凭据 | 本机 `.cache/server/google-oauth.json`，仅本机用户可读；已安全配置到 Cognito，临时 S3 传输副本已按版本删除并核验为空 |
@@ -119,7 +133,7 @@ TMDB 只读令牌已从本机 `.cache/server/keepsite-tmdb.env` 安全配置到�
 | 自动关机 units | `/etc/systemd/system/keepsite-auto-stop.timer`、`keepsite-auto-stop.service`；源码在 `deploy/ubuntu/`，只启用 timer，普通应用发布不会修改或重置。旧 timer 已停用自启动 |
 | Nginx 配置 | `/etc/nginx/sites-available/keepsite`。旧 `/etc/nginx/sites-available/memoverse` 与启用入口保留到回滚所需的范围 |
 | 旧 Nginx BasicAuth 哈希 | `/etc/nginx/memoverse.htpasswd`，当前网站使用应用账号登录 |
-| 本次激活回滚元数据 | `/opt/keepsite/activation-backups/activation-Xbu3i4ae`，root-only。发布前备份位于 `/opt/memoverse/predeploy-backups/keepsite-810f900-20261024T1455`。更早的 `activation-VrKJ5JL0`、`activation-m1rFC4fz`、`activation-WKPhdvkQ`、`activation-LJTXEZwD` 属于旧名称阶段，不能混用 |
+| 本次激活回滚元数据 | v0.1 `/opt/keepsite/activation-backups/activation-2TrtNVB1`；数据备份 `/opt/keepsite/predeploy-backups/v0.1-20261025T132117Z-33c3735d`。此前 activation-Xbu3i4ae 及旧名称阶段备份保留，不混用 |
 | TLS 证书与私钥目录 | `/etc/letsencrypt/live/keepsite.space` |
 | TLS 配置脚本 | `deploy/ubuntu/enable-https.sh` |
 | 日志 | `journalctl -u keepsite`；`/var/log/keepsite/`；本机 `.cache/server/`。旧 `/var/log/memoverse/` 保留 |
