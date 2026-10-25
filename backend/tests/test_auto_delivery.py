@@ -245,3 +245,21 @@ def test_service_runs_root_owned_admin_runtime_and_keeps_shutdown_policy_indepen
     assert 'OnBootSec=2min' in timer and 'OnUnitInactiveSec=5min' in timer
     assert '/opt/keepsite/current' not in service and '/etc/keepsite.env' not in service
     assert 'keepsite-auto-stop' not in service + timer
+
+
+def test_publisher_closes_sdk_client_without_requiring_context_manager(tmp_path, monkeypatch, capsys):
+    class Client:
+        closed = False
+        def close(self):
+            self.closed = True
+    client = Client()
+    monkeypatch.setenv('GITHUB_REPOSITORY', publisher.REPOSITORY)
+    monkeypatch.setenv('GITHUB_TOKEN', 'synthetic')
+    monkeypatch.setattr(sys, 'argv', ['publish', '--commit', B, '--bucket', 'synthetic'])
+    monkeypatch.setattr(publisher, 'ready', lambda *args: True)
+    monkeypatch.setattr(publisher, 'package', lambda commit, output: output.write_bytes(RAW))
+    monkeypatch.setattr(publisher.boto3, 'client', lambda *args, **kwargs: client)
+    monkeypatch.setattr(publisher, 'publish', lambda *args: {'published': True})
+    publisher.main()
+    assert client.closed is True
+    assert 'published' in capsys.readouterr().out

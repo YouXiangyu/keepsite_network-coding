@@ -133,8 +133,8 @@ def main():
     with tempfile.TemporaryDirectory() as temporary:
         archive = Path(temporary) / 'release.tar'
         package(args.commit, archive)
-        with boto3.client('s3', region_name=args.region, config=Config(
-                connect_timeout=5, read_timeout=30, retries={'total_max_attempts': 2, 'mode': 'standard'})) as s3:
+        with closing(boto3.client('s3', region_name=args.region, config=Config(
+                connect_timeout=5, read_timeout=30, retries={'total_max_attempts': 2, 'mode': 'standard'}))) as s3:
             print(json.dumps(publish(s3, args.bucket, args.commit, archive, token)))
 
 

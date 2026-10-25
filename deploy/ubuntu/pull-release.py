@@ -249,8 +249,8 @@ def main():
             print(json.dumps({'result': 'worker_busy'}))
             return
         try:
-            with boto3.client('s3', region_name='ap-northeast-1', config=Config(
-                    connect_timeout=5, read_timeout=15, retries={'total_max_attempts': 2, 'mode': 'standard'})) as s3:
+            with closing(boto3.client('s3', region_name='ap-northeast-1', config=Config(
+                    connect_timeout=5, read_timeout=15, retries={'total_max_attempts': 2, 'mode': 'standard'}))) as s3:
                 print(json.dumps(pull(s3)))
         except Exception as error:
             print(json.dumps({'result': 'error', 'errorType': type(error).__name__}))
