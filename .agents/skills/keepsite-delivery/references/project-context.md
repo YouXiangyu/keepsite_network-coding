@@ -18,7 +18,7 @@ worker 与 publisher 已独立审查，20 项定点测试通过，含哈希拒�
 
 原 keepsite-auto-stop.timer 本次到期北京时间 2026-10-25 23:59:53，未延长或重置。已验证关机后固定 IP/DNS 保留及再次开机恢复访问。状态和期限仅代表此次核验，后续仍现场查询。
 
-自动部署目前处于方案评估，尚未安装 cron/timer、GitHub runner 或自动发布工作流，未新增 GitHub/AWS 部署身份或权限。服务器约 2 GB 内存、根盘剩余约 1.3 GB，已有 Git 但没有 Node/npm；不宜把频繁前端构建放在此机器。推荐方向为 CI 构建准确 main 提交的同源制品，服务器开机及定时仅检查成功制品、有更新才准备并激活，复用现有哈希、锁、健康检查与回滚。3 分钟轮询可行，建议 5 分钟；具体自动部署实现与首次启用仍待后续完成，不把建议视为已安装。
+在该评估时点（后续安装见上节），自动部署尚处于方案评估，尚未安装 cron/timer、GitHub runner 或自动发布工作流，未新增 GitHub/AWS 部署身份或权限。服务器约 2 GB 内存、根盘剩余约 1.3 GB，已有 Git 但没有 Node/npm；不宜把频繁前端构建放在此机器。推荐方向为 CI 构建准确 main 提交的同源制品，服务器开机及定时仅检查成功制品、有更新才准备并激活，复用现有哈希、锁、健康检查与回滚。3 分钟轮询可行，建议 5 分钟；具体自动部署实现与首次启用仍待后续完成，不把建议视为已安装。
 
 ## 2026-10-25 片名规范与同名最新策略（D-082，开发分支）
 
@@ -142,7 +142,7 @@ TMDB 只读令牌已从本机 `.cache/server/keepsite-tmdb.env` 安全配置到�
 | DNS | Cloudflare，A 指向固定 EIP，DNS-only、TTL 60。keepsite-ddns 开机 publish，2026-10-25 起正常关机保留 A；旧 memoverse-ddns 已核对 inactive/disabled。停机后读回确认地址保留 |
 | 自动关机 | `keepsite-auto-stop.timer` 已启用，`OnBootSec=58min`、`AccuracySec=1s`；旧 timer 已停用自启动。到点发起正常 poweroff，实例 shutdown behavior 已核验为 `stop` |
 | S3 | 东京私有桶 `memoverse-media-125647512944-apne1`，Block Public Access、BucketOwnerEnforced、AES256、版本控制已启用 |
-| EC2 实例角色 / profile | `memoverse-ec2-app-20261018`，只附着本项目实例；Get/Put 限定桶内 `media/*`、`models/*`，另允许该桶 ListBucket，未授权删除、ACL、其他桶或 `ops/*` 读取 |
+| EC2 实例角色 / profile | `memoverse-ec2-app-20261018`，只附着本项目实例；保留 `media/*`、`models/*` 的原 Get/Put 与 ListBucket 权限；新增 `deploy/keepsite/*` 的 GetObject 和 prefix 限制 ListBucket。不能写/删除部署制品，无 ACL、其他桶或 `ops/*` 读取授权 |
 | Cognito | `ap-northeast-1_02QmwLnbG`（`memoverse-test-users`），Essentials，小范围测试 MFA OFF；邮箱验证码、短效令牌、刷新轮换与撤销已配置 |
 | Cognito 网站客户端 / 登录域名 | `4eitpctiqil0pjgv0no8j1i8if` / `https://keepsite-125647512944.auth.ap-northeast-1.amazoncognito.com`；无客户端密钥，Google 与 COGNITO 已启用 |
 | Google 登录项目 | `keepsite-auth-20261018`。控制台显示名仍是 `MemoVerse Login`，本次没有修改 Google 品牌。Web OAuth 只回调 Cognito 的 `/oauth2/idpresponse`，应用保持外部测试模式 |
