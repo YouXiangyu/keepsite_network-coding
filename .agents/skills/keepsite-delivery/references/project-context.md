@@ -1,5 +1,13 @@
 # keepsite 项目运行信息
 
+## 2026-10-25 再次开机与自动部署方案评估
+
+用户明确要求再开机一次，并提出 main 更新自动部署、比较 GitHub Actions 与 Linux cron 的方案。通过官方 AWS MCP 核对账户和实例后启动同一 keepsite 实例；本次 LaunchTime 为北京时间 23:01:48，后续状态检查 2/2 通过，固定 IP 仍为 13.230.217.247，DNS、应用、Nginx 和开机 publish 均正常，HTTPS 200 且证书校验通过。实际应用仍为 v0.1 5b8e35d，未合并 PR #11 或切换应用发布。
+
+原 keepsite-auto-stop.timer 本次到期北京时间 2026-10-25 23:59:53，未延长或重置。已验证关机后固定 IP/DNS 保留及再次开机恢复访问。状态和期限仅代表此次核验，后续仍现场查询。
+
+自动部署目前处于方案评估，尚未安装 cron/timer、GitHub runner 或自动发布工作流，未新增 GitHub/AWS 部署身份或权限。服务器约 2 GB 内存、根盘剩余约 1.3 GB，已有 Git 但没有 Node/npm；不宜把频繁前端构建放在此机器。推荐方向为 CI 构建准确 main 提交的同源制品，服务器开机及定时仅检查成功制品、有更新才准备并激活，复用现有哈希、锁、健康检查与回滚。3 分钟轮询可行，建议 5 分钟；具体自动部署实现与首次启用仍待后续完成，不把建议视为已安装。
+
 ## 2026-10-25 片名规范与同名最新策略（D-082，开发分支）
 
 用户明确调整规则：VLM 的片名去除 2D/3D、中文版/英文版等放映元信息，保留第二部/第三部/第四部、数字续集及 Part II；同名电影默认选最新上映作品。这一决定取代本日较早“同名全部保持歧义”的策略，产品规格更新为 v0.23、D-082。
@@ -113,7 +121,7 @@ TMDB 只读令牌已从本机 `.cache/server/keepsite-tmdb.env` 安全配置到�
 | 实例 ID / 名称 / 可用区 | `i-0e9ba9bc6f4b1c019` / `memoverse-keepsite` / `ap-northeast-1a` |
 | 规格 | `t3.small`：x86_64、2 vCPU、2 GB RAM；CPU credits 为 standard，避免 surplus credit 费用 |
 | 系统与磁盘 | Canonical Ubuntu 24.04；10 GB 加密 gp3 根卷 `vol-0bb6aa01805d28c75`，旧 20 GB 卷已删除 |
-| 最近运行状态 | 2026-10-25 22:19:38 北京时间核对 stopped、InstanceInitiatedShutdown，固定 IP/DNS 保留；没有重新开机。操作前重新查询 |
+| 最近运行状态 | 2026-10-25 23:01:48 再次启动后 running，2/2 检查和 HTTPS 通过；本次自动关机到期北京时间 23:59:53。操作前重新查询 |
 | 最近应用运行提交 | v0.1 `5b8e35d59cd1d4c9f08bfc6c5075744c3e7dec2e`，current 与 MainPID cwd 一致。此前版本 `810f900cd6f3d664cf96af3095b44a5bbea197ff` 保留回滚 |
 | 公网 IPv4 | 固定 Elastic IP `13.230.217.247`，allocation `eipalloc-012aaafbbd3622359`，绑定本实例。停机仍保留及计费；操作前仍核对绑定。此前动态地址仅供历史定位 |
 | Launch template / 新建默认版本 | `lt-016bca8507ac81480` / `2`，根盘默认 10 GB |
