@@ -161,7 +161,7 @@ def finish(store, job, prepared=None):
         return True
 
 
-def fail(store, job, *, interrupted=False):
+def fail(store, job, *, interrupted=False, retryable=True):
     with store.transaction(True, timeout=1) as db:
         persisted = db.execute("SELECT * FROM processing_jobs WHERE id=?", (job["id"],)).fetchone()
         if (not persisted or persisted["lease_owner"] != job["lease_owner"] or persisted["lease_token"] != job["lease_token"]
@@ -170,7 +170,7 @@ def fail(store, job, *, interrupted=False):
         if not current_ticket(db, persisted):
             db.execute("UPDATE processing_jobs SET status='cancelled',lease_until=0,updated_at=? WHERE id=?", (now_ms(), job["id"]))
             return True
-        retry = persisted["attempts"] < MAX_ATTEMPTS and persisted["deadline_at"] > now_ms()
+        retry = retryable and persisted["attempts"] < MAX_ATTEMPTS and persisted["deadline_at"] > now_ms()
         message = "处理暂时失败，正在有限重试；原票已保留。" if retry else "处理失败，原票已保留，请手动重试。"
         if interrupted and retry:
             message = "处理已中断，服务恢复后继续；原票已保留。"

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,8 +20,8 @@ def test_real_http_and_worker_produce_complete_timed_lifecycle(tmp_path):
     expected = {"title": "Synthetic example", "cinema": "Synthetic cinema", "hall": "1", "seat": "A1",
                 "showtime": "2026-11-01T18:30"}
     samples = [{"raw": image_bytes(color), "expected": expected} for color in ("red", "blue")]
-    report = benchmark.run_pipeline(tmp_path, samples, ocr_runner=lambda raw, **kwargs: expected)
-    assert report["ocrMode"] == "test-injected"
+    report = benchmark.run_pipeline(tmp_path, samples, recognition_runner=lambda raw, **kwargs: expected)
+    assert report["recognitionMode"] == "offline-test-injected"
     assert report["statusCounts"] == {"ready": 2}
     assert report["checks"] == {"completeJobCount": 2, "durableChangesObserved": 8, "observerOverflow": False,
                                 "groundTruthNeverSubmitted": True, "retries": 0,
@@ -31,7 +32,7 @@ def test_real_http_and_worker_produce_complete_timed_lifecycle(tmp_path):
         assert row["actual"] == row["expected"]
         assert row["queuedToFirstClaimMs"] + row["firstClaimToTerminalMs"] == pytest.approx(row["queuedToTerminalMs"])
         assert row["admissionBatchWaitMs"] + row["postConsumerToFirstClaimMs"] == pytest.approx(row["queuedToFirstClaimMs"])
-        assert len(row["ocrAttempts"]) == 1 and row["ocrAttempts"][0]["success"]
+        assert len(row["recognitionAttempts"]) == 1 and row["recognitionAttempts"][0]["success"]
     assert report["failureRate"] == 0
     assert all(result["exact"] == 2 for result in report["fieldAccuracy"].values())
     assert report["memory"]["samples"] > 0
@@ -83,7 +84,7 @@ def test_post_commit_interval_covers_every_change_in_expiry_transaction(tmp_path
         storage.close()
 
 
-def test_injected_ocr_failure_is_reported_as_failure_without_hiding_retry(tmp_path):
+def test_injected_recognition_failure_is_reported_as_failure_without_hiding_retry(tmp_path):
     from account_fixtures import image_bytes
     from backend.processing import ProcessingFailed
 
@@ -96,12 +97,12 @@ def test_injected_ocr_failure_is_reported_as_failure_without_hiding_retry(tmp_pa
         return {"title": "Recovered"}
 
     report = benchmark.run_pipeline(tmp_path, [{"raw": image_bytes(), "expected": {"title": "Recovered"}}],
-                                    ocr_runner=flaky, timeout=20)
+                                    recognition_runner=flaky, timeout=20)
     row = report["samples"][0]
     assert row["status"] == "ready" and row["retryCount"] == 1
-    assert [attempt["success"] for attempt in row["ocrAttempts"]] == [False, True]
+    assert [attempt["success"] for attempt in row["recognitionAttempts"]] == [False, True]
     assert [event["status"] for event in row["events"]] == ["queued", "ocr", "queued", "ocr", "poster", "ready"]
-    assert report["timings"]["ocrAttemptMs"]["count"] == 2
+    assert report["timings"]["recognitionAttemptMs"]["count"] == 2
     assert row["queuedToFirstClaimMs"] + row["firstClaimToTerminalMs"] == pytest.approx(row["queuedToTerminalMs"])
 
 
@@ -120,7 +121,7 @@ def test_deadline_stops_owned_worker_sampler_and_removes_scratch(tmp_path):
 
     with pytest.raises(RuntimeError, match="benchmark deadline"):
         benchmark.run_pipeline(tmp_path, [{"raw": image_bytes(), "expected": {}}],
-                               ocr_runner=wait_until_stopped, timeout=.2)
+                               recognition_runner=wait_until_stopped, timeout=.2)
     assert entered.is_set()
     assert not list(tmp_path.iterdir())
     assert not [thread for thread in threading.enumerate() if thread not in existing_threads
@@ -141,3 +142,21 @@ def test_output_guard_never_overwrites_existing_evidence(tmp_path):
 
 def test_p95_uses_nearest_rank_for_twenty_samples():
     assert benchmark.percentiles(list(range(1, 21))) == {"count": 20, "p50Ms": 10.5, "p95Ms": 19, "maxMs": 20}
+
+
+def test_remote_api_is_rejected_without_explicit_authorization(tmp_path):
+    with pytest.raises(ValueError, match="paid-API authorization"):
+        benchmark.run_pipeline(tmp_path, [])
+    with pytest.raises(ValueError, match="allow-remote-recognition"):
+        benchmark.run(SimpleNamespace(allow_remote_recognition=False))
+    assert not list(tmp_path.iterdir())
+
+
+def test_default_cli_plan_is_explicit_about_external_api_and_does_not_write(tmp_path, monkeypatch, capsys):
+    destination = tmp_path / "not-created"
+    monkeypatch.setattr(benchmark.sys, "argv", ["benchmark-processing.py", "--output", str(destination)])
+    benchmark.main()
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["usesExternalRecognitionApi"] is True and plan["mayIncurApiCharges"] is True
+    assert plan["requiredExecutionFlags"] == ["--execute", "--allow-remote-recognition"]
+    assert not destination.exists()

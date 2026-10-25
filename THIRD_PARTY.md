@@ -8,11 +8,11 @@ M4 新增固定 [websockets 17.3](https://pypi.org/project/websockets/17.3/)，�
 
 M1 已移除 AnyImage/MoGe2 浮雕和 Three.js 运行链；旧模型缓存、依赖副本及其许可证不因源码改版删除。旧来源、固定提交和准备脚本可从 Git 检查点 `d7945d8` 的本文件及对应脚本追溯；不将这些旧组件视为新版 OCR 方案。
 
-M3 的 CPU OCR 固定 [RapidOCR 3.10.0（Apache-2.0）](https://github.com/RapidAI/RapidOCR/blob/v3.10.0/LICENSE)和 [ONNX Runtime 1.31.0（MIT）](https://github.com/microsoft/onnxruntime/blob/v1.31.0/LICENSE)。完整直接运行依赖见 `backend/requirements-ocr.txt`。不启用 GPU、方向分类、大模型或付费识别接口。
+2026-10-25 起，按用户决定使用本人百炼工作空间的 `qwen3.7-flash` 视觉 API，复用固定 HTTPX 客户端，不随应用分发千问模型权重或新增模型 SDK。接口、计费、免费额度与数据处理按该服务约定；Key 只保存在私密环境配置中，客户端不持有。调用格式与限制见[千问图像理解](https://help.aliyun.com/zh/model-studio/vision)和[结构化输出](https://help.aliyun.com/zh/model-studio/qwen-structured-output)。模型 JSON 仍由后端验证，不把服务端 JSON 模式当作字段准确率保证。
 
-检测和识别使用 PaddlePaddle 的 PP-OCRv6 tiny，经 RapidAI 转换的固定 ONNX 文件；模型名、v3.10.0 下载地址、SHA-256 及从识别模型导出的字典 SHA-256 集中在 `backend/ocr-models.json`。来源为 [RapidOCR 固定模型目录](https://github.com/RapidAI/RapidOCR/blob/v3.10.0/python/rapidocr/default_models.yaml)，上游[检测模型](https://huggingface.co/PaddlePaddle/PP-OCRv6_tiny_det)和[识别模型](https://huggingface.co/PaddlePaddle/PP-OCRv6_tiny_rec)均声明 Apache-2.0。保留 PaddlePaddle/RapidAI 的来源与许可；不能把 RapidOCR 当前仅列部分型号的 MODEL_LICENSES 表误称为逐项包含 tiny。模型未提交 Git，重新分发模型时须附带上游许可与适用声明。
+已退役的 CPU OCR 使用 [RapidOCR 3.10.0（Apache-2.0）](https://github.com/RapidAI/RapidOCR/blob/v3.10.0/LICENSE)、[ONNX Runtime 1.31.0（MIT）](https://github.com/microsoft/onnxruntime/blob/v1.31.0/LICENSE) 和 PP-OCRv6 tiny。完整[历史直接依赖](https://github.com/YouXiangyu/network-coding/blob/9bf7073336edc6e1fcc458fd8276500a611382e4/backend/requirements-ocr.txt)、模型名/来源/哈希与字典校验见[历史模型清单](https://github.com/YouXiangyu/network-coding/blob/9bf7073336edc6e1fcc458fd8276500a611382e4/backend/ocr-models.json)。上游[检测模型](https://huggingface.co/PaddlePaddle/PP-OCRv6_tiny_det)和[识别模型](https://huggingface.co/PaddlePaddle/PP-OCRv6_tiny_rec)均声明 Apache-2.0。已有本机/服务器缓存、许可和旧发布不会随运行链替换而删除；重新分发旧模型时仍保留原来源与适用声明。
 
-海报仅使用 [Wikimedia Commons](https://commons.wikimedia.org/wiki/Commons:Reusing_content_outside_Wikimedia)，按每个文件的许可、作者及来源审核，保留并展示来源页、许可链接、作者和获取时间。站点不是统一许可的图片库，搜索命中不能替代逐文件核验。应用没有购买商业海报许可，也不承诺现代电影覆盖；许可不足或匹配不明时保留原票。
+海报按配置使用 [TMDB API](https://www.themoviedb.org/api-terms-of-use) 或历史 [Wikimedia Commons](https://commons.wikimedia.org/wiki/Commons:Reusing_content_outside_Wikimedia) 来源。TMDB 结果保留电影来源、条款链接与要求的署名，不标作 Commons 开放许可；Commons 按每个文件的许可、作者及来源审核。搜索命中不能替代逐文件核验，不承诺所有现代电影覆盖；匹配不可靠时保留原票。
 
 免费 TURN 仅调查了 Open Relay/Metered。官方页面对免费档位及公共静态端点的额度边界未能闭合，因此没有启用、注册账号或分发其凭据；强制中继验收未完成。核验链接和原因见开发计划 M3 记录，不把公开端点视为无限免费授权。
 

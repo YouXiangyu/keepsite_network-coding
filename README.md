@@ -1,14 +1,14 @@
 # keepsite · 个人电影票整理与多端同步
 
-V0 基线：用响应式 Web 与 Kotlin Android 整理个人电影票，在同一账号的设备间同步。后续进入问题修复与增量迭代；V0 是产品阶段名称，本次不改变包版本或创建发布标签。
+V0 基线：用响应式 Web 与 Kotlin Android 整理个人电影票，在同一账号的设备间同步。标签 `v0` 指向 `2cb7b06`；后续进入问题修复与增量迭代，不因此自动改变客户端包版本。
 
-支持原票上传、字段编辑、服务端 OCR、TMDB/Commons 海报、邮箱密码与 Google 登录及显式账户绑定。原票与海报存入私有 S3；设备缓存和受限 P2P 用于读取加速。处理失败时保留原票，清缓存不删除云端记录。
+支持原票上传、字段编辑、服务端千问视觉识别、TMDB/Commons 海报、邮箱密码与 Google 登录及显式账户绑定。原票与海报存入私有 S3；设备缓存和受限 P2P 用于读取加速。处理失败时保留原票，清缓存不删除云端记录。识别源码替换与已部署版本分开验收，配置凭据不等于服务器已发布新代码。
 
 当前需求见[产品规格](docs/项目定义与决策主文档.md)，后续工作见[开发计划](docs/开发计划.md)，已验证范围及限制见[V0 验证摘要](docs/V0验证摘要.md)。
 
 ## 本地开发入口
 
-分别按[后端配置与启动](backend/README.md)、[Web 开发](demo/README.md)和[Android 构建](android/README.md)准备环境。完整云端功能需要自行配置 Cognito、私有 S3、Redis、OCR 模型及海报来源；密钥仅放本机环境文件或服务器配置，不放进源码或 APK。
+分别按[后端配置与启动](backend/README.md)、[Web 开发](demo/README.md)和[Android 构建](android/README.md)准备环境。完整云端功能需要配置 Cognito、私有 S3、Redis、千问模型接口及海报来源；密钥仅放本机环境文件或服务器配置，不放进源码或 APK。无需下载本地 OCR 模型。
 
 仓库尚未选择项目开源许可证；公开前需要确定 LICENSE。第三方许可见 [THIRD_PARTY.md](THIRD_PARTY.md)。
 
@@ -20,13 +20,13 @@ V0 基线：用响应式 Web 与 Kotlin Android 整理个人电影票，在同�
 | 票根、字段来源、操作幂等与墓碑 | `backend/contracts.py`、`store.py`、`services/tickets.py`、`state.py` | API、双账号、删除和重试测试 |
 | 图片校验、私有存储、有效引用授权 | `backend/media.py`、`object_storage.py`、`api.py` | 文件类型/大小/哈希、存储故障和媒体授权测试 |
 | 可恢复上传、持久变更、Redis 缓存 | `backend/media.py`、`store.py`、`shared_state.py`、`state.py` | 上传未知结果、事务原子性、缓存损坏/丢失与真实 Redis CI |
-| OCR/海报流水线 | `backend/processing.py`、`processing_repository.py`、`ocr.py`、`posters.py` | Streams 恢复、任务租约、纠错/删除竞态、海报发布故障、固定模型与合成测量 |
+| 视觉识别/海报流水线 | `backend/processing.py`、`processing_repository.py`、`ticket_recognition.py`、`posters.py` | 模型 HTTP/JSON 契约、Streams 恢复、任务租约、纠错/删除竞态与海报发布故障 |
 | 分页、持久增量与通知 | `backend/sync_http.py`、`sync_notifications.py`、`sync_socket.py`、`demo/src/app/accountSync.ts` | 快照一致性、游标边界、写入确认、断线补拉、会话撤销及真实 WebSocket/Redis |
 | 响应式 Web | `demo/src/Prototype.tsx`、`app/`、`features/tickets/` | 运行时契约、单测、浏览器测试和生产构建 |
 | 本机媒体缓存 | `demo/src/mediaCache.ts`、`MediaProvider.tsx` | 账号隔离、全量清理后恢复、空间不足、完整性与按需加载 |
 | 本人设备传输 | `backend/peer_service.py`、`peer_registry.py`、`demo/src/media/` | 授权信令、实际 DataChannel、校验与续传、服务器回退和资源回收 |
 | Kotlin Android | `android/app/src/main/`、`backend/native_auth.py` | JVM 协议/缓存测试、原生仪器测试及 Web 双向联调；真机验收由用户执行 |
-| 综合测量 | `scripts/benchmark-browser.mjs`、`scripts/benchmark-processing.py` | 300 条元数据的浏览器矩阵、完整任务采样与真实隔离 OCR 流水线；环境和限制见报告 |
+| 综合测量 | `scripts/benchmark-browser.mjs`、`scripts/benchmark-processing.py` | 浏览器矩阵与完整任务采样；远程识别测量需显式允许调用并配置凭据，旧 CPU 结果仍为历史证据 |
 | 账号备份、隔离恢复 | `backend/backups.py`、`scripts/restore-account-backup.py` | 资源限制、ZIP 安全、归属、墓碑和完整性验证 |
 | 旧数据迁移 | `scripts/migrate-movie-tickets.py` | `scripts/tests/test_ticket_migration.py` |
 | 制品发布和回滚 | `scripts/deploy-ubuntu.ps1`、`deploy/ubuntu/` | 隔离发布恢复测试 |
@@ -58,7 +58,7 @@ python -B -m pytest backend/tests scripts/tests -q
 python -B -m pytest deploy/ubuntu/tests -q
 ```
 
-在 `demo/` 运行 `npm run check:runtime`、`npm run test:unit`、`npm run build`、`npm run test:web` 和生产构建故障测试。测试使用隔离数据和测试身份；真实 Redis、固定 OCR 模型由专门测试验证，真实 Google/邮箱、S3、实际票据、TURN 和真机另行验收。
+在 `demo/` 运行 `npm run check:runtime`、`npm run test:unit`、`npm run build`、`npm run test:web` 和生产构建故障测试。测试使用隔离数据和测试身份；CI 不持有千问 Key，不调用收费模型，使用离线 HTTP 模拟覆盖识别契约。真实 Redis 由专门测试验证；千问真实调用、Google/邮箱、S3、实际票据、TURN 和真机另行验收。
 
 GitHub PR 与 `codex/**` 分支推送运行 `Backend tests`、`Frontend tests`、`Android tests` 和 `deployment-recovery`；后端 CI 使用隔离 Redis 服务执行真实客户端验证。Android CI 编译应用与仪器测试、运行 JVM 测试及 Lint，不将编译成功称为设备测试通过。合并前检查必须对应最新提交，独立代码审查也必须覆盖最新提交。开发交付到提交与 PR，部署、EC2 启停和合并另等用户明确要求，不自动执行。
 

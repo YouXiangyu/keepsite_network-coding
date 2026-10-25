@@ -1,6 +1,6 @@
 # Ubuntu / EC2 部署
 
-既有环境为东京 `t3.small`（2 GB）EC2，Nginx 提供 HTTPS。新版发布候选使用独立 `/var/lib/keepsite-v3`、Cognito 和私有 S3，单 API worker；配置就绪时另有受限的 OCR 子进程，不启动旧浮雕 worker。源码更新不代表已部署；部署、服务器启停均须用户明确要求。
+既有环境为东京 `t3.small`（2 GB）EC2，Nginx 提供 HTTPS。新版发布候选使用独立 `/var/lib/keepsite-v3`、Cognito 和私有 S3，单 API worker；配置就绪时另有受限的远程识别子进程，不运行本地 OCR 或旧浮雕 worker。源码更新不代表已部署；部署、服务器启停均须用户明确要求。
 
 旧 `/var/lib/memoverse`、`/var/lib/memoverse-v2`、`/var/lib/memoverse-v3` 及其媒体保留，不自动升级或覆盖。名称迁移必须先完成[离线迁移与回滚](../../docs/keepsite迁移.md)，工具为 `scripts/migrate-keepsite.py`，默认只预演。schema 1/2 仍须先用一致快照和原票副本在隔离目录验证 `scripts/migrate-movie-tickets.py`；本地验证副本不能直接宣称已完成 S3 恢复。
 
@@ -13,7 +13,7 @@
 - Cognito 已配置邮箱验证、Google 提供方、授权码与令牌轮换；环境配置包含[后端列出的必需项](../../backend/README.md)。密钥只放受限文件，不输出或提交 Git。
 - 私有 S3 禁止公开访问，服务器通过实例角色获得临时凭据。角色策略见 `keepsite-s3-policy.json`：只允许目标桶 media/models 的 Get/Put，另允许该桶 ListBucket，使不存在对象的 HEAD 正确返回 404；没有对象删除、ACL、KMS 或其他桶权限。策略中的既有 `memoverse-media-125647512944-apne1` 是真实桶标识，不能在代码改名时伪造替换；`KEEPSITE_S3_BUCKET` 保留实际桶值。S3 桶不能原地改名，另建桶、复制对象和切换权限须单独执行并验收。既有 IAM、Cognito 和 EC2 标识同样保持真实值。
 - 新账号从空票夹开始，不再需要初始化模板或 AnyImage 模型。旧模板和共享模型缓存仍保留用于历史回滚，不自动清理。
-- OCR 使用固定 CPU 依赖及 PP-OCRv6 tiny 文件。普通安装不下载模型；授权部署时先用发布目录的虚拟环境 Python 运行 `python -B scripts/prepare-ocr.py --destination <独立模型目录>` 查看计划，再显式加 `--execute` 准备、校验并确保服务用户只读可达。以 `KEEPSITE_OCR_MODEL_DIR` 指向该目录，并配置可用 Redis 与私有 S3；缺少条件时界面应显示处理不可用，不能把部署成功等同于 OCR 已开启。模型目录可位于 `/opt/keepsite/shared/cache/ocr/ppocrv6-tiny`，不得覆盖旧模型目录。
+- 票据识别使用远程视觉 API。通过受限环境文件明确配置 `KEEPSITE_QWEN_API_KEY`、`KEEPSITE_QWEN_BASE_URL` 和 `KEEPSITE_QWEN_MODEL`（当前用户选择 `qwen3.7-flash`，没有地址或模型默认值），并配置可用 Redis、私有 S3 与海报来源；缺少条件时界面明确显示处理不可用。Key 不写入客户端、Git、命令行或日志；普通安装与 CI 不下载模型，不调用付费接口。确认配置不代表已验证模型可用、账户余额、真实票据准确率或费用。旧 CPU 依赖、准备脚本与运行回退已退出新版；已有共享模型缓存及旧 release 保留，不自动删除。
 - `/var/lib/keepsite-v3` 属于 keepsite，0700；service 只对新数据目录开放写入。旧数据库、证书、DDNS 与认证回退资料保持完整。
 
 ## 准备与候选验证
