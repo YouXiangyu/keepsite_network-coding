@@ -1,5 +1,5 @@
 [Unit]
-Description=Publish this EC2 instance IPv4 to the configured Cloudflare A record
+Description=Publish this EC2 instance IPv4 and retain the Cloudflare A record on shutdown
 Wants=network-online.target
 After=network-online.target network.target
 ConditionPathExists=/etc/keepsite/cloudflare.json
@@ -13,7 +13,6 @@ User=root
 Group=root
 UMask=0077
 ExecStart=/usr/bin/python3 -B /opt/keepsite/admin/sync-cloudflare-dns.py publish --execute
-ExecStop=/usr/bin/python3 -B /opt/keepsite/admin/sync-cloudflare-dns.py withdraw --execute
 TimeoutStartSec=90
 TimeoutStopSec=90
 Restart=on-failure

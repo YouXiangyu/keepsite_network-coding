@@ -141,7 +141,7 @@ class DDNSLifecycleTests(unittest.TestCase):
                 self.assertEqual(http.records[0]['comment'], 'operator comment')
                 self.assertEqual(http.records[0]['tags'], ['project:keepsite'])
 
-    def test_repeated_publish_is_noop_and_shutdown_then_boot_recreates(self):
+    def test_repeated_publish_is_noop_and_manual_withdraw_then_republish_recreates(self):
         http = FakeHTTP()
         self.run_sync(http)
         original = ddns.private_json(self.state_path)
@@ -386,14 +386,16 @@ class HTTPTests(unittest.TestCase):
                     ddns.HTTP(opener=opener).request('GET', target)
                 self.assertEqual(opener.calls, [])
 
-    def test_service_has_bounded_start_stop_and_root_private_state(self):
+    def test_service_publishes_and_retains_fixed_ip_record_with_root_private_state(self):
         unit = (ROOT / 'deploy/ubuntu/keepsite-ddns.service').read_text()
         for expected in ('Wants=network-online.target', 'After=network-online.target', 'Type=oneshot',
                          'RemainAfterExit=yes', 'User=root', 'StateDirectory=keepsite-ddns',
-                         'StateDirectoryMode=0700', 'publish --execute', 'withdraw --execute',
+                         'StateDirectoryMode=0700', 'publish --execute',
                          'TimeoutStartSec=90', 'TimeoutStopSec=90'):
             self.assertIn(expected, unit)
         self.assertNotIn(TOKEN, unit)
+        self.assertNotIn('ExecStop=', unit)
+        self.assertNotIn('withdraw --execute', unit)
 
 
 if __name__ == '__main__':
