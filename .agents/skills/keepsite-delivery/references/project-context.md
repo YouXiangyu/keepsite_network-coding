@@ -1,4 +1,17 @@
 # keepsite 项目运行信息
+
+## 2026-10-25 固定 Elastic IP 与电影制式排查
+
+用户明确决定使用固定 IP。已在东京账号 `125647512944` 分配并绑定 `13.230.217.247`，allocation `eipalloc-012aaafbbd3622359`、association `eipassoc-02d09de9926cec3aa`，准确关联 keepsite 实例 `i-0e9ba9bc6f4b1c019` 和 ENI `eni-03ecbb87b6f13ccc7`。旧自动公网地址 `43.207.138.243` 已被替换，不再用于连接。固定地址保留期间（包括停机）按当前公开价格 0.005 USD/小时计费，30/60 天约 3.60/7.20 USD，税费与抵扣另计；释放需另行明确授权，不能为清理自动释放。
+
+DNS 源码修改在 `efbd6c9947bae7308c7ea018ba2e9842168c86d6`：keepsite-ddns.service 删除 ExecStop withdraw，保留开机 publish；28 项 DDNS 测试通过并经独立审查。线上安装前备份 `/opt/keepsite/host-backups/fixed-ip-20261025-bc71a2e9/keepsite-ddns.service.before`，安装后 systemd-analyze verify/daemon-reload 通过，实际 ExecStop 为空。旧 memoverse-ddns 服务现场 inactive/disabled，未动旧文件或 timer。新 IP 通过既有严格 SSH 主机校验；显式 publish 返回 published_update，两个 Cloudflare 权威 NS 与 1.1.1.1 均读回 A=`13.230.217.247`、TTL 60；新 IP HTTPS 与本机系统代理域名访问均 200，证书校验通过。DNS-only 模式与受限 Token 保留。
+
+58 分钟自动正常关机策略保持，本次 timer 仍到期于北京时间 2026-10-25 22:15:00，未启动/重启/延长 timer，也未重启实例。关机后应继续保留 A 记录并停止网站服务；本次未为了测试提前关机，尚不能把配置核验写成完整停机/再开机实测。以后停机验收应确认 stopped、EIP 仍绑定且 A 记录保留；不得沿用旧“停机撤 DNS”规则。当前应用仍是 v0.1 `5b8e35d59cd1d4c9f08bfc6c5075744c3e7dec2e`，本次仅按用户授权更新独立主机 DNS 配置。
+
+另按用户报告只读排查“奥德赛 (2D)”：票根和作业保存的 VLM 标题均包含 (2D)，来源为 ocr（历史类别名），任务 no_match/error=null、无海报，证明此次票面识别已成功。使用线上 TMDB 配置仅查询公开电影元数据：带后缀 0 条，纯“奥德赛”27 条，包含多条纯同名电影及两条 2026 年记录。制式后缀影响搜索，去掉后仍存在身份歧义，不能按排名/热度猜片。没有发送用户图片、修改票根、重新入队或调用付费识别模型。
+
+海报边界修复保留存储标题，只从查询身份剥离尾部括号完整 2D/3D，保留年份与多电影拒绝规则；修复在开发分支，未发布服务器，不宣称这张同名电影已经选图成功。海报/处理定点测试 88 通过、2 项平台/真实 Redis 跳过；补充空/超长边界后海报与 DNS 74 通过及 30 子测试通过。安全证据在本机 `output/fixed-ip-2026-10-25/`，不记录任何凭据。
+
 ## 2026-10-25 v0.1 发布与线上千问切换
 
 用户明确授权合并当前 PR、发布 v0.1 APK/标签并部署主线，并在 GitHub Codex 审查一直运行时明确取消本次等待要求。PR #10 先合入 PR #9，PR #9 以 merge commit `5b8e35d59cd1d4c9f08bfc6c5075744c3e7dec2e` 合入 main；其内容与已验证组合 head `31a58b1d6248b1b268fec46bbfa0faea7a8e8ad8` 相同，Backend、Frontend、Android、deployment-recovery 共八项 CI 均成功。本次是用户明确例外，不将仍在运行的 GitHub Codex 审查写成通过，也不修改后续默认合并流程；实现阶段独立审查已完成，本次临时验收脚本另经子代理只读复核。
@@ -90,11 +103,11 @@ TMDB 只读令牌已从本机 `.cache/server/keepsite-tmdb.env` 安全配置到�
 | 系统与磁盘 | Canonical Ubuntu 24.04；10 GB 加密 gp3 根卷 `vol-0bb6aa01805d28c75`，旧 20 GB 卷已删除 |
 | 最近运行状态 | 2026-10-25 v0.1 发布核验 running，状态检查 2/2 通过；自动关机到期北京时间 22:15:00。仅代表本次核验，操作前重新查询 |
 | 最近应用运行提交 | v0.1 `5b8e35d59cd1d4c9f08bfc6c5075744c3e7dec2e`，current 与 MainPID cwd 一致。此前版本 `810f900cd6f3d664cf96af3095b44a5bbea197ff` 保留回滚 |
-| 公网 IPv4 | 2026-10-25 v0.1 发布核验为 `43.207.138.243`；当日早先 `13.114.44.30` 及其他旧地址仅供历史定位。动态地址在停机后释放，每次启动重新查询 |
+| 公网 IPv4 | 固定 Elastic IP `13.230.217.247`，allocation `eipalloc-012aaafbbd3622359`，绑定本实例。停机仍保留及计费；操作前仍核对绑定。此前动态地址仅供历史定位 |
 | Launch template / 新建默认版本 | `lt-016bca8507ac81480` / `2`，根盘默认 10 GB |
 | 安全组 / SSH key pair | `sg-0f472ac3891c65681` / `memoverse-ec2-20261017` |
 | SSH 用户 | `ubuntu` |
-| DNS | Cloudflare。2026-10-24 起由 `keepsite-ddns.service` 更新 A 记录，正常关闭时撤回；旧 `memoverse-ddns.service` 已停用自启动。运行时 DNS-only、TTL 60。停机后的记录须读回确认 |
+| DNS | Cloudflare，A 指向固定 EIP，DNS-only、TTL 60。keepsite-ddns 开机 publish，2026-10-25 起正常关机保留 A；旧 memoverse-ddns 已核对 inactive/disabled。停机后读回确认地址保留 |
 | 自动关机 | `keepsite-auto-stop.timer` 已启用，`OnBootSec=58min`、`AccuracySec=1s`；旧 timer 已停用自启动。到点发起正常 poweroff，实例 shutdown behavior 已核验为 `stop` |
 | S3 | 东京私有桶 `memoverse-media-125647512944-apne1`，Block Public Access、BucketOwnerEnforced、AES256、版本控制已启用 |
 | EC2 实例角色 / profile | `memoverse-ec2-app-20261018`，只附着本项目实例；Get/Put 限定桶内 `media/*`、`models/*`，另允许该桶 ListBucket，未授权删除、ACL、其他桶或 `ops/*` 读取 |
@@ -155,8 +168,8 @@ HTTPS 由源站 Nginx 使用 Let's Encrypt 证书提供，`certbot.timer` 续期
 - 2026-10-20 起，部署、启动或停止实例只在用户明确要求时执行；开发代理完成测试、提交与 PR 后停止，不自行发布或开机。
 - 用户已明确删除 Lightsail 并改用 EC2，选择新建 `t3.small`。2026-10-18 进一步将自动关机从一小时改为每次开机 58 分钟，留出约两分钟正常关机缓冲，但不保证严格在 60 分钟内进入 stopped。用户验收或明确要求时可提前停机；等待验收、继续部署或生成均不能自行延长，延长或取消须取得用户对本次变更的明确授权。
 - 定时从系统启动计时，应用重启或发布不重置；系统重新开机重新计时。到点发起关机，服务退出及 AWS 状态转换还需短暂时间。每次开机核验 timer enabled 和剩余时间，维护命令见 `deploy/ubuntu/README.md`；不要在 uptime 超过 58 分钟后无意重新启用 timer，届时会立即触发。
-- 发布前始终查询上述明确 instance ID 的状态和当次公网 IP；启动后等待状态检查及 DDNS 就绪。停机后确认 `stopped` 与 DNS 关机清理结果。不要用历史状态或 IP 驱动操作。
-- 普通按需 EC2 停止后不再计计算费，自动公网 IPv4 随停止释放；EBS 磁盘继续保留和计费。不得把停机说成完全零费用。
+- 发布前始终查询上述明确 instance ID 的状态和当次公网 IP；启动后等待状态检查及 DDNS 就绪。停机后确认 `stopped`、EIP 仍绑定且域名 A 仍指向该固定地址。不要用历史状态或 IP 驱动操作。
+- 普通按需 EC2 停止后不再计计算费；2026-10-25 起使用的 Elastic IP 及 EBS 磁盘继续保留和计费。不得把停机说成完全零费用。
 - 2026-10-17 AWS Pricing API 核验：`t3.small` 计算费 `0.0272 USD/小时`，动态公网 IPv4 `0.005 USD/使用小时`，当前 10 GB gp3 磁盘约 `0.96 USD/月`。实例与 IP 运行时合计 `0.0322 USD/小时`；税费、抵扣和额外流量另计。gp3 容量按秒折算、最低 60 秒，不按实际文件占用计费；未来报价重新查询。
 - 旧 Lightsail `memoverse-keepsite`、`memoverse-keepsite-ip` 和部署公钥已删除；旧 IP `52.196.70.26` 已释放。新 EC2 已验收迁移完整性；本机 `.cache/migration-lightsail-ec2` 暂存目录删除被自动审批拦截，已交用户手动清理。
 - 账户既有 5 USD 月预算提醒不等于金额硬上限，不自动调整预算。
@@ -177,4 +190,4 @@ HTTPS 由源站 Nginx 使用 Let's Encrypt 证书提供，`certbot.timer` 续期
 - 通用 Ubuntu 发布脚本会核验制品哈希与准备状态后复用同一 commit；未知目录或内容冲突停止，不自动删除。激活失败后依旧要核对回滚输出与真实运行状态，不能将尝试回滚等同成功。
 - 当前没有统一 formatter。遵循现有风格，不放宽 Web 运行契约或扩散到无关代码。
 - 2026-10-18 最新阶段已发布运行观测版本，19:40 用户明确确认 Google 登录和邮箱收件后完成精确 QA 清理，19:46 核验 stopped。58 分钟 timer 全程未改或延长；本轮未新增业务数据备份。历史阶段的 22 + 6 项、9 个模板合成测试目录以及 7 个认证/后端测试目录删除被自动审批拒绝，未绕过；该历史待清理记录不等于本轮 QA 未清理，清单集中在 [历史 EC2部署验收.md](https://github.com/YouXiangyu/network-coding/blob/d23f04d886d7cd656c542c3f4bd69826906c8c55/docs/EC2部署验收.md)。保留业务数据、模型、模板、正式凭据、当前准确发布制品、配置回滚元数据和验收证据。文档更新无需再次发布应用。
-- DDNS 限定一个实例管理一个域名。正常服务停止会撤回自己确认过的 A 记录；强制关机、Token 失效或并发改 DNS 时不保证撤回，停机后应读回确认。2026-10-18 换盘后已验证新公网 IP 发布，以及最终真实 EC2 停机后 A 记录归零。
+- DNS 限定一个实例管理一个域名。2026-10-25 起固定 EIP 模式在关机时保留 A，开机 publish 核对绑定。2026-10-18 动态地址阶段曾验证停机后 A 归零，仅为旧策略的历史证据。人工撤回或释放 EIP 须另行授权并同步域名，避免指向已回收地址。

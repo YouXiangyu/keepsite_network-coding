@@ -40,7 +40,7 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install -r backend/requirements-dev.txt
       - name: Test backend contracts, isolation, and recovery
-        run: python -B -m pytest backend/tests scripts/tests/test_capacity_benchmark.py scripts/tests/test_sync_benchmark.py scripts/tests/test_processing_benchmark.py scripts/tests/test_ticket_migration.py scripts/tests/test_keepsite_migration.py -q -ra --basetemp "$RUNNER_TEMP/pytest-backend" --junitxml=test-results/backend.xml
+        run: python -B -m pytest backend/tests scripts/tests/test_capacity_benchmark.py scripts/tests/test_sync_benchmark.py scripts/tests/test_processing_benchmark.py scripts/tests/test_ticket_migration.py scripts/tests/test_keepsite_migration.py scripts/tests/test_cloudflare_dns.py -q -ra --basetemp "$RUNNER_TEMP/pytest-backend" --junitxml=test-results/backend.xml
       - name: Upload backend failure report
         if: ${{ failure() }}
         uses: actions/upload-artifact@v4
