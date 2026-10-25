@@ -59,7 +59,7 @@ Redis I/O 只发生在完成的 SQL 事务之间；写操作直接提交数据�
 
 85 秒尝试预算和停止信号在阶段边界、流读取返回后检查；它们不是整个 S3 网络操作的硬截止。botocore 的 5 秒读取超时针对 socket 等待，持续低速且不空闲的流可能让一次聚合读取超过该墙钟预算。当前不通过私有 StreamingBody 接口或强杀 Python 线程绕过限制；只有识别子进程能在 45 秒硬终止。SQL 租约/输入版本仍拒绝超期结果发布，服务关停不延长 EC2 倒计时。真实 S3 慢流耗时和退出行为属于后续测量边界，不能由 fixture 测试宣称已经保证严格端到端超时。
 
-海报来源由后端 `KEEPSITE_POSTER_PROVIDER` 明确选择：默认 `commons` 保留原 Wikimedia Commons 匹配；`tmdb` 使用 TMDB 电影 API，并从私密环境读取 `KEEPSITE_TMDB_READ_ACCESS_TOKEN`。只读令牌通过 Bearer 请求头发送，仅限 TMDB API 主机，不发给图片 CDN；不进入客户端、Git、请求 URL 或业务响应；缺少配置时明确显示处理不可用。不会在匹配失败后串联不同来源猜测封面。TMDB 检查规范化片名、原名或经过 API 验证的别名，同名作品不按热度选择；可用片名中的显式年份消歧，放映时间不被当成首映年份。网络地址、响应大小、下载类型和实际图片均受校验。
+海报来源由后端 `KEEPSITE_POSTER_PROVIDER` 明确选择：默认 `commons` 保留原 Wikimedia Commons 匹配；`tmdb` 使用 TMDB 电影 API，并从私密环境读取 `KEEPSITE_TMDB_READ_ACCESS_TOKEN`。只读令牌通过 Bearer 请求头发送，仅限 TMDB API 主机，不发给图片 CDN；不进入客户端、Git、请求 URL 或业务响应；缺少配置时明确显示处理不可用。不会在匹配失败后串联不同来源猜测封面。VLM 片名提示去除 2D/3D、中文版/英文版等放映后缀，保留第二部/第三部/数字续集与真实名称；字段校验后及海报检索输入共用轻量清理函数，不改写手工标题。TMDB 优先使用规范化片名或原名精确命中，没有精确命中才验证全部有界候选的别名（最多 8 个），不按搜索前几条抽样。显式年份和观影年份上限筛选后，同名默认选择最新完整上映日期；同日并列、日期缺失或非法时返回 no_match，最新作品缺少合格海报时不退回旧电影。不使用热度或搜索排名，放映时间不被当成首映年份。网络地址、响应大小、下载类型和实际图片均受校验。
 
 无可信匹配以 `no_match` 结束。海报 bytes 再次解码核验后，在上传前将 descriptor、出处和临时文件名写入 `processing_artifacts`。S3 保存并核验后才发布引用；最终 SQL 发布失败时，下一次租约先核对同一产物，不重跑 OCR 或重新抓取。`poster_sources` 按 provider 保存出处：Commons 保留 `licenseName/licenseUrl/author`；TMDB 使用电影 `sourcePage`、海报 `sourceFile`、`termsUrl`、`fetchedAt`，不虚构开放许可或作者。
 

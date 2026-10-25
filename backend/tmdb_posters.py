@@ -1,4 +1,4 @@
-"""Server-only TMDB movie lookup; ambiguous identity never selects a cover."""
+"""Server-only TMDB movie lookup with exact identity and latest-release selection."""
 from datetime import date, datetime
 import io
 import json
@@ -14,6 +14,7 @@ from fastapi import HTTPException
 from PIL import Image
 
 from .media import MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, image_info
+from .movie_titles import clean_movie_title
 from .posters import (CommonsPosterProvider, MAX_METADATA_BYTES, NETWORK_SECONDS,
                       PosterCandidate, PosterError, TOTAL_SECONDS, USER_AGENT,
                       _dimensions, _normal, _retry_delay, _title)
@@ -171,6 +172,9 @@ class TMDBPosterProvider:
     def find(self, title, showtime="", *, stopping=lambda: False):
         if isinstance(title, str):
             title = unicodedata.normalize("NFKC", title)
+            if len(title) > 120:
+                return None
+            title = clean_movie_title(title)
         normalized, requested_year = _title(title)
         if not normalized:
             return None
@@ -182,22 +186,30 @@ class TMDBPosterProvider:
         movies = self._movies(query, deadline, stopping)
         if movies is None:
             return None
-        matches = []
-        for movie in movies:
-            if movie.get("adult") is not False:
-                continue
-            names = [movie.get("title"), movie.get("original_title")]
-            if not any(isinstance(name, str) and _normal(name) == normalized for name in names):
-                # Search can match alternative titles; verify those rather than
-                # interpreting rank or popularity as identity.
-                if len(movies) > MAX_ALIAS_MOVIES:
-                    return None
+        candidates = [movie for movie in movies if movie.get("adult") is False]
+        identities = [movie for movie in candidates if any(
+            isinstance(name, str) and _normal(name) == normalized
+            for name in (movie.get("title"), movie.get("original_title")))]
+        # Exact title/original-title matches take precedence over aliases. Only
+        # use aliases when there are no exact matches, with a complete budget.
+        if not identities:
+            if len(candidates) > MAX_ALIAS_MOVIES:
+                return None
+            for movie in candidates:
                 aliases = self._query(f"/movie/{movie['id']}/alternative_titles", {}, deadline, stopping)
                 if aliases.get("id") != movie["id"] or not isinstance(aliases.get("titles"), list) or len(aliases["titles"]) > 300:
                     raise PosterError("invalid_metadata")
-                if not any(isinstance(item, dict) and isinstance(item.get("title"), str)
-                           and _normal(item["title"]) == normalized for item in aliases["titles"]):
-                    continue
+                if any(isinstance(item, dict) and isinstance(item.get("title"), str)
+                       and _normal(item["title"]) == normalized for item in aliases["titles"]):
+                    identities.append(movie)
+        screening_year = None
+        if showtime:
+            try:
+                screening_year = datetime.strptime(showtime, "%Y-%m-%dT%H:%M").year
+            except (ValueError, TypeError):
+                return None
+        matches = []
+        for movie in identities:
             release = movie.get("release_date")
             try:
                 if not isinstance(release, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", release):
@@ -207,17 +219,16 @@ class TMDBPosterProvider:
                 return None
             if requested_year is not None and released.year != requested_year:
                 continue
+            if screening_year is not None and released.year > screening_year:
+                continue
             matches.append((movie, released))
-        # The screening date cannot distinguish remakes or re-releases.
-        if len(matches) != 1:
+        if not matches:
             return None
-        movie, released = matches[0]
-        if showtime:
-            try:
-                if released.year > datetime.strptime(showtime, "%Y-%m-%dT%H:%M").year:
-                    return None
-            except (ValueError, TypeError):
-                return None
+        newest = max(released for _, released in matches)
+        latest = [movie for movie, released in matches if released == newest]
+        if len(latest) != 1:
+            return None
+        movie = latest[0]
         path = movie.get("poster_path")
         if not isinstance(path, str) or POSTER_PATH.fullmatch(path) is None:
             return None

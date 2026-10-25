@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Publish this EC2 instance's IPv4; withdraw only a verified owned A record.
+"""Publish this EC2 instance's IPv4; manual withdraw verifies record ownership.
 
 No DNS or local-state mutation occurs without --execute. IMDSv2 is mandatory.
 The private config fields are api_token, zone_id and record_name.
 Cloudflare has no conditional DELETE by content: operators must not run two
-publishers for this name concurrently. A forced shutdown may skip ExecStop.
+publishers for this name concurrently. The service retains DNS on shutdown;
+withdraw is an explicit operator action, not a shutdown hook.
 """
 from __future__ import annotations
 

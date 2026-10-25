@@ -64,7 +64,7 @@
 - Nginx access 格式不含查询字符串，OAuth callback 的 access/error 日志单独关闭；Uvicorn 同样去除认证回调查询。应用日志不记录密码、验证码或令牌。
 - 应用依赖实例角色，不保存长期 AWS 访问密钥。按测试规模评估 S3 访问日志、CloudTrail 数据事件和 CloudWatch 指标的可观测性与额外费用，不默认启用与本轮无关的收费服务。
 - systemd 默认 MemoryHigh=1200M、MemoryMax=1500M、swap 上限 2 GB，针对当前 2 GB 测试机；更大图片/并发仍需实测。以应用行为判断容量，不把单样例当作压测结果。
-- 每次开机 58 分钟后自动发起正常关机；等待验收不暂停倒计时。用户确认通过或明确要求后可提前停机，核验 DDNS 撤回。延长或取消本次倒计时须用户明确授权。停机仍保留磁盘及 S3 数据计费。
+- 每次开机 58 分钟后自动发起正常关机；等待验收不暂停倒计时。用户确认通过或明确要求后可提前停机，核验域名 A 记录仍指向保留的 EIP。延长或取消本次倒计时须用户明确授权。停机仍保留磁盘、S3 数据及固定 IP 计费。
 
 ## 开机 58 分钟自动关机
 
@@ -88,9 +88,9 @@ systemctl show keepsite-auto-stop.timer -p NextElapseUSecMonotonic -p TimersMono
 
 ## 自动 DNS
 
-`keepsite-ddns.service` 在 EC2 开机后读取 IMDSv2，更新 Cloudflare 精确 A 记录，正常关机撤回仍属于本实例的记录。配置和状态仅 root 可读。DDNS 是独立运维组件，普通应用发布不会自动替换 `/opt/keepsite/admin/sync-cloudflare-dns.py`。
+当前 EC2 使用固定 Elastic IP。`keepsite-ddns.service` 在开机后读取 IMDSv2，核对并更新 Cloudflare 精确 A 记录；正常关机保留该记录，减少重复删除/创建引起的 DNS 负缓存。配置和状态仅 root 可读。DDNS 是独立运维组件，普通应用发布不会自动替换 `/opt/keepsite/admin/sync-cloudflare-dns.py`。固定地址保留期间持续计费，停机仍不可访问网站。
 
-若明确修改 DDNS，先验证脚本与 unit，再同步两者、daemon-reload，并有计划地重启服务；重启会短暂撤回再发布 DNS。只允许单实例管理该域名。强制关机、网络故障或 Token 失效时不保证撤回，关机后必须读回核验。
+从旧策略迁移时，先安装不含 `ExecStop` 的 unit 并执行 `daemon-reload`，确认 `systemctl show keepsite-ddns.service -p ExecStop` 为空；此前不要 stop/restart 旧服务，以免触发撤回。核对旧 `memoverse-ddns.service` 已 inactive 且停用自启动。绑定 EIP 后显式执行一次 `publish --execute`，再读回权威 A 记录。只允许单实例管理该域名，关机后核验记录仍指向保留的 EIP。脚本的 `withdraw` 仅用于另行明确授权的人工撤回，不再由关机自动调用；释放 EIP 前必须另行处理域名，避免指向已回收地址。58 分钟自动关机 timer 无需更改或重启。
 
 ## 本地控制流测试
 

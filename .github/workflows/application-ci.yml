@@ -40,7 +40,7 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install -r backend/requirements-dev.txt
       - name: Test backend contracts, isolation, and recovery
-        run: python -B -m pytest backend/tests scripts/tests/test_capacity_benchmark.py scripts/tests/test_sync_benchmark.py scripts/tests/test_processing_benchmark.py scripts/tests/test_ticket_migration.py scripts/tests/test_keepsite_migration.py -q -ra --basetemp "$RUNNER_TEMP/pytest-backend" --junitxml=test-results/backend.xml
+        run: python -B -m pytest backend/tests scripts/tests/test_capacity_benchmark.py scripts/tests/test_sync_benchmark.py scripts/tests/test_processing_benchmark.py scripts/tests/test_ticket_migration.py scripts/tests/test_keepsite_migration.py scripts/tests/test_cloudflare_dns.py -q -ra --basetemp "$RUNNER_TEMP/pytest-backend" --junitxml=test-results/backend.xml
       - name: Upload backend failure report
         if: ${{ failure() }}
         uses: actions/upload-artifact@v4
@@ -49,6 +49,50 @@ jobs:
           path: test-results/backend.xml
           if-no-files-found: ignore
           retention-days: 7
+
+  publish-main:
+    name: Publish checked main artifact
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'YouXiangyu/network-coding'
+    needs: [backend, frontend, android]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      checks: read
+      actions: read
+      id-token: write
+    concurrency:
+      group: keepsite-main-artifact
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: demo/package-lock.json
+      - name: Build same-origin production frontend
+        working-directory: demo
+        run: npm ci && npm run build
+        env:
+          VITE_API_BASE_URL: /
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install publisher SDK
+        run: python -m pip install boto3==1.43.114
+      - uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::125647512944:role/keepsite-github-main-publisher
+          aws-region: ap-northeast-1
+          role-duration-seconds: 900
+      - name: Gate exact main checks and publish immutable release
+        run: python scripts/publish-release.py --commit "$GITHUB_SHA" --bucket memoverse-media-125647512944-apne1 --wait-seconds 600
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
   frontend:
     name: Frontend tests

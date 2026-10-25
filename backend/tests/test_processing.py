@@ -274,6 +274,20 @@ def test_user_fields_are_not_overwritten_and_no_match_is_terminal(tmp_path):
         assert result["media"]["poster"] is None and len(fake.objects) == 1
 
 
+def test_user_title_is_preserved_while_tmdb_search_removes_only_presentation_suffix(tmp_path):
+    from test_tmdb_posters import movie, provider as tmdb_provider
+    poster, calls = tmdb_provider([movie(title="电影第三部")])
+    title = "电影第三部（2D 英文版）"
+    with pipeline(tmp_path, provider=poster) as (client, _app, worker, _fake, _provider, _recognition):
+        create(client, fields={"title": title})
+        worker.run_once()
+        result = ticket(client)
+        assert result["fields"]["title"] == title and result["fieldSources"]["title"] == "user"
+        assert result["processing"] == {"status": "ready", "error": None}
+        assert result["media"]["poster"] is not None
+        assert calls[0].url.params["query"] == "电影第三部"
+
+
 def test_original_change_preserves_poster_while_pending_then_no_match_uses_original(tmp_path):
     results = iter([{"title": "Old OCR", "cinema": "Old OCR cinema"}, {}])
     with pipeline(tmp_path, runner=lambda *args, **kwargs: next(results)) as (client, app, worker, fake, provider, _):

@@ -1,4 +1,49 @@
 # keepsite 项目运行信息
+
+## 2026-10-25 自动发布管理组件安装与磁盘清理
+
+用户选择第三种自动部署方案，持续授权 main 经检查后由 CI 构建、EC2 开机/每五分钟拉取制品；不自动合并 PR、不自动开机、不调整 58 分钟关机时间。实现提交 81ca045，SDK 客户端显式关闭修复 a07db35；root 管理组件已安装，源代码和发布工作流仍在 PR #11，工作流合入 main 前尚不能宣称 GitHub 自动发布已启用。
+
+独立 IAM Policy Autopilot 从两段实际 SDK 代码生成基线并收窄到私有桶 deploy/keepsite/* 前缀。EC2 角色新增 KeepsiteDeploymentRead（GetObject、受 prefix 限制的 ListBucket），原媒体权限保留；新增 keepsite-github-main-publisher（GetObject/PutObject/受 prefix 限制 ListBucket），无删除、ACL 或 KMS 权限。OIDC audience=sts.amazonaws.com，实际 immutable subject 只信任 repo:YouXiangyu@148185441/network-coding@1423372245:ref:refs/heads/main，没有长期 AWS 密钥。源码、helper、SDK 管理 venv 均在 root-owned /opt/keepsite/admin，不从业务可写环境加载。
+
+keepsite-autodeploy.timer 已 enabled/active，OnBootSec=2min、OnUnitInactiveSec=5min；首次真实 S3 检查返回 no_candidate。当前已验证 v0.1 发布包另存为部署前缀基线，在实例上完整读取并校验 12812800 bytes 和 SHA256=14fb797e37e9786be774db78f33c0cb57411066ec936c2d4d9608192177331c2 后写 latest.json，指向已运行 5b8e35d，仅供验证，不切换业务版本。随后临近关机时返回 shutdown_window，证明窗口保护生效；原 auto-stop 到期仍为 2026-10-25 23:59:53，未延长。尚未验证 GitHub OIDC 首次发布和开机后候选自动激活，须工作流合入 main 后继续核对。
+
+worker 与 publisher 已独立审查，20 项定点测试通过，含哈希拒绝、无更新不重启、准确 main/workflow/App/check suite 门禁、两次失败限制、认证健康、enable 失败重试、prepare 后重新核对十分钟窗口及 SDK 关闭。首版不自动删除任何 release；空间不足停止。源代码已提交推送，最新提交 CI 须重新核对，不能沿用旧 head 的结果。
+
+用户另明确授权删除用不到的历史内容。核对旧 memoverse 服务 inactive/disabled、当前所有可读进程 cwd/exe/fd/maps 无目标引用后，删除 /opt/memoverse/releases 下五个已核验旧发布、旧 current 链接及 /opt/memoverse/shared/cache（旧 3D 依赖/模型/安装缓存），并清空 apt 下载缓存。当前 keepsite 5b8e35d、上一回滚版 810f900、keepsite 共享缓存、原票、数据库、各数据备份和旧 initial-template 均保留。10 GiB 卷的根文件系统约 8.65 GiB，当前应用连依赖约 128 MiB；主要旧占用来自系统、2 GiB swap、历史发布及旧模型缓存。释放约 2.02 GiB，安装管理 SDK 后可用约 3.20 GiB（3440336896 bytes）。清理证据在 output/autodeploy-2026-10-25/disk-cleanup.json，没有扩大到 S3 用户媒体或其他云资源。
+
+## 2026-10-25 再次开机与自动部署方案评估
+
+用户明确要求再开机一次，并提出 main 更新自动部署、比较 GitHub Actions 与 Linux cron 的方案。通过官方 AWS MCP 核对账户和实例后启动同一 keepsite 实例；本次 LaunchTime 为北京时间 23:01:48，后续状态检查 2/2 通过，固定 IP 仍为 13.230.217.247，DNS、应用、Nginx 和开机 publish 均正常，HTTPS 200 且证书校验通过。实际应用仍为 v0.1 5b8e35d，未合并 PR #11 或切换应用发布。
+
+原 keepsite-auto-stop.timer 本次到期北京时间 2026-10-25 23:59:53，未延长或重置。已验证关机后固定 IP/DNS 保留及再次开机恢复访问。状态和期限仅代表此次核验，后续仍现场查询。
+
+在该评估时点（后续安装见上节），自动部署尚处于方案评估，尚未安装 cron/timer、GitHub runner 或自动发布工作流，未新增 GitHub/AWS 部署身份或权限。服务器约 2 GB 内存、根盘剩余约 1.3 GB，已有 Git 但没有 Node/npm；不宜把频繁前端构建放在此机器。推荐方向为 CI 构建准确 main 提交的同源制品，服务器开机及定时仅检查成功制品、有更新才准备并激活，复用现有哈希、锁、健康检查与回滚。3 分钟轮询可行，建议 5 分钟；具体自动部署实现与首次启用仍待后续完成，不把建议视为已安装。
+
+## 2026-10-25 片名规范与同名最新策略（D-082，开发分支）
+
+用户明确调整规则：VLM 的片名去除 2D/3D、中文版/英文版等放映元信息，保留第二部/第三部/第四部、数字续集及 Part II；同名电影默认选最新上映作品。这一决定取代本日较早“同名全部保持歧义”的策略，产品规格更新为 v0.23、D-082。
+
+实现提交 `3d0233f1fd800e96cd76fa3faa77cfe84b235bae`：更新千问提示，五字段原始校验通过后清理完整末尾元信息；海报检索复用同一轻量函数，用户手工字段保持原值。TMDB 先收集所有片名/原名精确命中，无精确命中才验证最多 8 个候选的完整别名集合；不按搜索前几条抽样。显式年份及观影年份上限筛选后选唯一最新完整上映日期；缺失/非法日期、最新日期并列或最新作品缺海报时保留原票，不退回旧电影。27 条两页“奥德赛”夹具可选择 2026-07-15，同年较早、旧作品、热度和结果顺序不改变选择。
+
+独立代码、字段边界与文档审查均通过。定点识别/海报/处理 206 项通过、2 项本机真实 Redis/链接能力跳过；完整本机后端 656 项通过、7 项明确跳过，安全 XML 在 `output/fixed-ip-2026-10-25/`。另用现有千问配置运行两张合成票面：奥德赛（2D 英文版）输出奥德赛；示例电影第三部（3D 中文版）保留第三部，均通过隔离识别链。此为合成样本，不是实际用户原票准确率或真实海报下载验收。没有改用户票根或重新入队。
+
+仍在 PR #11 的 `codex/fixed-ip-and-poster-query` 分支，未合并或部署；线上应用仍是 v0.1 `5b8e35d59cd1d4c9f08bfc6c5075744c3e7dec2e`。APK 使用域名 `https://keepsite.space`，固定 IP 和本次纯后端规则不要求重新发 APK。
+
+用户询问网站不可达时，2026-10-25 北京时间 22:19:38 经官方 AWS MCP 只读核对账户、实例、EIP 三项 API 均成功：实例 stopped，原因为 InstanceInitiatedShutdown，与原 22:15 自动关机规则一致；固定 IP 13.230.217.247 和 association 保留。公网 DoH 返回 A=13.230.217.247、TTL 60，HTTPS 连接超时为已停机的预期现象。已验证正常停机后 IP/DNS 保留，本次未重新开机，不能宣称完整停机/再开机周期已验收。
+
+## 2026-10-25 固定 Elastic IP 与电影制式排查
+
+用户明确决定使用固定 IP。已在东京账号 `125647512944` 分配并绑定 `13.230.217.247`，allocation `eipalloc-012aaafbbd3622359`、association `eipassoc-02d09de9926cec3aa`，准确关联 keepsite 实例 `i-0e9ba9bc6f4b1c019` 和 ENI `eni-03ecbb87b6f13ccc7`。旧自动公网地址 `43.207.138.243` 已被替换，不再用于连接。固定地址保留期间（包括停机）按当前公开价格 0.005 USD/小时计费，30/60 天约 3.60/7.20 USD，税费与抵扣另计；释放需另行明确授权，不能为清理自动释放。
+
+DNS 源码修改在 `efbd6c9947bae7308c7ea018ba2e9842168c86d6`：keepsite-ddns.service 删除 ExecStop withdraw，保留开机 publish；28 项 DDNS 测试通过并经独立审查。线上安装前备份 `/opt/keepsite/host-backups/fixed-ip-20261025-bc71a2e9/keepsite-ddns.service.before`，安装后 systemd-analyze verify/daemon-reload 通过，实际 ExecStop 为空。旧 memoverse-ddns 服务现场 inactive/disabled，未动旧文件或 timer。新 IP 通过既有严格 SSH 主机校验；显式 publish 返回 published_update，两个 Cloudflare 权威 NS 与 1.1.1.1 均读回 A=`13.230.217.247`、TTL 60；新 IP HTTPS 与本机系统代理域名访问均 200，证书校验通过。DNS-only 模式与受限 Token 保留。
+
+58 分钟自动正常关机策略保持，本次 timer 仍到期于北京时间 2026-10-25 22:15:00，未启动/重启/延长 timer，也未重启实例。关机后应继续保留 A 记录并停止网站服务；本次未为了测试提前关机，尚不能把配置核验写成完整停机/再开机实测。以后停机验收应确认 stopped、EIP 仍绑定且 A 记录保留；不得沿用旧“停机撤 DNS”规则。当前应用仍是 v0.1 `5b8e35d59cd1d4c9f08bfc6c5075744c3e7dec2e`，本次仅按用户授权更新独立主机 DNS 配置。
+
+另按用户报告只读排查“奥德赛 (2D)”：票根和作业保存的 VLM 标题均包含 (2D)，来源为 ocr（历史类别名），任务 no_match/error=null、无海报，证明此次票面识别已成功。使用线上 TMDB 配置仅查询公开电影元数据：带后缀 0 条，纯“奥德赛”27 条，包含多条纯同名电影及两条 2026 年记录。制式后缀影响搜索，去掉后仍存在身份歧义，不能按排名/热度猜片。没有发送用户图片、修改票根、重新入队或调用付费识别模型。
+
+海报边界修复保留存储标题，只从查询身份剥离尾部括号完整 2D/3D，保留年份与多电影拒绝规则；修复在开发分支，未发布服务器，不宣称这张同名电影已经选图成功。海报/处理定点测试 88 通过、2 项平台/真实 Redis 跳过；补充空/超长边界后海报与 DNS 74 通过及 30 子测试通过。安全证据在本机 `output/fixed-ip-2026-10-25/`，不记录任何凭据。
+
 ## 2026-10-25 v0.1 发布与线上千问切换
 
 用户明确授权合并当前 PR、发布 v0.1 APK/标签并部署主线，并在 GitHub Codex 审查一直运行时明确取消本次等待要求。PR #10 先合入 PR #9，PR #9 以 merge commit `5b8e35d59cd1d4c9f08bfc6c5075744c3e7dec2e` 合入 main；其内容与已验证组合 head `31a58b1d6248b1b268fec46bbfa0faea7a8e8ad8` 相同，Backend、Frontend、Android、deployment-recovery 共八项 CI 均成功。本次是用户明确例外，不将仍在运行的 GitHub Codex 审查写成通过，也不修改后续默认合并流程；实现阶段独立审查已完成，本次临时验收脚本另经子代理只读复核。
@@ -88,16 +133,16 @@ TMDB 只读令牌已从本机 `.cache/server/keepsite-tmdb.env` 安全配置到�
 | 实例 ID / 名称 / 可用区 | `i-0e9ba9bc6f4b1c019` / `memoverse-keepsite` / `ap-northeast-1a` |
 | 规格 | `t3.small`：x86_64、2 vCPU、2 GB RAM；CPU credits 为 standard，避免 surplus credit 费用 |
 | 系统与磁盘 | Canonical Ubuntu 24.04；10 GB 加密 gp3 根卷 `vol-0bb6aa01805d28c75`，旧 20 GB 卷已删除 |
-| 最近运行状态 | 2026-10-25 v0.1 发布核验 running，状态检查 2/2 通过；自动关机到期北京时间 22:15:00。仅代表本次核验，操作前重新查询 |
+| 最近运行状态 | 2026-10-25 23:01:48 再次启动后 running，2/2 检查和 HTTPS 通过；本次自动关机到期北京时间 23:59:53。操作前重新查询 |
 | 最近应用运行提交 | v0.1 `5b8e35d59cd1d4c9f08bfc6c5075744c3e7dec2e`，current 与 MainPID cwd 一致。此前版本 `810f900cd6f3d664cf96af3095b44a5bbea197ff` 保留回滚 |
-| 公网 IPv4 | 2026-10-25 v0.1 发布核验为 `43.207.138.243`；当日早先 `13.114.44.30` 及其他旧地址仅供历史定位。动态地址在停机后释放，每次启动重新查询 |
+| 公网 IPv4 | 固定 Elastic IP `13.230.217.247`，allocation `eipalloc-012aaafbbd3622359`，绑定本实例。停机仍保留及计费；操作前仍核对绑定。此前动态地址仅供历史定位 |
 | Launch template / 新建默认版本 | `lt-016bca8507ac81480` / `2`，根盘默认 10 GB |
 | 安全组 / SSH key pair | `sg-0f472ac3891c65681` / `memoverse-ec2-20261017` |
 | SSH 用户 | `ubuntu` |
-| DNS | Cloudflare。2026-10-24 起由 `keepsite-ddns.service` 更新 A 记录，正常关闭时撤回；旧 `memoverse-ddns.service` 已停用自启动。运行时 DNS-only、TTL 60。停机后的记录须读回确认 |
+| DNS | Cloudflare，A 指向固定 EIP，DNS-only、TTL 60。keepsite-ddns 开机 publish，2026-10-25 起正常关机保留 A；旧 memoverse-ddns 已核对 inactive/disabled。停机后读回确认地址保留 |
 | 自动关机 | `keepsite-auto-stop.timer` 已启用，`OnBootSec=58min`、`AccuracySec=1s`；旧 timer 已停用自启动。到点发起正常 poweroff，实例 shutdown behavior 已核验为 `stop` |
 | S3 | 东京私有桶 `memoverse-media-125647512944-apne1`，Block Public Access、BucketOwnerEnforced、AES256、版本控制已启用 |
-| EC2 实例角色 / profile | `memoverse-ec2-app-20261018`，只附着本项目实例；Get/Put 限定桶内 `media/*`、`models/*`，另允许该桶 ListBucket，未授权删除、ACL、其他桶或 `ops/*` 读取 |
+| EC2 实例角色 / profile | `memoverse-ec2-app-20261018`，只附着本项目实例；保留 `media/*`、`models/*` 的原 Get/Put 与 ListBucket 权限；新增 `deploy/keepsite/*` 的 GetObject 和 prefix 限制 ListBucket。不能写/删除部署制品，无 ACL、其他桶或 `ops/*` 读取授权 |
 | Cognito | `ap-northeast-1_02QmwLnbG`（`memoverse-test-users`），Essentials，小范围测试 MFA OFF；邮箱验证码、短效令牌、刷新轮换与撤销已配置 |
 | Cognito 网站客户端 / 登录域名 | `4eitpctiqil0pjgv0no8j1i8if` / `https://keepsite-125647512944.auth.ap-northeast-1.amazoncognito.com`；无客户端密钥，Google 与 COGNITO 已启用 |
 | Google 登录项目 | `keepsite-auth-20261018`。控制台显示名仍是 `MemoVerse Login`，本次没有修改 Google 品牌。Web OAuth 只回调 Cognito 的 `/oauth2/idpresponse`，应用保持外部测试模式 |
@@ -155,8 +200,8 @@ HTTPS 由源站 Nginx 使用 Let's Encrypt 证书提供，`certbot.timer` 续期
 - 2026-10-20 起，部署、启动或停止实例只在用户明确要求时执行；开发代理完成测试、提交与 PR 后停止，不自行发布或开机。
 - 用户已明确删除 Lightsail 并改用 EC2，选择新建 `t3.small`。2026-10-18 进一步将自动关机从一小时改为每次开机 58 分钟，留出约两分钟正常关机缓冲，但不保证严格在 60 分钟内进入 stopped。用户验收或明确要求时可提前停机；等待验收、继续部署或生成均不能自行延长，延长或取消须取得用户对本次变更的明确授权。
 - 定时从系统启动计时，应用重启或发布不重置；系统重新开机重新计时。到点发起关机，服务退出及 AWS 状态转换还需短暂时间。每次开机核验 timer enabled 和剩余时间，维护命令见 `deploy/ubuntu/README.md`；不要在 uptime 超过 58 分钟后无意重新启用 timer，届时会立即触发。
-- 发布前始终查询上述明确 instance ID 的状态和当次公网 IP；启动后等待状态检查及 DDNS 就绪。停机后确认 `stopped` 与 DNS 关机清理结果。不要用历史状态或 IP 驱动操作。
-- 普通按需 EC2 停止后不再计计算费，自动公网 IPv4 随停止释放；EBS 磁盘继续保留和计费。不得把停机说成完全零费用。
+- 发布前始终查询上述明确 instance ID 的状态和当次公网 IP；启动后等待状态检查及 DDNS 就绪。停机后确认 `stopped`、EIP 仍绑定且域名 A 仍指向该固定地址。不要用历史状态或 IP 驱动操作。
+- 普通按需 EC2 停止后不再计计算费；2026-10-25 起使用的 Elastic IP 及 EBS 磁盘继续保留和计费。不得把停机说成完全零费用。
 - 2026-10-17 AWS Pricing API 核验：`t3.small` 计算费 `0.0272 USD/小时`，动态公网 IPv4 `0.005 USD/使用小时`，当前 10 GB gp3 磁盘约 `0.96 USD/月`。实例与 IP 运行时合计 `0.0322 USD/小时`；税费、抵扣和额外流量另计。gp3 容量按秒折算、最低 60 秒，不按实际文件占用计费；未来报价重新查询。
 - 旧 Lightsail `memoverse-keepsite`、`memoverse-keepsite-ip` 和部署公钥已删除；旧 IP `52.196.70.26` 已释放。新 EC2 已验收迁移完整性；本机 `.cache/migration-lightsail-ec2` 暂存目录删除被自动审批拦截，已交用户手动清理。
 - 账户既有 5 USD 月预算提醒不等于金额硬上限，不自动调整预算。
@@ -177,4 +222,4 @@ HTTPS 由源站 Nginx 使用 Let's Encrypt 证书提供，`certbot.timer` 续期
 - 通用 Ubuntu 发布脚本会核验制品哈希与准备状态后复用同一 commit；未知目录或内容冲突停止，不自动删除。激活失败后依旧要核对回滚输出与真实运行状态，不能将尝试回滚等同成功。
 - 当前没有统一 formatter。遵循现有风格，不放宽 Web 运行契约或扩散到无关代码。
 - 2026-10-18 最新阶段已发布运行观测版本，19:40 用户明确确认 Google 登录和邮箱收件后完成精确 QA 清理，19:46 核验 stopped。58 分钟 timer 全程未改或延长；本轮未新增业务数据备份。历史阶段的 22 + 6 项、9 个模板合成测试目录以及 7 个认证/后端测试目录删除被自动审批拒绝，未绕过；该历史待清理记录不等于本轮 QA 未清理，清单集中在 [历史 EC2部署验收.md](https://github.com/YouXiangyu/network-coding/blob/d23f04d886d7cd656c542c3f4bd69826906c8c55/docs/EC2部署验收.md)。保留业务数据、模型、模板、正式凭据、当前准确发布制品、配置回滚元数据和验收证据。文档更新无需再次发布应用。
-- DDNS 限定一个实例管理一个域名。正常服务停止会撤回自己确认过的 A 记录；强制关机、Token 失效或并发改 DNS 时不保证撤回，停机后应读回确认。2026-10-18 换盘后已验证新公网 IP 发布，以及最终真实 EC2 停机后 A 记录归零。
+- DNS 限定一个实例管理一个域名。2026-10-25 起固定 EIP 模式在关机时保留 A，开机 publish 核对绑定。2026-10-18 动态地址阶段曾验证停机后 A 归零，仅为旧策略的历史证据。人工撤回或释放 EIP 须另行授权并同步域名，避免指向已回收地址。

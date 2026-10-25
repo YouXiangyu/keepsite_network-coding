@@ -81,6 +81,48 @@ def test_small_punctuation_changes_do_not_require_alias_maps(title):
         value.close()
 
 
+@pytest.mark.parametrize("title", ["Example (2D)", "Example（2D）", "Example ( 2d )", "Example (3D)",
+                                  "Example（国语 3D）", "Example 2D 英文版", "Example - 中文版"])
+def test_ticket_projection_suffix_is_removed_from_search_and_identity(title):
+    value, calls = provider([movie(title="Example")])
+    try:
+        assert value.find(title) is not None
+        assert calls[0].url.params["query"] == "Example"
+    finally:
+        value.close()
+
+
+def test_projection_suffix_preserves_release_year_and_latest_remake_selection():
+    value, calls = provider([movie(1, "Example", 1999), movie(2, "Example", 2020)])
+    try:
+        assert value.find("Example (2D)").source_page.endswith("/2")
+        assert value.find("Example (1999)（2D）").source_page.endswith("/1")
+        assert calls[-3].url.params["query"] == "Example"
+        assert value.find("Example (2020) (2D)", "2010-01-01T19:30") is None
+        assert value.find("Example (2D) (1999)").source_page.endswith("/1")
+    finally:
+        value.close()
+
+
+@pytest.mark.parametrize("title", ["(2D)", "（3D）", "E" * 116 + " (2D)"])
+def test_projection_suffix_does_not_bypass_empty_or_oversized_title_checks(title):
+    value, calls = provider([movie(title="E" * 116)])
+    try:
+        assert value.find(title) is None
+        assert calls == []
+    finally:
+        value.close()
+
+
+@pytest.mark.parametrize("title", ["Example 2D Adventure", "Example (Part 2)", "Example (2DX)", "Example2"])
+def test_meaningful_title_text_is_not_discarded_as_projection_metadata(title):
+    value, _ = provider([movie(title="Example")])
+    try:
+        assert value.find(title) is None
+    finally:
+        value.close()
+
+
 def test_verified_translated_alias_can_match_without_accepting_search_rank():
     value, _ = provider([movie(title="The Wandering Earth", original_title="流浪地球")], aliases={535167: ["流浪地球：流浪者"]})
     try:
@@ -99,22 +141,101 @@ def test_partial_title_is_not_a_match_and_exact_title_beats_partial_search_resul
         value.close()
 
 
-def test_remakes_are_ambiguous_even_if_only_one_has_a_poster_or_latest_is_popular():
-    value, calls = provider([movie(1, "Example", 1999), movie(2, "Example", 2020, poster_path=None, popularity=999)])
+def test_latest_release_is_selected_independently_of_rank_or_popularity():
+    value, _ = provider([movie(1, "Example", 1999, popularity=999), movie(2, "Example", 2020, popularity=0)])
     try:
-        assert value.find("Example", "2010-01-01T19:30") is None
-        assert len(calls) == 1
-        assert value.find("Example (1999)") is not None
-        assert value.find("Example（1999）") is not None
+        assert value.find("Example").source_page.endswith("/2")
+        assert value.find("Example", "2010-01-01T19:30").source_page.endswith("/1")
+        assert value.find("Example (1999)").source_page.endswith("/1")
+        assert value.find("Example（1999）").source_page.endswith("/1")
         assert value.find("Example (2020)", "2010-01-01T19:30") is None
     finally:
         value.close()
 
 
-def test_same_year_different_id_and_matching_alternative_title_are_still_ambiguous():
-    value, _ = provider([movie(1, "Example"), movie(2, "Alias")], aliases={2: ["Example"]})
+def test_exact_title_takes_precedence_over_alternative_titles():
+    value, calls = provider([movie(1, "Example"), movie(2, "Alias", 2020)], aliases={2: ["Example"]})
     try:
-        assert value.find("Example (2019)") is None
+        assert value.find("Example").source_page.endswith("/1")
+        assert not any(request.url.path.endswith("alternative_titles") for request in calls)
+    finally:
+        value.close()
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_complete_large_search_selects_latest_exact_movie_even_on_second_page(reverse):
+    entries = [movie(100 + index, f"奥德赛之旅 {index}", release_date="") for index in range(23)] + [
+        movie(1, "奥德赛", release_date="2026-07-15", popularity=0),
+        movie(2, "奥德赛", release_date="2026-07-03", popularity=999),
+        movie(3, "奥德赛", release_date="2016-10-12"),
+        movie(4, "奥德赛", release_date="1991-04-08"),
+    ]
+    if reverse:
+        entries.reverse()
+    def pages(request):
+        if request.url.path.endswith("search/movie"):
+            page = int(request.url.params["page"])
+            return httpx.Response(200, json={"page": page, "total_pages": 2, "total_results": 27,
+                                            "results": entries[(page - 1) * 20:page * 20]})
+    value, calls = provider(handle=pages)
+    try:
+        assert value.find("奥德赛（2D 中文版）", "2026-10-25T19:30").source_page.endswith("/1")
+        assert [call.url.params["page"] for call in calls if call.url.path.endswith("search/movie")] == ["1", "2"]
+        assert not any(call.url.path.endswith("alternative_titles") for call in calls)
+    finally:
+        value.close()
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_same_year_uses_complete_release_date_and_latest_date_ties_are_unresolved(reverse):
+    entries = [movie(1, "Example", release_date="2026-07-03"), movie(2, "Example", release_date="2026-07-15")]
+    if reverse:
+        entries.reverse()
+    value, _ = provider(entries)
+    try:
+        assert value.find("Example").source_page.endswith("/2")
+    finally:
+        value.close()
+    value, calls = provider([movie(1, "Example"), movie(2, "Example")])
+    try:
+        assert value.find("Example") is None
+        assert len(calls) == 1
+    finally:
+        value.close()
+
+
+@pytest.mark.parametrize("release_date", ["", "not-a-date", "2026-02-30"])
+def test_unknown_exact_movie_release_date_prevents_an_unproven_latest_choice(release_date):
+    value, _ = provider([movie(1, "Example", 2019), movie(2, "Example", release_date=release_date)])
+    try:
+        assert value.find("Example") is None
+    finally:
+        value.close()
+
+
+@pytest.mark.parametrize("poster", [None, "https://evil.test/a.jpg"])
+def test_latest_movie_without_usable_poster_never_falls_back_to_an_older_identity(poster):
+    value, calls = provider([movie(1, "Example", 2019), movie(2, "Example", 2026, poster_path=poster)])
+    try:
+        assert value.find("Example") is None
+        assert len(calls) == 1
+    finally:
+        value.close()
+
+
+@pytest.mark.parametrize("count", [8, 9])
+def test_alias_only_lookup_requires_complete_bounded_verification_and_selects_latest(count):
+    entries = [movie(index, f"Other {index}", 2010 + index) for index in range(1, count + 1)]
+    value, calls = provider(entries, aliases={1: ["Example"], 2: ["Example"]})
+    try:
+        result = value.find("Example")
+        alias_calls = [call for call in calls if call.url.path.endswith("alternative_titles")]
+        if count == 8:
+            assert result.source_page.endswith("/2")
+            assert len(alias_calls) == 8
+        else:
+            assert result is None
+            assert alias_calls == []
     finally:
         value.close()
 
