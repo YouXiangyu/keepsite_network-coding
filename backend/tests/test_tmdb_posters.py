@@ -81,6 +81,46 @@ def test_small_punctuation_changes_do_not_require_alias_maps(title):
         value.close()
 
 
+@pytest.mark.parametrize("title", ["Example (2D)", "Example（2D）", "Example ( 2d )", "Example (3D)"])
+def test_ticket_projection_suffix_is_removed_from_search_and_identity(title):
+    value, calls = provider([movie(title="Example")])
+    try:
+        assert value.find(title) is not None
+        assert calls[0].url.params["query"] == "Example"
+    finally:
+        value.close()
+
+
+def test_projection_suffix_preserves_release_year_and_remake_ambiguity():
+    value, calls = provider([movie(1, "Example", 1999), movie(2, "Example", 2020)])
+    try:
+        assert value.find("Example (2D)") is None
+        assert value.find("Example (1999)（2D）").source_page.endswith("/1")
+        assert calls[-3].url.params["query"] == "Example"
+        assert value.find("Example (2020) (2D)", "2010-01-01T19:30") is None
+    finally:
+        value.close()
+
+
+@pytest.mark.parametrize("title", ["(2D)", "（3D）", "E" * 116 + " (2D)"])
+def test_projection_suffix_does_not_bypass_empty_or_oversized_title_checks(title):
+    value, calls = provider([movie(title="E" * 116)])
+    try:
+        assert value.find(title) is None
+        assert calls == []
+    finally:
+        value.close()
+
+
+@pytest.mark.parametrize("title", ["Example 2D Adventure", "Example (Part 2)", "Example (2DX)", "Example2"])
+def test_meaningful_title_text_is_not_discarded_as_projection_metadata(title):
+    value, _ = provider([movie(title="Example")])
+    try:
+        assert value.find(title) is None
+    finally:
+        value.close()
+
+
 def test_verified_translated_alias_can_match_without_accepting_search_rank():
     value, _ = provider([movie(title="The Wandering Earth", original_title="流浪地球")], aliases={535167: ["流浪地球：流浪者"]})
     try:

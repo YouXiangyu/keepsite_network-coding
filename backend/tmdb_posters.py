@@ -171,6 +171,11 @@ class TMDBPosterProvider:
     def find(self, title, showtime="", *, stopping=lambda: False):
         if isinstance(title, str):
             title = unicodedata.normalize("NFKC", title)
+            if len(title) > 120:
+                return None
+            # Projection format is ticket metadata, not part of movie identity.
+            # Only strip a standalone trailing format; retain the stored title.
+            title = re.sub(r"\s*\(\s*[23]D\s*\)\s*$", "", title, flags=re.IGNORECASE).strip()
         normalized, requested_year = _title(title)
         if not normalized:
             return None
