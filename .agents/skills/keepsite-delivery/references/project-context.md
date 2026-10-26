@@ -1,5 +1,19 @@
 # keepsite 项目运行信息
 
+## 2026-10-26 main新版发布与准备权限修复
+
+用户明确要求部署新版。核对准确实例running、2/2检查及固定EIP后，部署main `5d27e907aec3f53740c24b39b8b22f0b7c6e3590`。该提交的Application CI（40253253768）及Deployment recovery（40253253937）均成功，Backend/Frontend/Android/deployment-recovery及制品发布均通过。仓库当前名称为 `YouXiangyu/keepsite_network-coding`，稳定repository ID仍为1423372245；旧地址已重定向，不是另一个项目。
+
+根因实测：自动发布unit的UMask=0077使Python tar data_filter提取的源码目录成为root:root0700，keepsite用户无法穿越backend执行venv。修复提交094af02在全部制品路径、内容和哈希验证后，仅把制品源码目录及隐含父目录规范为0755，覆盖新提取和同SHA恢复；不递归改venv、共享cache、状态、凭据或文件权限。独立审查通过；Windows29项控制流测试通过（其中2项POSIX权限测试跳过），真实Ubuntu8项制品测试全部通过。
+
+已备份并安装root管理prepare-release.py，SHA256=e60d05fc4d4244b7e6a1321de037cc9d93edb52a6abfd162a91a3550ad892fa0，备份在 `/opt/keepsite/host-backups/prepare-094af02/prepare-release.py.before`。使用CI的准确S3 tar（11376640bytes，SHA256=5880a1975ab6181cfc5384f9860947f3f7e25404218ab4cd5fab58bc1bbeae33）恢复失败候选权限后，通过scripts/deploy-ubuntu.ps1先计划再Execute完成准备及原子激活，未删除候选或伪造prepared标记。current与实际MainPID cwd均为5d27e90，应用active、NRestarts=0。激活回滚证据 `/opt/keepsite/activation-backups/activation-0wzNQogT`。
+
+发布前在线备份业务及认证SQLite至 `/opt/keepsite/predeploy-backups/main-5d27e90-20261026T033809Z`（root目录0700、文件0600），完整性与FK通过。验收对比备份：原3个用户、6张票根、9个资产的ID全部保留；期间用户继续使用，最终为3用户/7票根/11资产。临时合成Cognito账号仅用于真实HTTPS登录、空票夹归属、匿名401/无归属媒体404及退出401验证；测试身份、会话和自身空元数据已精确清理并核验，无验收图片或VLM调用。
+
+服务器实际新代码已验证：奥德赛(2D)及语言/3D括号后缀清理为奥德赛，第三部信息保留。旧奥德赛票根仍是历史no_match，未替用户改字段或重跑照片；详情页“重试处理”可发起新版任务。公网HTTPS200/TLS通过，health正常；两关机timer仍disabled/inactive，保持全天运行。自动发布timer恢复enabled/active，实际worker返回current/5d27e90并自行把attempts归零，未手工重置。
+
+后续自动制品发布注意：此次GitHub仓库已改名，workflow/publisher及OIDC信任中的旧仓库名仍需按稳定ID核对同步；本次只部署已发布且通过CI的main制品，不把当前轮询正常等同改名后的下一次main发布已验收。PR #13仍待合并，主机管理脚本已按明确运维授权独立更新。上述旧日期失败记录仅为当时事实，不代表当前应用仍停留v0.1。
+
 ## 2026-10-26 全天运行（D-083）
 
 用户在确认全天运行基础费用约24.47 USD/月后，明确要求现有EC2持续24小时开机，取代58分钟自动关机。AWS登录刷新后核对账户与准确实例/EIP，2026-10-26北京时间09:08:41启动 `i-0e9ba9bc6f4b1c019`；2/2状态检查通过，固定IP仍为13.230.217.247，shutdown behavior=stop。经既有可信SSH核对并执行disable --now，keepsite与旧memoverse的auto-stop.timer均disabled/inactive，没有systemd手动关机计划。应用、Nginx、Redis active，内部health正常，固定IP绑定域名的公网HTTPS 200/TLS校验通过。
@@ -132,7 +146,7 @@ TMDB 只读令牌已从本机 `.cache/server/keepsite-tmdb.env` 安全配置到�
 | --- | --- |
 | 项目 | keepsite / network-coding |
 | 本机根目录 | `D:\100-code\110-Project\network-coding` |
-| GitHub 私人仓库 | `https://github.com/YouXiangyu/network-coding` |
+| GitHub 私人仓库 | `https://github.com/YouXiangyu/keepsite_network-coding`，repository ID 1423372245；原network-coding地址为重定向 |
 | 默认分支 | `main` |
 | 改版前 Git 核验（2026-10-21） | GitHub `main` 为 `eb486c9`；当前工作分支 `docs/spec-and-dev-plan` 的改版前检查点 `d7945d8` 已推送并读回核对。检查点无源码改动；之后的文档提交以 Git 日志为准 |
 | 本机技能入口 | `C:\Users\游翔宇\.codex\skills\keepsite-delivery`，链接到项目 `.agents/skills/keepsite-delivery` |
@@ -142,7 +156,7 @@ TMDB 只读令牌已从本机 `.cache/server/keepsite-tmdb.env` 安全配置到�
 | 规格 | `t3.small`：x86_64、2 vCPU、2 GB RAM；CPU credits 为 standard，避免 surplus credit 费用 |
 | 系统与磁盘 | Canonical Ubuntu 24.04；10 GB 加密 gp3 根卷 `vol-0bb6aa01805d28c75`，旧 20 GB 卷已删除 |
 | 最近运行状态 | 2026-10-26 09:08:41（北京时间）启动，running、2/2检查及HTTPS 200通过；两个auto-stop timer均disabled/inactive，全天持续运行。操作前重新查询 |
-| 最近应用运行提交 | 2026-10-26核对仍为v0.1 `5b8e35d59cd1d4c9f08bfc6c5075744c3e7dec2e`，服务active、NRestarts=0；最新main候选 `0522594bd7640e2b44521c4fdb0d56fd7f3db727` 自动准备返回prepare_failed，未切换。不把候选发布成功等同实际激活成功 |
+| 最近应用运行提交 | 2026-10-26已实际部署main `5d27e907aec3f53740c24b39b8b22f0b7c6e3590`，current与MainPID cwd一致、服务健康；自动worker确认current且attempts=0。历史5b8e35d保留回滚 |
 | 公网 IPv4 | 固定 Elastic IP `13.230.217.247`，allocation `eipalloc-012aaafbbd3622359`，绑定本实例。停机仍保留及计费；操作前仍核对绑定。此前动态地址仅供历史定位 |
 | Launch template / 新建默认版本 | `lt-016bca8507ac81480` / `2`，根盘默认 10 GB |
 | 安全组 / SSH key pair | `sg-0f472ac3891c65681` / `memoverse-ec2-20261017` |
