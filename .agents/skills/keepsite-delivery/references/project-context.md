@@ -4,7 +4,7 @@
 
 用户在确认全天运行基础费用约24.47 USD/月后，明确要求现有EC2持续24小时开机，取代58分钟自动关机。AWS登录刷新后核对账户与准确实例/EIP，2026-10-26北京时间09:08:41启动 `i-0e9ba9bc6f4b1c019`；2/2状态检查通过，固定IP仍为13.230.217.247，shutdown behavior=stop。经既有可信SSH核对并执行disable --now，keepsite与旧memoverse的auto-stop.timer均disabled/inactive，没有systemd手动关机计划。应用、Nginx、Redis active，内部health正常，固定IP绑定域名的公网HTTPS 200/TLS校验通过。
 
-自动发布timer保持enabled/active。发现root worker旧实现按58分钟减uptime，常开48分钟后会永久跳过更新；源码改为读取真实timer及手动shutdown计划，无计划时无期限，读取异常fail closed，原准备/激活十分钟保护及数据/锁/校验/回滚保留。34项本地测试和独立审查通过；管理副本需在此提交后单独备份、安装和核验，不能把源码提交当作已安装。
+自动发布timer保持enabled/active。发现root worker旧实现按58分钟减uptime，常开48分钟后会永久跳过更新；源码改为读取真实timer及手动shutdown计划，无计划时无期限，读取异常fail closed，原准备/激活十分钟保护及数据/锁/校验/回滚保留。34项本地测试和独立审查通过。管理脚本源码提交35aab39后已单独备份并原子安装到 `/opt/keepsite/admin/pull-release.py`（root:root 0644），SHA256为27a0eab93e17757586c413844fc8bc7045246c5072f032b1604860d2bcdced22；旧副本在 `/opt/keepsite/host-backups/always-on-35aab39/pull-release.py.before`。真实root运行remaining()返回无期限，自动发布timer恢复enabled/active；真实拉取遵守原候选失败次数，返回candidate_failed_twice，未清空次数或强制切换。
 
 本次开机时，已发布main候选0522594自动准备返回prepare_failed，线上保留5b8e35d；这是另一个发布准备问题，未清空attempts、未强行切换或删除失败目录。旧日期各节仅为历史事实，现行启停策略以本节和运行表为准。验收结束不自动停机；后续停止或重启仍需用户明确要求。
 
