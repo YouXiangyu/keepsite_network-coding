@@ -1,4 +1,3 @@
-import java.net.URI
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -6,12 +5,8 @@ plugins {
 }
 
 val productionOrigin = "https://keepsite.space"
-val debugOrigin = providers.gradleProperty("keepsite.debugBaseUrl").orElse(productionOrigin).get().trimEnd('/')
-if (debugOrigin != productionOrigin) {
-    val uri = URI(debugOrigin)
-    require(uri.scheme == "http" && uri.host in setOf("127.0.0.1", "localhost", "::1", "[::1]") && uri.rawUserInfo == null && uri.rawQuery == null && uri.rawFragment == null && uri.rawPath.isNullOrEmpty()) {
-        "Debug API override must be an HTTP loopback origin"
-    }
+require(!providers.gradleProperty("keepsite.debugBaseUrl").isPresent) {
+    "keepsite.debugBaseUrl is no longer supported. The application always connects to https://keepsite.space."
 }
 
 android {
@@ -28,7 +23,6 @@ android {
         buildConfigField("String", "API_BASE_URL", "\"$productionOrigin\"")
     }
     buildTypes {
-        debug { buildConfigField("String", "API_BASE_URL", "\"$debugOrigin\"") }
         release { isMinifyEnabled = false }
     }
     signingConfigs.getByName("debug") {

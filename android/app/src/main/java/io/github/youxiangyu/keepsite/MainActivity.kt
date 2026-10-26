@@ -25,7 +25,6 @@ import androidx.appcompat.content.res.AppCompatResources
 import androidx.core.view.isEmpty
 import androidx.core.view.isNotEmpty
 import androidx.core.view.isVisible
-import androidx.core.view.doOnLayout
 import androidx.core.net.toUri
 import androidx.core.widget.doAfterTextChanged
 import androidx.recyclerview.widget.RecyclerView
@@ -88,17 +87,17 @@ class MainActivity : AppCompatActivity() {
         account = controller.snapshot().session?.userId
         setContentView(binding.root)
         WindowCompat.getInsetsController(window, binding.root).isAppearanceLightNavigationBars = true
+        binding.content.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            if (keyboardVisible) currentFocus?.takeIf { it is EditText }?.let { focused ->
+                focused.requestRectangleOnScreen(Rect(0, 0, focused.width, focused.height + dp(8)), true)
+            }
+        }
         styleChrome()
         ViewCompat.setOnApplyWindowInsetsListener(binding.root) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime())
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
             keyboardVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
             updateChromeVisibility()
-            if (keyboardVisible) view.doOnLayout {
-                currentFocus?.takeIf { it is EditText }?.let { focused ->
-                    focused.requestRectangleOnScreen(Rect(0, 0, focused.width, focused.height + dp(8)), true)
-                }
-            }
             insets
         }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
