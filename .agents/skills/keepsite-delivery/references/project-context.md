@@ -169,7 +169,7 @@ TMDB 只读令牌已从本机 `.cache/server/keepsite-tmdb.env` 安全配置到�
 | DDNS 服务 / 程序 / 状态 | `keepsite-ddns.service` / `/opt/keepsite/admin/sync-cloudflare-dns.py` / `/var/lib/keepsite-ddns/state.json`。旧 `memoverse-ddns.service` 与 `/var/lib/memoverse-ddns/state.json` 保留 |
 | 本机识别配置与历史模型 | 新源码使用 `.cache/server/keepsite-qwen.env`，依赖在 `backend/.venv`；已退役 CPU 模型 `.cache/ocr-models/ppocrv6-tiny`、旧 `.cache/models`、`.cache/anyimage`、`.cache/anyimage-deps` 保留，不作为新发布运行前置 |
 | 部署入口 | `scripts/deploy-ubuntu.ps1`，`Server` 必填，默认计划模式，`-Execute` 执行；`-PrepareOnly` 只准备，`-EnvironmentPath /etc/keepsite.env.next` 与 `-NginxPath /etc/nginx/sites-available/keepsite.next` 指定候选配置；新机另加 `-InitializeHost` |
-| 一次性数据迁移 | `scripts/package-server-data.py`，SQLite backup API + 文件 SHA-256 清单 |
+| 旧版一次性数据打包（已退役） | 旧 schema 1/3D 打包工具已移除；历史见清理前提交 `72d9b3d` 中的 `scripts/package-server-data.py`，不用于当前票根数据 |
 | Linux 安装 / 识别配置 | `deploy/ubuntu/install.sh` 仅安装基本依赖；千问三项环境由受限文件单独配置，不自动写入凭据。新运行链不再准备 CPU/AnyImage 模型，旧生产版本事实见上文 |
 | 发布目录 / 当前链接 | `/opt/keepsite/releases/<完整commit>` / `/opt/keepsite/current`。旧 `/opt/memoverse/current` 保留到切换前 |
 | 服务器持久数据（最近已部署版本） | `/var/lib/keepsite-v3`。旧 `/var/lib/memoverse-v2` 与 `/var/lib/memoverse` 保留 |

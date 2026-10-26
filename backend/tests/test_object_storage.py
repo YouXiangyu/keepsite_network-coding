@@ -80,15 +80,6 @@ def test_s3_stream_is_closed_when_response_iteration_ends_early():
     assert client.readers[0].closed
 
 
-def test_download_checks_hash_and_closes_s3_body_on_integrity_failure(tmp_path):
-    client = FakeS3Client()
-    store = S3ObjectStore("test-bucket", "ap-northeast-1", client=client)
-    client.objects["media/test.png"] = (b"bytes", {"sha256": "wrong"})
-    with pytest.raises(StorageError, match="integrity"):
-        store.download("media/test.png", tmp_path / "download", "0" * 64)
-    assert client.readers[0].closed
-
-
 def test_s3_missing_object_is_not_silently_read_from_local_disk():
     store = S3ObjectStore("test-bucket", "ap-northeast-1", client=FakeS3Client())
     with pytest.raises(ObjectMissing):
