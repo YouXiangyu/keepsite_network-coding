@@ -68,22 +68,23 @@ def test_password_first_bind_google_keeps_account_and_session(auth):
     assert web_complete(auth, params).headers['location'] != PUBLIC + '/devices?account_link=success'
 
 
-def test_google_first_adds_email_password_only_after_code_and_password_proof(auth):
+@pytest.mark.parametrize('password', ['abcdefgh', '12345678'])
+def test_google_first_adds_email_password_only_after_code_and_password_proof(auth, password):
     session, headers = signed_in(auth, google=True)
     sid = auth.client.cookies.get(auth.service.cookie_name)
     result = auth.client.post('/api/auth/account/password/register', headers=headers,
-                             json={'email': 'new@example.com', 'password': PASSWORD})
+                             json={'email': 'new@example.com', 'password': password})
     assert result.status_code == 200 and result.json()['verificationRequired']
     assert not auth.client.get('/api/auth/account/methods').json()['password']['linked']
     auth.provider.subject, auth.provider.email = 'native-credential', 'new@example.com'
     auth.provider.id_changes = {}
     result = auth.client.post('/api/auth/account/password/confirm', headers=headers,
-                             json={'email': 'new@example.com', 'password': PASSWORD, 'code': '012345'})
+                             json={'email': 'new@example.com', 'password': password, 'code': '012345'})
     assert result.status_code == 200, result.text
     assert result.json()['password'] == {'linked': True, 'email': 'new@example.com'}
     assert ('verify', 'new@example.com', '012345') in auth.provider.actions
     assert auth.client.cookies.get(auth.service.cookie_name) == sid
-    password_login = login(auth, email='new@example.com').json()
+    password_login = login(auth, email='new@example.com', password=password).json()
     assert password_login['user'] == session['user']
     assert auth.service.session(auth.client.cookies.get(auth.service.cookie_name))['user'] == session['user']
 

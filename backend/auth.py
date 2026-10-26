@@ -15,7 +15,6 @@ from pathlib import Path
 import re
 import secrets
 import sqlite3
-import string
 import threading
 import time
 from urllib.error import HTTPError, URLError
@@ -66,11 +65,8 @@ def normalize_email(value):
 
 
 def password_value(value):
-    if not isinstance(value, str) or not 12 <= len(value) <= 128 or not all((
-        any(c in string.ascii_uppercase for c in value), any(c in string.ascii_lowercase for c in value),
-        any(c in string.digits for c in value), any(c in string.punctuation for c in value),
-    )):
-        raise AuthError(422, '密码需为12–128个字符，并包含大小写字母、数字和符号。', 'password_policy')
+    if not isinstance(value, str) or not 8 <= len(value) <= 128:
+        raise AuthError(422, '密码需为8–128个字符，不限制字符组合。', 'password_policy')
     return value  # Never strip or normalize passwords.
 
 

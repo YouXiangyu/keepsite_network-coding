@@ -2,7 +2,7 @@ import { expect, test, type Page, type Route } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { sampleItem, media, pngHash, otherHash, otherPng, imageFixture, posterSource } from '../tests/web-fixtures.mjs';
-const password = 'ExamplePassword123!';
+const password = 'abcdefgh';
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=', 'base64');
 async function mockApi(page: Page, options: { user?: string; configured?: boolean; google?: boolean; sessionGate?: Promise<void>; empty?: boolean; cloud?: boolean; processing?: boolean; deviceSync?: boolean; peerName?: string } = {}) {
   const server = {
@@ -294,7 +294,14 @@ test('registration verifies email and keeps invalid-code input for correction', 
   const api = await mockApi(page);
   await page.goto('/register');
   await page.getByLabel('邮箱地址', { exact: true }).fill('new@example.test');
-  await page.getByLabel('设置密码', { exact: true }).fill(password);
+  const field = page.getByLabel('设置密码', { exact: true });
+  await expect(field).toHaveAttribute('minlength', '8');
+  await expect(field).toHaveAttribute('maxlength', '128');
+  await expect(page.locator('#password-help')).toContainText('不限制字符组合');
+  await field.fill('abcdefg');
+  await page.getByRole('button', { name: '创建账户', exact: true }).click();
+  expect(api.requests.filter(request => request.path === '/api/auth/register')).toHaveLength(0);
+  await field.fill(password);
   await page.getByRole('button', { name: '创建账户', exact: true }).click();
   await expect(page.getByRole('heading', { name: '验证你的邮箱' })).toBeVisible();
   await expect(page.getByLabel('邮箱地址', { exact: true })).toHaveValue('new@example.test');
