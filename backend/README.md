@@ -13,6 +13,12 @@ M4 沿用独立 SQLite schema 3，通过固定分页快照、持久增量和 Web
 - 原票和海报分别引用；纠错不提前撤下既有有效海报。配置私有 S3、Redis、远程视觉识别接口和海报来源后，自动登记识别/海报任务；缺少条件时 `capabilities.processing=false`，并通过 `processingUnavailableReason` 说明原因，不伪造识别结果。设备 P2P 留待 M5。
 - 票根变更、操作幂等和 `ticket_changes` 在同一事务提交；每账号 `revision` 是持久变更游标，创建、修改、删除都保存完整票根快照，删除快照包含墓碑。上传核对不占用票根游标。`sync_baselines` 标记历史边界：M1 旧库、隔离迁移和备份恢复从其当前 revision 建立基线，不伪造之前的增量。
 
+## 密码规则
+
+邮箱登录、注册、重置及账户密码绑定统一接受 8–128 个字符，不强制大小写、数字或符号组合；密码原样传递，不 trim 或 normalize。
+
+上线时须同步 Cognito：MinimumLength=8，RequireUppercase/RequireLowercase/RequireNumbers/RequireSymbols 均为 false。先读取完整用户池配置，仅修改密码规则后完整回写并读回核验，保留邮件、验证、MFA、恢复方式、临时密码有效期等设置；UpdateUserPool 省略的字段可能被重置为默认值。源码测试通过不代表线上用户池已更新。
+
 ## 登录方式绑定
 
 账户页通过 `GET /api/auth/account/methods` 查询已绑定的邮箱密码和 Google 身份。密码入口支持 `POST /api/auth/account/password/register`、`confirm` 和 `link`；Google 入口分别使用 `/api/auth/account/google/start` 与 `/api/auth/account/google/native/start`，原生应用通过 `native/redeem` 完成绑定。

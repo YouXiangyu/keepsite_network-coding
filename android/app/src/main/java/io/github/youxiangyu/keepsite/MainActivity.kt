@@ -276,6 +276,7 @@ class MainActivity : AppCompatActivity() {
             body.add(email, Space.XL)
             if (model.authMode in listOf("verify", "reset")) body.add(code, Space.M)
             if (model.authMode in listOf("login", "register", "reset")) body.add(password, Space.M)
+            if (model.authMode in listOf("register", "reset")) body.add(label("密码需为 8–128 个字符，不限制字符组合。", Type.Caption), Space.S)
             body.add(action(when (model.authMode) { "register" -> "注册"; "verify" -> "验证邮箱"; "forgot" -> "发送重置码"; "reset" -> "更新密码"; else -> "登录" }, ButtonKind.Primary) {
                 if (controller.snapshot().busy.isNotBlank()) return@action
                 val address = email.text.toString().trim()
@@ -698,7 +699,7 @@ class MainActivity : AppCompatActivity() {
         fields.add(label("邮箱", Type.Label)); fields.add(email, Space.S)
         if (mode == "confirm") { fields.add(label("邮件验证码", Type.Label), Space.M); fields.add(code, Space.S) }
         fields.add(label(password.hint.toString(), Type.Label), Space.M); fields.add(password, Space.S)
-        fields.add(label("密码需为 12–128 个字符，包含大小写字母、数字和符号。", Type.Caption), Space.S)
+        fields.add(label(if (mode == "register") "密码需为 8–128 个字符，不限制字符组合。" else if (mode == "confirm") "请输入刚设置的密码。" else "请输入已有邮箱密码。", Type.Caption), Space.S)
         accountDialog?.dismiss()
         val builder = MaterialAlertDialogBuilder(this).setTitle(if (mode == "confirm") "验证并添加邮箱密码" else if (mode == "link") "绑定已有邮箱密码" else "添加新邮箱密码")
             .setView(fields).setNegativeButton("取消", null).setPositiveButton(if (mode == "register") "发送验证邮件" else "验证并绑定", null)

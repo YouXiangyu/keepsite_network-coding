@@ -176,9 +176,8 @@ function AuthPage({ mode, session, serviceError, retry, onSignedIn }: {
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!emailAvailable) return;
-    if (newPassword && (password.length < 12 || password.length > 128 || !/[a-z]/.test(password)
-        || !/[A-Z]/.test(password) || !/[0-9]/.test(password) || !/[^A-Za-z0-9]/.test(password))) {
-      setError('密码需为 12–128 个字符，包含大写字母、小写字母、数字和符号。');
+    if (newPassword && (password.length < 8 || password.length > 128)) {
+      setError('密码需为 8–128 个字符，不限制字符组合。');
       return;
     }
     void perform(async () => {
@@ -231,8 +230,8 @@ function AuthPage({ mode, session, serviceError, retry, onSignedIn }: {
           <fieldset disabled={!emailAvailable || busy}>
             <label htmlFor="auth-email">邮箱地址</label><input id="auth-email" ref={emailInput} type="email" name="email" autoComplete="email" required maxLength={254} value={email} onChange={event => setEmail(event.target.value)} placeholder="you@example.com" />
             {hasCode && <><label htmlFor="auth-code">邮件验证码</label><input id="auth-code" name="code" autoComplete="one-time-code" required value={code} onChange={event => setCode(event.target.value)} placeholder="输入邮件中的验证码" /></>}
-            {hasPassword && <><label htmlFor="auth-password">{newPassword ? '设置密码' : '密码'}</label><input id="auth-password" name="password" type="password" autoComplete={newPassword ? 'new-password' : 'current-password'} required minLength={newPassword ? 12 : 1} maxLength={128} value={password} onChange={event => setPassword(event.target.value)} aria-describedby={newPassword ? 'password-help' : undefined} />
-              {newPassword && <p className="field-hint" id="password-help">12–128 个字符，包含大小写字母、数字与符号。</p>}</>}
+            {hasPassword && <><label htmlFor="auth-password">{newPassword ? '设置密码' : '密码'}</label><input id="auth-password" name="password" type="password" autoComplete={newPassword ? 'new-password' : 'current-password'} required minLength={newPassword ? 8 : 1} maxLength={128} value={password} onChange={event => setPassword(event.target.value)} aria-describedby={newPassword ? 'password-help' : undefined} />
+              {newPassword && <p className="field-hint" id="password-help">8–128 个字符，不限制字符组合。</p>}</>}
             {error && <p className="form-error" role="alert">{error}</p>}
             {mode === 'login' && <button className="auth-text-button forgot-link" type="button" onClick={() => move('forgot-password')}>忘记密码？</button>}
             <button className="primary-button auth-submit" type="submit">{busy ? <><CircleNotch className="spinner" size={19} />请稍候…</> : <>{mode === 'login' ? '登录' : mode === 'register' ? '创建账户' : mode === 'verify-email' ? '验证邮箱' : mode === 'forgot-password' ? '发送重置验证码' : '更新密码'}<ArrowRight size={19} /></>}</button>

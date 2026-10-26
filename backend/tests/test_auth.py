@@ -413,6 +413,29 @@ def test_registration_verification_and_reset_do_not_create_sessions(auth):
     assert auth.client.get('/api/protected').status_code == 401
 
 
+@pytest.mark.parametrize('password', ['abcdefgh', '12345678', 'ABCDEFGH', '!!!!!!!!', 'a' * 128])
+@pytest.mark.parametrize('action', ['login', 'register', 'reset-password'])
+def test_password_length_without_composition_requirements_reaches_provider(auth, password, action):
+    body = {'email': 'person@example.com', 'password': password}
+    if action == 'reset-password':
+        body['code'] = '012345'
+    response = auth.client.post('/api/auth/' + action, headers=HEADERS, json=body)
+    assert response.status_code == 200
+    assert auth.provider.actions[-1][0] == ('reset' if action == 'reset-password' else action)
+    assert auth.provider.actions[-1][-1] == password
+
+
+@pytest.mark.parametrize('password', [None, 12345678, 'Short7!', 'a' * 129])
+@pytest.mark.parametrize('action', ['login', 'register', 'reset-password'])
+def test_invalid_password_length_or_type_never_reaches_provider(auth, password, action):
+    body = {'email': 'person@example.com', 'password': password}
+    if action == 'reset-password':
+        body['code'] = '012345'
+    response = auth.client.post('/api/auth/' + action, headers=HEADERS, json=body)
+    assert response.status_code == 422 and response.json()['code'] == 'password_policy'
+    assert auth.provider.actions == []
+
+
 def test_forgot_password_response_does_not_reveal_user_existence(auth):
     good = auth.client.post('/api/auth/forgot-password', headers=HEADERS, json={'email': 'person@example.com'})
     auth.provider.action_error = AuthError(401, 'No such user')
@@ -427,7 +450,7 @@ def test_invalid_email_does_not_call_provider(auth, email):
 
 
 def test_write_origin_header_password_code_and_size_validation_are_safe(auth):
-    secret = 'DoNotEchoSecret!'
+    secret = 'Short7!'
     assert auth.client.post('/api/auth/login', json={'email': 'person@example.com', 'password': PASSWORD}).status_code == 403
     result = auth.client.post('/api/auth/login', headers={**HEADERS, 'Origin': 'https://attacker.test'}, json={'email': 'person@example.com', 'password': PASSWORD})
     assert result.status_code == 403
