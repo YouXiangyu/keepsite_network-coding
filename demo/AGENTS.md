@@ -1,6 +1,6 @@
 # keepsite Web App Agent Guide
 
-Updated: 2026-10-25.
+Updated: 2026-10-26.
 
 ## Product and platform
 
@@ -31,7 +31,7 @@ Updated: 2026-10-25.
 - Use neutral backgrounds, readable labels, native inputs, visible focus, accessible status/error feedback and responsive image-led layouts. The user approved the movie-collection image in `docs/UI_example` as the mobile visual reference on 2026-10-24; use its visual hierarchy and masonry without restoring removed social/exploration features. Other obsolete references remain out of scope.
 - On 2026-10-25 the user explicitly selected `qwen3.7-flash` in their Qwen workspace, superseding the CPU OCR restriction (D-081). Only the backend calls the configured provider and validates the existing five ticket fields; keep API keys out of the browser and APK. Do not add hidden local OCR fallback, other models or paid tools. Measure actual accuracy, request latency and token usage separately from old CPU benchmarks. Continue private S3 with encryption, HTTPS and short-lived authorized access; preserve old user data during migration.
 - Cloud media survives browser cache eviction. Logout is not deletion; record deletion revokes future authorization and propagates tombstones, while object/version cleanup follows the documented policy. Existing signed URLs retain their own expiry.
-- The user deferred the always-available signaling/API hosting decision. Do not change EC2 shutdown policy or claim the application remains accessible while its required services are stopped.
+- On 2026-10-26 the user explicitly selected continuous 24-hour operation of the existing EC2. Keep automatic shutdown timers disabled/inactive; stopping or restarting still requires an explicit user request. Running continuously is not an availability guarantee, and required services must be healthy for access.
 
 ## Verification and delivery
 

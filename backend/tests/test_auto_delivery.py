@@ -226,6 +226,50 @@ def test_prepare_crossing_shutdown_window_defers_activation_without_consuming_at
     assert json.loads((host.state / 'state.json').read_text())['attempts'] == 0
 
 
+def test_always_on_host_has_no_invented_deadline_after_days_of_uptime(tmp_path, monkeypatch):
+    monkeypatch.setattr(worker, 'SCHEDULED_SHUTDOWN', tmp_path / 'no-shutdown-plan')
+    monkeypatch.setattr(worker.subprocess, 'check_output', lambda *args, **kwargs: 'inactive\n')
+    monkeypatch.setattr(worker.time, 'monotonic', lambda: 7 * 24 * 3600)
+    assert worker.remaining() == float('inf')
+
+
+@pytest.mark.parametrize('remaining', [599, 1800])
+def test_active_timer_uses_its_real_monotonic_deadline(tmp_path, monkeypatch, remaining):
+    monkeypatch.setattr(worker, 'SCHEDULED_SHUTDOWN', tmp_path / 'no-shutdown-plan')
+    monkeypatch.setattr(worker.time, 'monotonic', lambda: 10_000)
+    replies = iter(['active\n', json.dumps({'type': 't', 'data': [(10_000 + remaining) * 1_000_000]})])
+    monkeypatch.setattr(worker.subprocess, 'check_output', lambda *args, **kwargs: next(replies))
+    assert worker.remaining() == remaining
+
+
+@pytest.mark.parametrize('reply', ['invalid-json', '[]', '{"type":"t","data":1}', '{"type":"t","data":[0]}',
+                                  '{"type":"t","data":[true]}', '{"type":"t","data":[]}',
+                                  '{"type":"s","data":[1800000000]}'])
+def test_unreadable_active_timer_fails_closed(tmp_path, monkeypatch, reply):
+    monkeypatch.setattr(worker, 'SCHEDULED_SHUTDOWN', tmp_path / 'no-shutdown-plan')
+    replies = iter(['active\n', reply])
+    monkeypatch.setattr(worker.subprocess, 'check_output', lambda *args, **kwargs: next(replies))
+    assert worker.remaining() == 0
+
+
+def test_shutdown_query_failure_fails_closed(monkeypatch):
+    def unavailable(*args, **kwargs):
+        raise OSError('systemd unavailable')
+    monkeypatch.setattr(worker.subprocess, 'check_output', unavailable)
+    assert worker.remaining() == 0
+
+
+@pytest.mark.parametrize('plan,expected', [('USEC=10400000000\nMODE=poweroff\n', 400),
+                                         ('USEC=broken\n', 0), ('USEC=1\nUSEC=2\n', 0)])
+def test_manual_shutdown_plan_is_respected_on_always_on_host(tmp_path, monkeypatch, plan, expected):
+    path = tmp_path / 'scheduled'
+    path.write_text(plan)
+    monkeypatch.setattr(worker, 'SCHEDULED_SHUTDOWN', path)
+    monkeypatch.setattr(worker.subprocess, 'check_output', lambda *args, **kwargs: 'inactive\n')
+    monkeypatch.setattr(worker.time, 'time', lambda: 10_000)
+    assert worker.remaining() == expected
+
+
 def test_enable_failure_is_retried_when_new_release_is_auth_healthy(host, monkeypatch):
     monkeypatch.setattr(worker, 'enabled', lambda: False)
     def enable_fails(command):

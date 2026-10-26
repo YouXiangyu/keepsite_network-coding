@@ -52,7 +52,7 @@
 
 备份中的 `service-state` 记录修改前应用与 Nginx 是否 active。回滚恢复原配置和链接后，只启动原本运行的服务并验证健康；原本停止的服务保持停止并核验 inactive。失败或中断不应替用户启动维护期间已停止的服务。
 
-`SIGKILL`、断电和主机自动关机耗尽退出期限不保证捕获恢复。恢复后仍必须查询实际 current、配置和服务状态；强制终止后先检查 root-only 激活备份，按其中 previous-release/environment/nginx/unit 恢复并验证访问控制，不能只重启旧服务。强杀可能保留唯一 `.extract-*` 临时目录或本地 `.building.tar`，它们不作为可发布目录；确认无活跃准备进程、所有权与路径后再清理，不自动删除未知目录。普通应用发布不延长 58 分钟关机计时器。
+`SIGKILL`、断电和主机自动关机耗尽退出期限不保证捕获恢复。恢复后仍必须查询实际 current、配置和服务状态；强制终止后先检查 root-only 激活备份，按其中 previous-release/environment/nginx/unit 恢复并验证访问控制，不能只重启旧服务。强杀可能保留唯一 `.extract-*` 临时目录或本地 `.building.tar`，它们不作为可发布目录；确认无活跃准备进程、所有权与路径后再清理，不自动删除未知目录。普通应用发布不改变主机电源策略。
 
 未来仅代码更新且现用配置已经完整时，可以省略两个候选路径参数。首次从 BasicAuth 单用户版本转到账号版本，必须一起切换环境和站点配置。
 
@@ -64,33 +64,25 @@
 - Nginx access 格式不含查询字符串，OAuth callback 的 access/error 日志单独关闭；Uvicorn 同样去除认证回调查询。应用日志不记录密码、验证码或令牌。
 - 应用依赖实例角色，不保存长期 AWS 访问密钥。按测试规模评估 S3 访问日志、CloudTrail 数据事件和 CloudWatch 指标的可观测性与额外费用，不默认启用与本轮无关的收费服务。
 - systemd 默认 MemoryHigh=1200M、MemoryMax=1500M、swap 上限 2 GB，针对当前 2 GB 测试机；更大图片/并发仍需实测。以应用行为判断容量，不把单样例当作压测结果。
-- 每次开机 58 分钟后自动发起正常关机；等待验收不暂停倒计时。用户确认通过或明确要求后可提前停机，核验域名 A 记录仍指向保留的 EIP。延长或取消本次倒计时须用户明确授权。停机仍保留磁盘、S3 数据及固定 IP 计费。
+- 按 D-083 全天运行；核对自动关机已禁用，停止或重启须用户明确要求。固定 IP、磁盘、S3 与计算按实际使用计费。
 
-## 开机 58 分钟自动关机
+## 全天运行
 
-`keepsite-auto-stop.timer` 使用 `OnBootSec=58min`，从系统启动计时，触发同名 service 执行正常 `systemctl poweroff`。本机已核验 EC2 `InstanceInitiatedShutdownBehavior=stop`；迁移到其他实例时必须重新核验，不能假定系统关机一定不会删除实例。配置不依赖 Codex 或 AWS 登录会话继续在线。
-
-首次安装前查看 `cat /proc/uptime`。如果本次运行已超过 58 分钟，启动该 timer 会立即触发关机；应在刚启动的维护窗口安装。只启用 timer，不启用 service。以下命令针对已审查、位于当前工作目录的两个 unit：
+2026-10-26 用户明确选择现有 EC2 24 小时持续运行，取代历史开机 58 分钟关机策略。保持两个名称的关机 timer disabled/inactive，不在发布或验收结束后自行停机。以下为用户授权切换时执行的命令；后续巡检只读取状态：
 
 ```bash
-sudo install -o root -g root -m 0644 keepsite-auto-stop.service keepsite-auto-stop.timer /etc/systemd/system/
-sudo systemd-analyze verify /etc/systemd/system/keepsite-auto-stop.service /etc/systemd/system/keepsite-auto-stop.timer
-sudo systemctl daemon-reload
-sudo systemctl enable --now keepsite-auto-stop.timer
-systemctl is-enabled keepsite-auto-stop.timer
-systemctl list-timers keepsite-auto-stop.timer --all
-systemctl show keepsite-auto-stop.timer -p NextElapseUSecMonotonic -p TimersMonotonic -p AccuracyUSec
+sudo systemctl disable --now keepsite-auto-stop.timer memoverse-auto-stop.timer
+systemctl show keepsite-auto-stop.timer memoverse-auto-stop.timer -p Id -p ActiveState -p UnitFileState
+systemctl list-timers --all
 ```
 
-这是独立的主机配置，普通应用发布不会替换或重新计时。应用重启不会延长；系统重新开机重新计时。在第 58 分钟发起正常关机，预留约两分钟等待应用、DDNS 退出和 AWS 状态转换；该缓冲不保证严格在开机后 60 分钟内进入 AWS `stopped`。若用户明确授权延长，另行调整并记录本次期限，不要仅重启 timer 冒充延长。
-
-配置语义参考 [systemd timer](https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html) 与 [EC2 系统关机行为](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/Using_ChangingInstanceInitiatedShutdownBehavior.html)。
+旧 unit 文件保留用于历史核对，不重新启用。普通应用发布和自动发布安装不改变该电源策略。自动发布读取实际 systemd timer/手动关机计划，距实际关机不足十分钟或查询异常时停止发布；常开主机没有按 uptime 虚构的截止时间。人为停止或重启仍需明确授权；关机行为保持 EC2 `stop`，不得以 terminate 代替关机。
 
 ## 自动 DNS
 
 当前 EC2 使用固定 Elastic IP。`keepsite-ddns.service` 在开机后读取 IMDSv2，核对并更新 Cloudflare 精确 A 记录；正常关机保留该记录，减少重复删除/创建引起的 DNS 负缓存。配置和状态仅 root 可读。DDNS 是独立运维组件，普通应用发布不会自动替换 `/opt/keepsite/admin/sync-cloudflare-dns.py`。固定地址保留期间持续计费，停机仍不可访问网站。
 
-从旧策略迁移时，先安装不含 `ExecStop` 的 unit 并执行 `daemon-reload`，确认 `systemctl show keepsite-ddns.service -p ExecStop` 为空；此前不要 stop/restart 旧服务，以免触发撤回。核对旧 `memoverse-ddns.service` 已 inactive 且停用自启动。绑定 EIP 后显式执行一次 `publish --execute`，再读回权威 A 记录。只允许单实例管理该域名，关机后核验记录仍指向保留的 EIP。脚本的 `withdraw` 仅用于另行明确授权的人工撤回，不再由关机自动调用；释放 EIP 前必须另行处理域名，避免指向已回收地址。58 分钟自动关机 timer 无需更改或重启。
+从旧策略迁移时，先安装不含 `ExecStop` 的 unit 并执行 `daemon-reload`，确认 `systemctl show keepsite-ddns.service -p ExecStop` 为空；此前不要 stop/restart 旧服务，以免触发撤回。核对旧 `memoverse-ddns.service` 已 inactive 且停用自启动。绑定 EIP 后显式执行一次 `publish --execute`，再读回权威 A 记录。只允许单实例管理该域名，关机后核验记录仍指向保留的 EIP。脚本的 `withdraw` 仅用于另行明确授权的人工撤回，不再由关机自动调用；释放 EIP 前必须另行处理域名，避免指向已回收地址。当前全天运行策略下，自动关机 timer 保持禁用。
 
 ## 本地控制流测试
 

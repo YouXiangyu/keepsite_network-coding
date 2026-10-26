@@ -124,11 +124,13 @@ def prepare_artifact(archive, release, expected_hash):
                 staging = Path(tempfile.mkdtemp(prefix=f'.{release.name}.extract-', dir=release.parent))
                 target = staging
                 bundle.extractall(target, members=members, filter='data')
+            directories = {target}
             for member in members:
                 path = target.joinpath(*PurePosixPath(member.name).parts)
                 parts = path.relative_to(target).parts
                 if any(target.joinpath(*parts[:index]).is_symlink() for index in range(1, len(parts) + 1)):
                     raise ValueError('Release payload contains a symlink')
+                directories.update(target.joinpath(*parts[:index]) for index in range(len(parts)))
                 if member.isfile():
                     if not path.is_file() or path.stat().st_size != member.size:
                         raise ValueError('Release payload is incomplete')
@@ -136,9 +138,17 @@ def prepare_artifact(archive, release, expected_hash):
                         expected = hashlib.file_digest(source, 'sha256').hexdigest()
                     if digest_file(path) != expected:
                         raise ValueError('Release file differs from verified artifact')
+                elif not path.is_dir():
+                    raise ValueError('Release directory is incomplete')
+                else:
+                    directories.add(path)
+            # data_filter discards directory modes; mkdir then inherits the
+            # root worker's private umask. Normalize only verified source
+            # directories, never managed venv/cache/state or their targets.
+            for path in directories:
+                path.chmod(0o755)
             if staging is not None:
                 atomic_text(target / '.artifact-sha256', expected_hash + '\n')
-                target.chmod(0o755)
                 target.rename(release)
                 staging = None
         finally:

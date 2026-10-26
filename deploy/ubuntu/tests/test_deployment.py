@@ -40,6 +40,48 @@ class ArtifactTests(unittest.TestCase):
         (self.release / '.prepared-sha256').write_text(self.sha + '\n')
         self.assertTrue(prepare.prepare_artifact(self.archive, self.release, self.sha))
 
+    @unittest.skipUnless(os.name == 'posix', 'Requires real POSIX directory modes')
+    def test_private_worker_umask_keeps_verified_source_traversable(self):
+        with tarfile.open(self.archive, 'a') as bundle:
+            directory = tarfile.TarInfo('deploy/ubuntu')
+            directory.type = tarfile.DIRTYPE
+            directory.mode = 0o700
+            bundle.addfile(directory)
+        self.sha = prepare.digest_file(self.archive)
+        private = self.root / 'private-state'
+        private.mkdir(mode=0o700)
+        previous = os.umask(0o077)
+        try:
+            self.assertFalse(prepare.prepare_artifact(self.archive, self.release, self.sha))
+        finally:
+            os.umask(previous)
+        for relative in ('.', 'backend', 'deploy', 'deploy/ubuntu'):
+            self.assertEqual((self.release / relative).stat().st_mode & 0o777, 0o755)
+        self.assertEqual(private.stat().st_mode & 0o777, 0o700)
+
+    @unittest.skipUnless(os.name == 'posix', 'Requires real POSIX directory modes')
+    def test_resume_repairs_only_verified_source_directory_modes(self):
+        prepare.prepare_artifact(self.archive, self.release, self.sha)
+        backend = self.release / 'backend'
+        backend.chmod(0o700)
+        venv = backend / '.venv'
+        venv.mkdir(mode=0o700)
+        cache = self.root / 'shared-cache'
+        cache.mkdir(mode=0o700)
+        (self.release / '.cache').symlink_to(cache, target_is_directory=True)
+        source = backend / 'app.py'
+        source.chmod(0o640)
+        self.assertFalse(prepare.prepare_artifact(self.archive, self.release, self.sha))
+        self.assertEqual(backend.stat().st_mode & 0o777, 0o755)
+        self.assertEqual(venv.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(cache.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(source.stat().st_mode & 0o777, 0o640)
+        backend.chmod(0o700)
+        source.write_text('tampered source')
+        with self.assertRaisesRegex(ValueError, 'differs|incomplete'):
+            prepare.prepare_artifact(self.archive, self.release, self.sha)
+        self.assertEqual(backend.stat().st_mode & 0o777, 0o700)
+
     def test_wrong_uploaded_hash_does_not_create_release(self):
         with self.assertRaisesRegex(ValueError, 'archive hash mismatch'):
             prepare.prepare_artifact(self.archive, self.release, '0' * 64)
