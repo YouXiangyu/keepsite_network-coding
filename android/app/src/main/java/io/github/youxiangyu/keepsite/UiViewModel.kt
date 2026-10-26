@@ -9,6 +9,9 @@ class UiViewModel(application: Application) : AndroidViewModel(application) {
     val controller: AppController = AppRepository(application)
     var route = "library"
     var detailId: String? = null
+    var detailFrom = "library"
+    var month: String? = null
+    var mineScroll = 0
     var authMode = "login"
     var authEmail = ""
     var awaitingDraft = false

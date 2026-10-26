@@ -32,6 +32,7 @@ object Design {
         const val XXL = 32
     }
     object Radius {
+        const val PHOTO = 4
         const val IMAGE = 10
         const val CONTROL = 12
         const val PANEL = 16
@@ -50,6 +51,11 @@ object Design {
         const val PREVIEW = 220
         const val PROGRESS = 6
         const val AVATAR = 56
+        const val PROFILE = 80
+        const val RECENT_COVER = 112
+        const val MONTH_STACK = 168
+        const val PHOTO_ELEVATION = 3
+        const val PHOTO_TILT = 4f
         const val INFO_LABEL = 72
         const val CONTENT_MAX = 640
         const val DISABLED_ALPHA = 0.4f
