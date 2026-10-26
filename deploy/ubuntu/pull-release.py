@@ -26,7 +26,7 @@ ADMIN = BASE / 'admin'
 STATE = Path('/var/lib/keepsite-autodeploy')
 BUCKET = 'memoverse-media-125647512944-apne1'
 ACCOUNT = '125647512944'
-STOP_AFTER = 58 * 60
+SCHEDULED_SHUTDOWN = Path('/run/systemd/shutdown/scheduled')
 MIN_REMAINING = 10 * 60
 MIN_FREE = 384 * 1024 * 1024
 
@@ -98,7 +98,35 @@ def save(value):
 
 
 def remaining():
-    return STOP_AFTER - float(Path('/proc/uptime').read_text().split()[0])
+    """Use real host shutdown plans; an always-on host has no uptime deadline."""
+    try:
+        status = subprocess.check_output(['systemctl', 'show', 'keepsite-auto-stop.timer',
+                                          '--property=ActiveState', '--value'], text=True, timeout=5).strip()
+        deadline = float('inf')
+        if status == 'active':
+            value = json.loads(subprocess.check_output([
+                'busctl', '--system', '--json=short', 'get-property', 'org.freedesktop.systemd1',
+                '/org/freedesktop/systemd1/unit/keepsite_2dauto_2dstop_2etimer',
+                'org.freedesktop.systemd1.Timer', 'NextElapseUSecMonotonic'], text=True, timeout=5))
+            if (not isinstance(value, dict) or value.get('type') != 't'
+                    or not isinstance(value.get('data'), list) or len(value['data']) != 1):
+                return 0
+            micros = value['data'][0]
+            if type(micros) is not int or micros <= 0:
+                return 0
+            deadline = micros / 1_000_000 - time.monotonic()
+        elif status != 'inactive':
+            return 0
+        try:
+            scheduled = SCHEDULED_SHUTDOWN.read_text()
+        except FileNotFoundError:
+            return deadline
+        values = [line.removeprefix('USEC=') for line in scheduled.splitlines() if line.startswith('USEC=')]
+        if len(values) != 1 or not values[0].isdigit() or int(values[0]) <= 0:
+            return 0
+        return min(deadline, int(values[0]) / 1_000_000 - time.time())
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError):
+        return 0
 
 
 def space(candidate):

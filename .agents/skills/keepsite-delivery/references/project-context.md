@@ -1,5 +1,13 @@
 # keepsite 项目运行信息
 
+## 2026-10-26 全天运行（D-083）
+
+用户在确认全天运行基础费用约24.47 USD/月后，明确要求现有EC2持续24小时开机，取代58分钟自动关机。AWS登录刷新后核对账户与准确实例/EIP，2026-10-26北京时间09:08:41启动 `i-0e9ba9bc6f4b1c019`；2/2状态检查通过，固定IP仍为13.230.217.247，shutdown behavior=stop。经既有可信SSH核对并执行disable --now，keepsite与旧memoverse的auto-stop.timer均disabled/inactive，没有systemd手动关机计划。应用、Nginx、Redis active，内部health正常，固定IP绑定域名的公网HTTPS 200/TLS校验通过。
+
+自动发布timer保持enabled/active。发现root worker旧实现按58分钟减uptime，常开48分钟后会永久跳过更新；源码改为读取真实timer及手动shutdown计划，无计划时无期限，读取异常fail closed，原准备/激活十分钟保护及数据/锁/校验/回滚保留。34项本地测试和独立审查通过；管理副本需在此提交后单独备份、安装和核验，不能把源码提交当作已安装。
+
+本次开机时，已发布main候选0522594自动准备返回prepare_failed，线上保留5b8e35d；这是另一个发布准备问题，未清空attempts、未强行切换或删除失败目录。旧日期各节仅为历史事实，现行启停策略以本节和运行表为准。验收结束不自动停机；后续停止或重启仍需用户明确要求。
+
 ## 2026-10-25 自动发布管理组件安装与磁盘清理
 
 用户选择第三种自动部署方案，持续授权 main 经检查后由 CI 构建、EC2 开机/每五分钟拉取制品；不自动合并 PR、不自动开机、不调整 58 分钟关机时间。实现提交 81ca045，SDK 客户端显式关闭修复 a07db35；root 管理组件已安装，源代码和发布工作流仍在 PR #11，工作流合入 main 前尚不能宣称 GitHub 自动发布已启用。
@@ -133,14 +141,14 @@ TMDB 只读令牌已从本机 `.cache/server/keepsite-tmdb.env` 安全配置到�
 | 实例 ID / 名称 / 可用区 | `i-0e9ba9bc6f4b1c019` / `memoverse-keepsite` / `ap-northeast-1a` |
 | 规格 | `t3.small`：x86_64、2 vCPU、2 GB RAM；CPU credits 为 standard，避免 surplus credit 费用 |
 | 系统与磁盘 | Canonical Ubuntu 24.04；10 GB 加密 gp3 根卷 `vol-0bb6aa01805d28c75`，旧 20 GB 卷已删除 |
-| 最近运行状态 | 2026-10-25 23:01:48 再次启动后 running，2/2 检查和 HTTPS 通过；本次自动关机到期北京时间 23:59:53。操作前重新查询 |
-| 最近应用运行提交 | v0.1 `5b8e35d59cd1d4c9f08bfc6c5075744c3e7dec2e`，current 与 MainPID cwd 一致。此前版本 `810f900cd6f3d664cf96af3095b44a5bbea197ff` 保留回滚 |
+| 最近运行状态 | 2026-10-26 09:08:41（北京时间）启动，running、2/2检查及HTTPS 200通过；两个auto-stop timer均disabled/inactive，全天持续运行。操作前重新查询 |
+| 最近应用运行提交 | 2026-10-26核对仍为v0.1 `5b8e35d59cd1d4c9f08bfc6c5075744c3e7dec2e`，服务active、NRestarts=0；最新main候选 `0522594bd7640e2b44521c4fdb0d56fd7f3db727` 自动准备返回prepare_failed，未切换。不把候选发布成功等同实际激活成功 |
 | 公网 IPv4 | 固定 Elastic IP `13.230.217.247`，allocation `eipalloc-012aaafbbd3622359`，绑定本实例。停机仍保留及计费；操作前仍核对绑定。此前动态地址仅供历史定位 |
 | Launch template / 新建默认版本 | `lt-016bca8507ac81480` / `2`，根盘默认 10 GB |
 | 安全组 / SSH key pair | `sg-0f472ac3891c65681` / `memoverse-ec2-20261017` |
 | SSH 用户 | `ubuntu` |
 | DNS | Cloudflare，A 指向固定 EIP，DNS-only、TTL 60。keepsite-ddns 开机 publish，2026-10-25 起正常关机保留 A；旧 memoverse-ddns 已核对 inactive/disabled。停机后读回确认地址保留 |
-| 自动关机 | `keepsite-auto-stop.timer` 已启用，`OnBootSec=58min`、`AccuracySec=1s`；旧 timer 已停用自启动。到点发起正常 poweroff，实例 shutdown behavior 已核验为 `stop` |
+| 电源策略 | 2026-10-26 用户明确改为24小时持续运行；keepsite 与旧 memoverse 的 auto-stop.timer 均 disabled/inactive，实例关机行为保持 stop。停止或重启需用户明确要求 |
 | S3 | 东京私有桶 `memoverse-media-125647512944-apne1`，Block Public Access、BucketOwnerEnforced、AES256、版本控制已启用 |
 | EC2 实例角色 / profile | `memoverse-ec2-app-20261018`，只附着本项目实例；保留 `media/*`、`models/*` 的原 Get/Put 与 ListBucket 权限；新增 `deploy/keepsite/*` 的 GetObject 和 prefix 限制 ListBucket。不能写/删除部署制品，无 ACL、其他桶或 `ops/*` 读取授权 |
 | Cognito | `ap-northeast-1_02QmwLnbG`（`memoverse-test-users`），Essentials，小范围测试 MFA OFF；邮箱验证码、短效令牌、刷新轮换与撤销已配置 |
@@ -198,8 +206,8 @@ HTTPS 由源站 Nginx 使用 Let's Encrypt 证书提供，`certbot.timer` 续期
 ## 启停与计费决策
 
 - 2026-10-20 起，部署、启动或停止实例只在用户明确要求时执行；开发代理完成测试、提交与 PR 后停止，不自行发布或开机。
-- 用户已明确删除 Lightsail 并改用 EC2，选择新建 `t3.small`。2026-10-18 进一步将自动关机从一小时改为每次开机 58 分钟，留出约两分钟正常关机缓冲，但不保证严格在 60 分钟内进入 stopped。用户验收或明确要求时可提前停机；等待验收、继续部署或生成均不能自行延长，延长或取消须取得用户对本次变更的明确授权。
-- 定时从系统启动计时，应用重启或发布不重置；系统重新开机重新计时。到点发起关机，服务退出及 AWS 状态转换还需短暂时间。每次开机核验 timer enabled 和剩余时间，维护命令见 `deploy/ubuntu/README.md`；不要在 uptime 超过 58 分钟后无意重新启用 timer，届时会立即触发。
+- 2026-10-26 用户明确改为现有 `t3.small` 全天持续运行；取消并禁用 keepsite 与旧 memoverse 的 auto-stop timer，取代 2026-10-18 的58分钟关机规则。停止、重启或恢复自动关机仍需用户明确要求，验收完成不自动停机。
+- 后续开机核对两个关机 timer disabled/inactive。自动发布只依据真实关机计划执行窗口保护，没有计划时不因 uptime 超过58分钟跳过更新；管理脚本单独更新，应用发布不会覆盖。
 - 发布前始终查询上述明确 instance ID 的状态和当次公网 IP；启动后等待状态检查及 DDNS 就绪。停机后确认 `stopped`、EIP 仍绑定且域名 A 仍指向该固定地址。不要用历史状态或 IP 驱动操作。
 - 普通按需 EC2 停止后不再计计算费；2026-10-25 起使用的 Elastic IP 及 EBS 磁盘继续保留和计费。不得把停机说成完全零费用。
 - 2026-10-17 AWS Pricing API 核验：`t3.small` 计算费 `0.0272 USD/小时`，动态公网 IPv4 `0.005 USD/使用小时`，当前 10 GB gp3 磁盘约 `0.96 USD/月`。实例与 IP 运行时合计 `0.0322 USD/小时`；税费、抵扣和额外流量另计。gp3 容量按秒折算、最低 60 秒，不按实际文件占用计费；未来报价重新查询。

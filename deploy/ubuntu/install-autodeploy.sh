@@ -2,7 +2,7 @@
 set -euo pipefail
 SOURCE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 if [[ "${1:-}" != --execute ]]; then
-  printf 'Plan: install root-owned pull worker/SDK and a boot + five-minute timer. Existing app, data, secrets and auto-stop timer stay in place.\n'
+  printf 'Plan: install root-owned pull worker/SDK and a boot + five-minute timer. Existing app, data, secrets and host power policy stay in place.\n'
   exit 0
 fi
 [[ $EUID -eq 0 ]] || { echo 'Root required' >&2; exit 1; }

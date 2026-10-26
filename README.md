@@ -66,6 +66,6 @@ GitHub PR 与 `codex/**` 分支推送运行 `Backend tests`、`Frontend tests`�
 
 既有环境为 AWS 东京 EC2、Cognito、私有 S3 和 [keepsite.space](https://keepsite.space)。定位信息见[项目运行信息](.agents/skills/keepsite-delivery/references/project-context.md)；当前状态必须现场查询。新版代码或 PR 不代表已部署。发布与回滚说明见 [Ubuntu 部署](deploy/ubuntu/README.md)。
 
-每次 EC2 开机 58 分钟后自动发起正常关机，本次开发不改变该规则。停机仍保留磁盘与 S3 数据费用；数据持久存在不代表服务停止时还能登录或获取下载授权。
+2026-10-26 用户明确改为 EC2 24 小时持续运行，自动关机 timer 保持 disabled/inactive；普通发布不改变电源策略。停止或重启需用户明确要求。固定 IP、磁盘、S3 和计算费用按实际使用结算；常开不等于无故障保证。
 
 历史验收已收拢到 [V0 验证摘要](docs/V0验证摘要.md)，原始报告保留在 Git 历史中，不能替代后续版本验收。Git 不包含数据库、用户照片、凭据、模型或构建缓存；第三方组件说明见 [THIRD_PARTY.md](THIRD_PARTY.md)。
