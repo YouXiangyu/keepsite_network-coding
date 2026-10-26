@@ -1,5 +1,11 @@
 # keepsite 项目运行信息
 
+## 2026-10-26 合并审查约定更新
+
+用户明确授权检查通过后合并PR #13、#15，并要求后续取消AGENTS.md中的GitHub Codex自动审查要求。现行合并门槛保留准确head提交的CI成功、独立子代理代码审查及用户明确合并授权；无GitHub Codex结果不再单独阻塞。历史各节的Codex等待/本次例外仅反映当时规则，不作为今后强制要求。
+
+项目约定变更不代表GitHub平台保护已改变。本次实际Merge API返回405，要求至少1个有写权限的账号批准，尚未合并。只读核验main classic protection：required_approving_review_count=1、require_code_owner_reviews=true、enforce_admins=true；规则集为空，required_status_checks当前无强制context（项目CI检查约定仍执行）。平台批准条件须单独满足或经用户明确授权调整，不能把文档修改报告成平台保护已改变。
+
 ## 2026-10-26 main新版发布与准备权限修复
 
 用户明确要求部署新版。核对准确实例running、2/2检查及固定EIP后，部署main `5d27e907aec3f53740c24b39b8b22f0b7c6e3590`。该提交的Application CI（40253253768）及Deployment recovery（40253253937）均成功，Backend/Frontend/Android/deployment-recovery及制品发布均通过。仓库当前名称为 `YouXiangyu/keepsite_network-coding`，稳定repository ID仍为1423372245；旧地址已重定向，不是另一个项目。
