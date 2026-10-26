@@ -47,6 +47,11 @@ import java.time.format.DateTimeFormatter
 import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
+    private companion object {
+        const val RECENT_LIMIT = 10
+        const val MONTH_LIMIT = 6
+        const val THUMBNAIL_EDGE = 640
+    }
     private val model: UiViewModel by viewModels()
     private val controller get() = model.controller
     private lateinit var binding: ActivityMainBinding
@@ -100,7 +105,7 @@ class MainActivity : AppCompatActivity() {
             override fun handleOnBackPressed() {
                 when {
                     model.route == "editor" -> leaveDraft()
-                    model.route != "library" -> navigate("library")
+                    model.route != "library" -> navigate(parentRoute(model.route))
                     controller.snapshot().session?.authenticated != true && model.authMode != "login" -> { model.authMode = "login"; redraw() }
                     else -> { isEnabled = false; onBackPressedDispatcher.onBackPressed(); isEnabled = true }
                 }
@@ -132,7 +137,18 @@ class MainActivity : AppCompatActivity() {
     }
     private fun navigate(route: String) {
         model.route = route; screenKey = null; render(controller.snapshot())
-        if (route == "devices") controller.refreshAccountMethods()
+        if (route == "account") controller.refreshAccountMethods()
+    }
+    private fun parentRoute(route: String): String = when (route) {
+        "detail" -> model.detailFrom
+        "month", "account", "sync", "about" -> "mine"
+        else -> "library"
+    }
+    private fun section(route: String): String = if (route in listOf("library", "editor", "mine")) route else section(parentRoute(route))
+    private fun routeTitle(route: String): String = when (route) {
+        "mine" -> "我的"
+        "month" -> model.month?.let(Presentation::monthLabel) ?: "我的"
+        else -> "票夹"
     }
     private fun redraw() { screenKey = null; render(controller.snapshot()) }
     private fun render(state: AppState) {
@@ -143,7 +159,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (nextAccount != account) {
             accountDialog?.dismiss(); accountDialog = null
-            account = nextAccount; model.route = "library"; model.detailId = null
+            account = nextAccount; model.route = "library"; model.detailId = null; model.detailFrom = "library"; model.month = null; model.mineScroll = 0
             model.awaitingDraft = false; model.editorWasOpen = false; screenKey = null; releaseScreen()
         }
         if (model.awaitingDraft && state.draft != null) { model.awaitingDraft = false; model.route = "editor"; screenKey = null }
@@ -158,7 +174,7 @@ class MainActivity : AppCompatActivity() {
         binding.notice.background = if (state.error.isBlank()) noticeSurface else errorSurface
         val authenticated = state.session?.authenticated == true
         if (binding.navigation.isEmpty()) {
-            listOf("票夹" to "library", "录入电影票" to "editor", "设备" to "devices").forEach { (label, route) ->
+            listOf("票夹" to "library", "录入电影票" to "editor", "我的" to "mine").forEach { (label, route) ->
                 binding.navigation.addView(navigationItem(label, route) {
                     if (route == "editor") {
                         if (controller.snapshot().draft != null) navigate("editor")
@@ -169,9 +185,9 @@ class MainActivity : AppCompatActivity() {
         }
         for (index in 0 until binding.navigation.childCount) {
             val item = binding.navigation.getChildAt(index) as LinearLayout
-            item.isSelected = item.tag == model.route || item.tag == "library" && model.route == "detail"
+            item.isSelected = item.tag == section(model.route)
             val color = getColor(if (item.isSelected || item.tag == "editor") R.color.mv_ink else R.color.mv_muted)
-            (item.getChildAt(0) as ImageView).setColorFilter(color)
+            (item.getChildAt(0) as ImageView).apply { setImageResource(navigationIcon(item.tag as String, item.isSelected)); setColorFilter(color) }
             (item.getChildAt(1) as TextView).apply {
                 setTextColor(color); typeface = (if (item.isSelected) Design.Weight.Bold else Design.Weight.Medium).typeface
             }
@@ -182,12 +198,21 @@ class MainActivity : AppCompatActivity() {
             !authenticated -> listOf("auth", model.authMode, state.session.configured, state.session.emailEnabled, state.session.googleEnabled)
             model.route == "editor" -> listOf("editor", state.draft?.operationId)
             model.route == "detail" -> listOf("detail", state.tickets.find { it.id == model.detailId })
-            model.route == "devices" -> listOf("devices", state.cache, state.peer, state.session.email, state.accountMethods, state.accountPasswordEmail)
+            model.route == "mine" -> listOf("mine", state.session.name, state.session.email, state.ready,
+                state.tickets.map { listOf(it.id, it.fields.title, it.fields.showtime, it.createdAt, it.cover.assetId, it.cover.sha256) })
+            model.route == "month" -> listOf("month", model.month)
+            model.route == "account" -> listOf("account", state.session.email, state.session.emailEnabled, state.session.googleEnabled, state.accountMethods, state.accountPasswordEmail)
+            model.route == "sync" -> listOf("sync", state.cache, state.peer)
+            model.route == "about" -> "about"
             else -> "library"
         }
         if (key != screenKey) {
             val oldScroll = (binding.content.getChildAt(0) as? ScrollView)?.scrollY ?: 0
-            val preserveScroll = screenKey != null && model.route == "devices"
+            val restoreScroll = when {
+                model.route == "mine" -> model.mineScroll
+                model.route in listOf("account", "sync") && (screenKey as? List<*>)?.firstOrNull() == model.route -> oldScroll
+                else -> null
+            }
             releaseScreen(); binding.content.removeAllViews(); screenKey = key
             when {
                 state.session == null -> scrollColumn().apply {
@@ -198,13 +223,17 @@ class MainActivity : AppCompatActivity() {
                 !authenticated -> authScreen(state.session!!)
                 model.route == "editor" -> editorScreen(state)
                 model.route == "detail" -> detailScreen(state)
-                model.route == "devices" -> devicesScreen(state)
+                model.route == "mine" -> mineScreen(state)
+                model.route == "month" -> libraryScreen(model.month)
+                model.route == "account" -> accountScreen(state)
+                model.route == "sync" -> syncScreen(state)
+                model.route == "about" -> aboutScreen()
                 else -> libraryScreen()
             }
-            if (preserveScroll) (binding.content.getChildAt(0) as? ScrollView)?.let { scroll -> scroll.post { scroll.scrollTo(0, oldScroll) } }
+            restoreScroll?.let { y -> (binding.content.getChildAt(0) as? ScrollView)?.let { scroll -> scroll.post { scroll.scrollTo(0, y) } } }
         }
         if (model.route == "editor" && authenticated) updateEditor(state)
-        if (model.route == "library" && authenticated) updateLibrary(state)
+        if (model.route in listOf("library", "month") && authenticated) updateLibrary(state)
     }
     private fun navigationItem(title: String, route: String, clicked: () -> Unit): LinearLayout = column().apply {
         tag = route; gravity = Gravity.CENTER; isClickable = true; isFocusable = true
@@ -212,7 +241,7 @@ class MainActivity : AppCompatActivity() {
         setOnClickListener { clicked() }
         val add = route == "editor"
         addView(ImageView(this@MainActivity).apply {
-            setImageResource(when (route) { "editor" -> R.drawable.ic_add; "devices" -> R.drawable.ic_devices; else -> R.drawable.ic_ticket })
+            setImageResource(navigationIcon(route, false))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
             if (add) { background = pill(R.color.mv_soft); scaleType = ImageView.ScaleType.CENTER }
         }, LinearLayout.LayoutParams(dp(if (add) Size.NAV_ADD else Size.ICON), dp(if (add) Size.NAV_ADD else Size.ICON)))
@@ -220,6 +249,11 @@ class MainActivity : AppCompatActivity() {
             gravity = Gravity.CENTER; setPadding(0, dp(Space.XS), 0, 0)
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO; isVisible = !add
         })
+    }
+    private fun navigationIcon(route: String, selected: Boolean): Int = when (route) {
+        "editor" -> R.drawable.ic_add
+        "mine" -> if (selected) R.drawable.ic_person_filled else R.drawable.ic_person
+        else -> if (selected) R.drawable.ic_ticket_filled else R.drawable.ic_ticket
     }
     private fun styleChrome() {
         binding.brand.apply {
@@ -313,12 +347,33 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-    private fun libraryScreen() {
+    private fun libraryScreen(month: String? = null) {
         val box = column().apply { setPadding(dp(Space.PAGE), dp(Space.S), dp(Space.PAGE), 0) }
+        if (month != null) box.addWrapped(backAction("我的", "mine"))
         val heading = row().apply { gravity = Gravity.BOTTOM }
-        heading.addView(pageTitle("电影"), LinearLayout.LayoutParams(0, -2, 1f))
+        heading.addView(pageTitle(month?.let(Presentation::monthLabel) ?: "电影"), LinearLayout.LayoutParams(0, -2, 1f))
         libraryCount = label("", color = R.color.mv_muted).apply { setPadding(0, 0, 0, dp(Space.XS)) }
-        heading.addView(libraryCount); box.add(heading)
+        heading.addView(libraryCount); box.add(heading, if (month == null) 0 else Space.XS)
+        if (month == null) libraryTools(box)
+        libraryEmpty = label("", color = R.color.mv_muted).apply { gravity = Gravity.CENTER; setPadding(0, dp(Space.XXL), 0, dp(Space.L)) }.also(box::add)
+        val grid = RecyclerView(this).apply { setPadding(0, dp(Space.L), 0, dp(Space.L)); clipToPadding = false; itemAnimator = null }
+        val manager = StaggeredGridLayoutManager(2, StaggeredGridLayoutManager.VERTICAL); grid.layoutManager = manager
+        grid.addItemDecoration(object : RecyclerView.ItemDecoration() {
+            override fun getItemOffsets(outRect: Rect, view: View, parent: RecyclerView, state: RecyclerView.State) {
+                val gap = dp(Space.M); val columns = manager.spanCount
+                val span = ((view.layoutParams as? StaggeredGridLayoutManager.LayoutParams)?.spanIndex ?: 0).coerceIn(0, columns - 1)
+                outRect.set(gap * span / columns, 0, gap - gap * (span + 1) / columns, dp(Space.L))
+            }
+        })
+        grid.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            val minimum = dp((156 * resources.configuration.fontScale.coerceAtLeast(1f)).toInt())
+            val columns = (grid.width / minimum).coerceIn(1, 4)
+            if (manager.spanCount != columns) { manager.spanCount = columns; grid.invalidateItemDecorations() }
+        }
+        adapter = TicketAdapter(); grid.adapter = adapter
+        box.addView(grid, LinearLayout.LayoutParams(-1, 0, 1f)); binding.content.addView(box, ViewGroup.LayoutParams(-1, -1))
+    }
+    private fun libraryTools(box: LinearLayout) {
         val tools = row()
         fun sortLabel() = if (model.libraryOldestFirst) "最早添加" else "最近添加"
         val sort = action(sortLabel(), ButtonKind.Text) {}.apply {
@@ -347,35 +402,23 @@ class MainActivity : AppCompatActivity() {
             doAfterTextChanged { model.libraryQuery = it.toString(); updateLibrary(controller.snapshot()) }
         }, Space.XS)
         libraryDraft = action("继续未完成的录入") { navigate("editor") }.also { box.add(it, Space.M) }
-        libraryEmpty = label("", color = R.color.mv_muted).apply { gravity = Gravity.CENTER; setPadding(0, dp(Space.XXL), 0, dp(Space.L)) }.also(box::add)
-        val grid = RecyclerView(this).apply { setPadding(0, dp(Space.L), 0, dp(Space.L)); clipToPadding = false; itemAnimator = null }
-        val manager = StaggeredGridLayoutManager(2, StaggeredGridLayoutManager.VERTICAL); grid.layoutManager = manager
-        grid.addItemDecoration(object : RecyclerView.ItemDecoration() {
-            override fun getItemOffsets(outRect: Rect, view: View, parent: RecyclerView, state: RecyclerView.State) {
-                val gap = dp(Space.M); val columns = manager.spanCount
-                val span = ((view.layoutParams as? StaggeredGridLayoutManager.LayoutParams)?.spanIndex ?: 0).coerceIn(0, columns - 1)
-                outRect.set(gap * span / columns, 0, gap - gap * (span + 1) / columns, dp(Space.L))
-            }
-        })
-        grid.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-            val minimum = dp((156 * resources.configuration.fontScale.coerceAtLeast(1f)).toInt())
-            val columns = (grid.width / minimum).coerceIn(1, 4)
-            if (manager.spanCount != columns) { manager.spanCount = columns; grid.invalidateItemDecorations() }
-        }
-        adapter = TicketAdapter(); grid.adapter = adapter
-        box.addView(grid, LinearLayout.LayoutParams(-1, 0, 1f)); binding.content.addView(box, ViewGroup.LayoutParams(-1, -1))
     }
     private fun updateLibrary(state: AppState) {
-        val query = model.libraryQuery.trim()
-        val filtered = state.tickets.filter { query.isBlank() || it.fields.title.contains(query, true) || it.fields.cinema.contains(query, true) }
-        val ordered = if (model.libraryOldestFirst) filtered.sortedWith(compareBy<Ticket> { it.createdAt }.thenBy { it.id })
+        val month = model.month.takeIf { model.route == "month" }
+        val query = if (month == null) model.libraryQuery.trim() else ""
+        val filtered = state.tickets.filter {
+            (month == null || Presentation.month(it.fields.showtime, it.createdAt) == month) &&
+                (query.isBlank() || it.fields.title.contains(query, true) || it.fields.cinema.contains(query, true))
+        }
+        val ordered = if (model.libraryOldestFirst && month == null) filtered.sortedWith(compareBy<Ticket> { it.createdAt }.thenBy { it.id })
             else filtered.sortedWith(compareByDescending<Ticket> { it.createdAt }.thenBy { it.id })
-        libraryCount?.text = "${state.tickets.size} 张"
+        libraryCount?.text = "${if (month == null) state.tickets.size else filtered.size} 张"
         libraryDraft?.isVisible = state.draft != null
         libraryEmpty?.apply {
             isVisible = ordered.isEmpty()
             text = when {
                 !state.ready -> "正在同步票夹…"
+                month != null -> "这个月份没有电影票"
                 state.tickets.isEmpty() -> "还没有电影票。选择一张票面，记录这次观影。"
                 else -> "没有匹配的电影票"
             }
@@ -422,7 +465,7 @@ class MainActivity : AppCompatActivity() {
             ).filter { it.isNotBlank() }.joinToString(" · ")
             holder.meta.isVisible = holder.meta.text.isNotBlank()
             holder.box.contentDescription = "打开${holder.title.text}详情"
-            holder.box.setOnClickListener { model.detailId = ticket.id; navigate("detail") }
+            holder.box.setOnClickListener { openDetail(ticket, model.route) }
             holder.presenter.bind(ticket.cover)
         }
         override fun getItemCount() = tickets.size
@@ -456,6 +499,11 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+    private fun openDetail(ticket: Ticket, from: String) { model.detailFrom = from; model.detailId = ticket.id; navigate("detail") }
+    private fun backAction(title: String, route: String): MaterialButton = action(title, ButtonKind.Quiet) { navigate(route) }.apply {
+        contentDescription = "返回$title"; setIconResource(R.drawable.ic_chevron_left); iconPadding = dp(Space.XS)
+        setPadding(0, 0, dp(Space.S), 0)
+    }
     private fun infoPanel(body: LinearLayout, title: String, rows: List<Pair<String, String>>, top: Int = Space.XL): LinearLayout {
         body.add(sectionTitle(title), top)
         return panel().apply {
@@ -467,10 +515,7 @@ class MainActivity : AppCompatActivity() {
     }
     private fun detailScreen(state: AppState) {
         val body = scrollColumn()
-        body.addWrapped(action("票夹", ButtonKind.Quiet) { navigate("library") }.apply {
-            contentDescription = "返回票夹"; setIconResource(R.drawable.ic_chevron_left); iconPadding = dp(Space.XS)
-            setPadding(0, 0, dp(Space.S), 0)
-        })
+        body.addWrapped(backAction(routeTitle(model.detailFrom), model.detailFrom))
         val ticket = state.tickets.find { it.id == model.detailId }
         if (ticket == null) { body.add(label("这张电影票已不存在。", color = R.color.mv_muted), Space.XL); return }
         body.add(pageTitle(ticket.fields.title.ifBlank { "未命名电影票" }), Space.XS)
@@ -577,8 +622,103 @@ class MainActivity : AppCompatActivity() {
         MaterialAlertDialogBuilder(this).setTitle("放弃未保存的修改？").setMessage("返回后，本次选择的票面和填写内容将被丢弃。").setNegativeButton("继续编辑", null)
             .setPositiveButton("放弃") { _, _ -> model.afterDraftRoute = destination; controller.discardDraft() }.show()
     }
-    private fun devicesScreen(state: AppState) {
-        val body = scrollColumn(); body.add(pageTitle("设备与缓存"), Space.S)
+    private fun mineScreen(state: AppState) {
+        val body = scrollColumn().apply { clipToPadding = false }; body.add(pageTitle("我的"), Space.S)
+        (body.parent as ScrollView).setOnScrollChangeListener { _, _, y, _, _ -> model.mineScroll = y }
+        val email = state.session?.email.orEmpty()
+        val name = state.session?.name.orEmpty().ifBlank { email.substringBefore('@') }.ifBlank { "当前账号" }
+        val months = state.tickets.groupBy { Presentation.month(it.fields.showtime, it.createdAt) }.toSortedMap(compareByDescending { it })
+        body.add(row().apply {
+            addView(avatar(name).apply { style(Type.Display) }, LinearLayout.LayoutParams(dp(Size.PROFILE), dp(Size.PROFILE)))
+            addView(column().apply {
+                setPadding(dp(Space.L), 0, 0, 0)
+                add(label(name, Type.Title).apply { singleLine() })
+                if (email.isNotBlank() && email != name) add(label(email, Type.Label, R.color.mv_muted).apply { singleLine() }, Space.XS)
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+        }, Space.L)
+        body.add(label("${state.tickets.size} 张电影票 · ${months.size} 个观影月份", Type.Label, R.color.mv_muted), Space.M)
+
+        if (state.tickets.isEmpty()) body.add(label(if (state.ready) "还没有电影票。录入后，这里会显示最近添加和按月回看。" else "正在同步票夹…", color = R.color.mv_muted), Space.XL)
+        else {
+            body.addWrapped(sectionLink("最近添加") { navigate("library") }, Space.L)
+            val strip = row().apply { gravity = Gravity.TOP; setPadding(dp(Space.PAGE), 0, dp(Space.PAGE), 0) }
+            val recent = state.tickets.take(RECENT_LIMIT)
+            recent.forEachIndexed { index, ticket ->
+                strip.addView(recentCard(ticket), LinearLayout.LayoutParams(dp(Size.RECENT_COVER), -2).apply { if (index < recent.lastIndex) marginEnd = dp(Space.M) })
+            }
+            body.addView(HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; addView(strip) },
+                LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(Space.XS); marginStart = -dp(Space.PAGE); marginEnd = -dp(Space.PAGE) })
+
+            body.add(sectionTitle("按月回看"), Space.XL)
+            months.entries.take(MONTH_LIMIT).chunked(2).forEachIndexed { index, pair ->
+                body.add(row().apply {
+                    gravity = Gravity.TOP
+                    pair.forEachIndexed { slot, (month, tickets) ->
+                        addView(monthCard(month, tickets), LinearLayout.LayoutParams(0, -2, 1f).apply { if (slot == 1) marginStart = dp(Space.M) })
+                    }
+                    if (pair.size == 1) addView(View(this@MainActivity), LinearLayout.LayoutParams(0, 0, 1f).apply { marginStart = dp(Space.M) })
+                }, if (index == 0) Space.M else Space.L)
+            }
+        }
+
+        body.add(panel().apply {
+            setPadding(dp(Space.L), dp(Space.XS), dp(Space.L), dp(Space.XS))
+            add(listRow(R.drawable.ic_person, "账户与登录") { navigate("account") })
+            addDivider()
+            add(listRow(R.drawable.ic_devices, "同步与设备") { navigate("sync") })
+            addDivider()
+            add(listRow(R.drawable.ic_info, "关于与隐私") { navigate("about") })
+        }, Space.XL)
+    }
+    private fun sectionLink(text: String, clicked: () -> Unit): LinearLayout = row().apply {
+        isClickable = true; isFocusable = true; background = ripple(); minimumHeight = dp(Size.TOUCH)
+        contentDescription = "$text，查看票夹"; setOnClickListener { clicked() }
+        addView(sectionTitle(text).apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO })
+        addView(ImageView(this@MainActivity).apply {
+            setImageResource(R.drawable.ic_chevron_right); setColorFilter(getColor(R.color.mv_ink)); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }, LinearLayout.LayoutParams(dp(Size.INDICATOR), dp(Size.INDICATOR)).apply { marginStart = dp(Space.XS) })
+    }
+    private fun thumbnail(image: ImageView, ticket: Ticket, caption: TextView = TextView(this)) {
+        media.add(MediaPresenter(controller, imageExecutor, image, caption, compact = true, maxEdge = THUMBNAIL_EDGE).also { it.bind(ticket.cover) })
+    }
+    private fun recentCard(ticket: Ticket): LinearLayout = column().apply {
+        val title = ticket.fields.title.ifBlank { "未命名电影票" }
+        isClickable = true; isFocusable = true; foreground = ripple(); contentDescription = "打开${title}详情"
+        setOnClickListener { openDetail(ticket, "mine") }
+        val image = TicketCoverView(this@MainActivity).apply {
+            setRatio(3, 4); scaleType = ImageView.ScaleType.CENTER_CROP; contentDescription = "${title}封面"
+            background = rounded(R.color.mv_soft, Radius.IMAGE); clipToOutline = true
+        }
+        addView(image, LinearLayout.LayoutParams(-1, -2))
+        add(label(title, Type.Label).apply { singleLine() }, Space.S)
+        val caption = label("", Type.Caption, R.color.mv_muted).apply { singleLine() }.also { add(it, Space.XS) }
+        thumbnail(image, ticket, caption)
+    }
+    private fun monthCard(month: String, tickets: List<Ticket>): LinearLayout = column().apply {
+        val title = Presentation.monthLabel(month)
+        isClickable = true; isFocusable = true; foreground = ripple(); contentDescription = "查看${title}的${tickets.size}张电影票"
+        setOnClickListener { model.month = month; navigate("month") }
+        fun photo(ticket: Ticket?, tilt: Float) = FrameLayout(this@MainActivity).apply {
+            background = rounded(R.color.mv_background, Radius.PHOTO, R.color.mv_line); elevation = dp(Size.PHOTO_ELEVATION).toFloat()
+            rotation = tilt; setPadding(dp(Space.S), dp(Space.S), dp(Space.S), dp(Space.S))
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
+            if (ticket != null) addView(ImageView(this@MainActivity).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP; background = rounded(R.color.mv_soft, Radius.PHOTO); clipToOutline = true
+            }.also { thumbnail(it, ticket) }, FrameLayout.LayoutParams(-1, -1))
+        }
+        val inset = dp(Space.M)
+        addView(FrameLayout(this@MainActivity).apply {
+            addView(photo(tickets.getOrNull(1), Size.PHOTO_TILT), FrameLayout.LayoutParams(-1, -1).apply { setMargins(inset * 2, inset, inset / 2, inset) })
+            addView(photo(tickets.first(), -Size.PHOTO_TILT / 2), FrameLayout.LayoutParams(-1, -1).apply { setMargins(inset / 2, inset, inset * 2, inset) })
+        }, LinearLayout.LayoutParams(-1, dp(Size.MONTH_STACK)))
+        add(label(title, Type.Subtitle), Space.XS)
+        add(label("${tickets.size} 张", Type.Caption, R.color.mv_muted), Space.XS)
+    }
+    private fun subPage(title: String): LinearLayout = scrollColumn().apply {
+        addWrapped(backAction("我的", "mine")); add(pageTitle(title), Space.XS)
+    }
+    private fun accountScreen(state: AppState) {
+        val body = subPage("账户与登录")
         val email = state.session?.email.orEmpty()
         body.add(row().apply {
             addView(avatar(email), LinearLayout.LayoutParams(dp(Size.AVATAR), dp(Size.AVATAR)))
@@ -612,6 +752,16 @@ class MainActivity : AppCompatActivity() {
             setPadding(paddingLeft, paddingTop, paddingRight, dp(Space.L))
         }, Space.M)
 
+        body.add(panel().apply {
+            setPadding(dp(Space.L), dp(Space.XS), dp(Space.L), dp(Space.XS))
+            add(listRow(R.drawable.ic_logout, "退出", danger = true) {
+                MaterialAlertDialogBuilder(this@MainActivity).setTitle("退出登录？").setMessage("退出后停止同步与传输；云端记录和本机文件保留。").setNegativeButton("取消", null)
+                    .setPositiveButton("退出") { _, _ -> controller.logout() }.show()
+            })
+        }, Space.XL)
+    }
+    private fun syncScreen(state: AppState) {
+        val body = subPage("同步与设备")
         body.add(sectionTitle("本机图片缓存"), Space.XL)
         body.add(panel().apply {
             setPadding(dp(Space.L), dp(Space.L), dp(Space.L), dp(Space.XS))
@@ -668,6 +818,13 @@ class MainActivity : AppCompatActivity() {
             }, Space.M)
         }
 
+        body.add(panel().apply {
+            setPadding(dp(Space.L), dp(Space.XS), dp(Space.L), dp(Space.XS))
+            add(listRow(R.drawable.ic_refresh, "刷新状态", clicked = controller::refresh))
+        }, Space.XL)
+    }
+    private fun aboutScreen() {
+        val body = subPage("关于与隐私")
         body.add(sectionTitle("关于海报数据"), Space.XL)
         body.add(panel().apply {
             addView(ImageView(this@MainActivity).apply {
@@ -677,16 +834,6 @@ class MainActivity : AppCompatActivity() {
             add(label("This product uses the TMDB API but is not endorsed or certified by TMDB.", Type.Caption), Space.M)
             add(action("TMDB 数据与使用条款", ButtonKind.Text) { openUrl("https://www.themoviedb.org/api-terms-of-use") }, Space.S)
         }, Space.M)
-
-        body.add(panel().apply {
-            setPadding(dp(Space.L), dp(Space.XS), dp(Space.L), dp(Space.XS))
-            add(listRow(R.drawable.ic_refresh, "刷新状态", clicked = controller::refresh))
-            addDivider()
-            add(listRow(R.drawable.ic_logout, "退出", danger = true) {
-                MaterialAlertDialogBuilder(this@MainActivity).setTitle("退出登录？").setMessage("退出后停止同步与传输；云端记录和本机文件保留。").setNegativeButton("取消", null)
-                    .setPositiveButton("退出") { _, _ -> controller.logout() }.show()
-            })
-        }, Space.XL)
     }
     private fun accountPasswordDialog(mode: String, fixedEmail: String? = null) {
         val fields = column().apply { setPadding(dp(Space.L), dp(Space.S), dp(Space.L), 0) }

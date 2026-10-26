@@ -18,6 +18,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.graphics.ColorUtils
 import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso.onView
+import androidx.test.espresso.Espresso.pressBack
 import androidx.test.espresso.action.ViewActions.*
 import androidx.test.espresso.assertion.ViewAssertions.matches
 import androidx.test.espresso.matcher.ViewMatchers.*
@@ -291,8 +292,9 @@ class NativeUiInstrumentedTest {
         await { imageVisible(description) }
         MediaGate(token).use { gate ->
             try {
-                // Leave the library to release its image leases before evicting the account cache.
-                onView(withContentDescription("设备")).perform(click())
+                // Leave the image-bearing pages to release their leases before evicting the account cache.
+                onView(withContentDescription("我的")).perform(click())
+                onView(withText("同步与设备")).perform(scrollTo(), click())
                 scenario.onActivity { controller.setPeerEnabled(false); controller.clearCache() }
                 await { controller.snapshot().busy.isBlank() && controller.snapshot().cache.files == 0 }
                 assertEquals("", controller.snapshot().cache.error)
@@ -423,9 +425,23 @@ class NativeUiInstrumentedTest {
         awaitHealthy("library-foreground")
         await { imageVisible("${title}封面") }
         onView(withContentDescription("打开${title}详情")).check(matches(hasDescendant(withText("已缓存 · 本机缓存"))))
-        onView(withText("设备")).perform(click())
-        screenshot("devices-portrait")
+        onView(withContentDescription("我的")).perform(click())
+        screenshot("mine-portrait")
+        val tickets = controller.snapshot().tickets
+        val monthKey = tickets.maxOf { Presentation.month(it.fields.showtime, it.createdAt) }
+        val inMonth = tickets.filter { Presentation.month(it.fields.showtime, it.createdAt) == monthKey }
+        val month = Presentation.monthLabel(monthKey)
+        val monthTitle = inMonth.first().fields.title.ifBlank { "未命名电影票" }
+        onView(withContentDescription("查看${month}的${inMonth.size}张电影票")).perform(scrollTo(), click())
+        onView(withText("${inMonth.size} 张")).check(matches(isDisplayed()))
+        onView(withContentDescription("打开${monthTitle}详情")).perform(click())
+        onView(withContentDescription("返回$month")).check(matches(isDisplayed()))
+        onView(withContentDescription("我的")).check(matches(isSelected()))
+        pressBack()
+        onView(withText("${inMonth.size} 张")).check(matches(isDisplayed()))
+        pressBack()
+        onView(withText("同步与设备")).perform(scrollTo(), click())
         onView(withText("刷新状态")).perform(scrollTo())
-        screenshot("devices-bottom")
+        screenshot("sync-bottom")
     }
 }

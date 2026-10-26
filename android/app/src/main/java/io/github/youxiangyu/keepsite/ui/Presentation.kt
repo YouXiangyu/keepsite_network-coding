@@ -1,9 +1,17 @@
 package io.github.youxiangyu.keepsite.ui
 
 import java.net.URI
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 object Presentation {
+    /** Groups by the showtime's month; tickets without a valid showtime use their creation month. */
+    fun month(showtime: String, createdAt: Long, zone: ZoneId = ZoneId.systemDefault()): String =
+        Regex("^\\d{4}-(0[1-9]|1[0-2])").find(showtime)?.value
+            ?: Instant.ofEpochMilli(createdAt).atZone(zone).format(DateTimeFormatter.ofPattern("yyyy-MM"))
+    fun monthLabel(month: String): String = "${month.take(4)}年${month.drop(5).toInt()}月"
     fun bytes(value: Long): String = if (value < 1024 * 1024) "${value / 1024} KB" else String.format(Locale.ROOT, "%.1f MB", value / (1024.0 * 1024))
     fun processing(status: String): String = when (status) {
         "not_started" -> "尚未开始自动处理"
