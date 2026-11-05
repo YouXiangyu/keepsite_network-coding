@@ -201,10 +201,16 @@ class HttpApi(val origin: String, private val secrets: SecretStore) : Closeable 
         check(expected)
         return media(ref.url, false, ref, expected) to "server"
     }
-    override fun close() {
+    @Synchronized override fun close() {
+        if (closed) return
         closed = true
-        cancelRequests(); client.connectionPool.evictAll(); mediaClient.connectionPool.evictAll()
-        client.dispatcher.executorService.shutdown()
+        cancelRequests()
+        // Closing an idle TLS socket can write close_notify; never do that on the UI thread.
+        // All derived clients share this connection pool and dispatcher.
+        client.dispatcher.executorService.execute {
+            try { client.connectionPool.evictAll() }
+            finally { client.dispatcher.executorService.shutdown() }
+        }
     }
     companion object {
         fun validS3Url(value: String): Boolean = try {

@@ -20,6 +20,7 @@ class MediaPresenter(
     private val image: ImageView,
     private val caption: TextView,
     private val compact: Boolean = false,
+    private val maxEdge: Int = 1600,
 ) : Closeable {
     private val main = Handler(Looper.getMainLooper())
     private var lease: Closeable? = null
@@ -62,7 +63,7 @@ class MediaPresenter(
                 read(options)
                 require(options.outWidth > 0 && options.outHeight > 0 && options.outWidth.toLong() * options.outHeight <= 40_000_000)
                 var sample = 1
-                while (options.outWidth / sample > 1600 || options.outHeight / sample > 1600) sample *= 2
+                while (options.outWidth / sample > maxEdge || options.outHeight / sample > maxEdge) sample *= 2
                 read(BitmapFactory.Options().apply { inSampleSize = sample })
             }.getOrNull()
             main.post {

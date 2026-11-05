@@ -1,5 +1,17 @@
 # keepsite 项目运行信息
 
+## 2026-11-05 现状核验（只读）
+
+北京时间19:05至19:06，通过既有可信SSH核对准确实例 `i-0e9ba9bc6f4b1c019`，当前发布链接及实际MainPID工作目录均为 `/opt/keepsite/releases/32b4e0326ad6bdb1c0603049491b9a753e71ae81`。`keepsite.service` 为active/running、NRestarts=0；内部及公网 `/api/health` 均返回HTTP 200和status=ok，公网首页HTTPS 200。
+
+本次文档整理前，GitHub远端main为 `823e4417c0642c45647bf288dfda9e8196d8496d`（2026-10-27北京时间01:56合并PR #17）。该提交与服务器32b4e03之间的差异仅涉及Android、AGENTS及Android说明/设计文档，`backend/`、`demo/`、`deploy/`、`scripts/`及工作流无差异；不能据此声称服务器提交已经等于最新main。
+
+准确main的Application CI运行40373313695中Backend tests、Frontend tests、Android tests均成功，Deployment recovery运行40373313633成功，但Publish checked main artifact任务为skipped。工作流仍以旧仓库名 `YouXiangyu/network-coding` 作为发布条件，实际仓库已改名为 `YouXiangyu/keepsite_network-coding`；自动制品发布名称条件及OIDC/发布器链路的同步验证仍为待办，本次未修复。服务器 `keepsite-autodeploy.timer` 为enabled/active，最近worker仍返回current/32b4e03；轮询运行不代表已收到最新main制品。
+
+`keepsite-auto-stop.timer` 与旧 `memoverse-auto-stop.timer` 均为disabled/inactive，继续按全天运行约定管理。本次只读核验，未部署、启停或修改服务器设置，也未重新检查AWS云控制面、Cognito配置及GitHub分支保护。下方历史配置和验收结论只代表各自记录日期。
+
+Android后续进展：PR #17已合并，v0.1 Release已更新到main 823e4417，APK为versionName=0.1.0、versionCode=3，固定连接 `https://keepsite.space`。APK发布与EC2运行版本分别记录；下方10月26日“旧提示随下次APK发布更新、本次未发布APK”仅指当日发布范围，不代表目前APK仍待更新。两台Android真机验收仍由用户执行，不能由CI或历史本机结果替代。
+
 ## 2026-10-26 密码规则上线（main 32b4e03）
 
 用户明确要求部署已合并的新版。准确main为 `32b4e0326ad6bdb1c0603049491b9a753e71ae81`，Application CI 40283190710及Deployment recovery 40283190700全部成功，应用与文档独立审查在PR #13/#15阶段完成。GitHub制品发布任务因仓库改名后的旧名称门禁而跳过；本次走正式手工发布入口，不把CI成功当作制品已发布。
@@ -18,7 +30,7 @@ Cognito更新方案经独立复核。初次显式payload被自动审批拒绝，
 
 用户明确授权检查通过后合并PR #13、#15，并要求后续取消AGENTS.md中的GitHub Codex自动审查要求。现行合并门槛保留准确head提交的CI成功、独立子代理代码审查及用户明确合并授权；无GitHub Codex结果不再单独阻塞。历史各节的Codex等待/本次例外仅反映当时规则，不作为今后强制要求。
 
-首次Merge API返回405，要求至少1个有写权限的代码所有者批准。随后用户另外明确授权将required_approving_review_count从1改0、require_code_owner_reviews从true改false；已读改写并逐项验证其余保护不变，enforce_admins仍true。现行GitHub平台不再强制这两项批准条件，项目的准确head CI、独立审查及明确合并授权仍保留。PR #13以cf3b389、PR #15以32b4e03合入main。规则集为空，平台required_status_checks无强制context的历史现状未在该操作中改变。
+首次Merge API返回405，要求至少1个有写权限的代码所有者批准。随后用户另外明确授权将required_approving_review_count从1改0、require_code_owner_reviews从true改false；已读改写并逐项验证其余保护不变，enforce_admins仍true。该次操作完成后，GitHub平台不再强制这两项批准条件；这是2026-10-26的核验结果，后续操作前须重新核对。项目的准确head CI、独立审查及明确合并授权仍保留。PR #13以cf3b389、PR #15以32b4e03合入main。规则集为空，平台required_status_checks无强制context的历史现状未在该操作中改变。
 
 ## 2026-10-26 main新版发布与准备权限修复
 
@@ -166,7 +178,7 @@ TMDB 只读令牌已从本机 `.cache/server/keepsite-tmdb.env` 安全配置到�
 | --- | --- |
 | 项目 | keepsite / network-coding |
 | 本机根目录 | `D:\100-code\110-Project\network-coding` |
-| GitHub 私人仓库 | `https://github.com/YouXiangyu/keepsite_network-coding`，repository ID 1423372245；原network-coding地址为重定向 |
+| GitHub 仓库 | `https://github.com/YouXiangyu/keepsite_network-coding`，repository ID 1423372245；原network-coding地址为重定向 |
 | 默认分支 | `main` |
 | 改版前 Git 核验（2026-10-21） | GitHub `main` 为 `eb486c9`；当前工作分支 `docs/spec-and-dev-plan` 的改版前检查点 `d7945d8` 已推送并读回核对。检查点无源码改动；之后的文档提交以 Git 日志为准 |
 | 本机技能入口 | `C:\Users\游翔宇\.codex\skills\keepsite-delivery`，链接到项目 `.agents/skills/keepsite-delivery` |
@@ -175,8 +187,8 @@ TMDB 只读令牌已从本机 `.cache/server/keepsite-tmdb.env` 安全配置到�
 | 实例 ID / 名称 / 可用区 | `i-0e9ba9bc6f4b1c019` / `memoverse-keepsite` / `ap-northeast-1a` |
 | 规格 | `t3.small`：x86_64、2 vCPU、2 GB RAM；CPU credits 为 standard，避免 surplus credit 费用 |
 | 系统与磁盘 | Canonical Ubuntu 24.04；10 GB 加密 gp3 根卷 `vol-0bb6aa01805d28c75`，旧 20 GB 卷已删除 |
-| 最近运行状态 | 2026-10-26 09:08:41（北京时间）启动，running、2/2检查及HTTPS 200通过；两个auto-stop timer均disabled/inactive，全天持续运行。操作前重新查询 |
-| 最近应用运行提交 | 2026-10-26已实际部署main `32b4e0326ad6bdb1c0603049491b9a753e71ae81`，current与MainPID cwd一致、服务健康；Cognito密码MinimumLength=8、无字符组合要求。自动worker确认current。历史5d27e90保留回滚 |
+| 最近运行状态 | 2026-11-05北京时间19:05至19:06经SSH核对准确实例，应用active/running、内部/公网health及首页HTTPS 200；两个auto-stop timer均disabled/inactive。此轮未查EC2控制面状态检查；操作前重新查询 |
+| 最近应用运行提交 | 2026-11-05现场核对仍为 `32b4e0326ad6bdb1c0603049491b9a753e71ae81`，current与MainPID cwd一致、服务健康，自动worker确认current；与本次文档整理前远端main 823e4417不同。Cognito密码策略见10月26日历史记录，本次未重查 |
 | 公网 IPv4 | 固定 Elastic IP `13.230.217.247`，allocation `eipalloc-012aaafbbd3622359`，绑定本实例。停机仍保留及计费；操作前仍核对绑定。此前动态地址仅供历史定位 |
 | Launch template / 新建默认版本 | `lt-016bca8507ac81480` / `2`，根盘默认 10 GB |
 | 安全组 / SSH key pair | `sg-0f472ac3891c65681` / `memoverse-ec2-20261017` |

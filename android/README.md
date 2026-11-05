@@ -41,15 +41,13 @@ APK 位于 `app/build/outputs/apk/debug/app-debug.apk`。本机 debug key 位于
 
 ## 服务地址与测试入口
 
-默认服务地址为 `https://keepsite.space`。release 构建固定使用该 HTTPS 地址，生产清单禁止明文流量。debug 构建才允许通过 `keepsite.debugBaseUrl` 指向 HTTP loopback；不接受任意公网 HTTP 地址、用户信息、路径、查询或 fragment。
+2026-10-26 用户明确统一为一个连接 EC2 的应用包。debug 和 release 均固定连接 `https://keepsite.space`，使用主清单禁止明文流量；不再提供本机服务构建类型。旧 `keepsite.debugBaseUrl` 属性传入时会明确报错，不允许把应用重定向到本电脑。
 
-本机原生互通夹具使用 `http://127.0.0.1:4180`。构建测试 APK：
+历史 `NativeUiInstrumentedTest`、`NativeInteropInstrumentedTest` 和 `scripts/verify-android.mjs` 依赖 loopback 合成服务，其入口断言禁止使用生产服务。这些测试当前不适用于固定线上地址的应用，不得直接把断言改成生产地址后运行，以免在真实服务写入合成数据。JVM 测试、Lint 和构建继续执行；EC2 页面联调及两台 Android 真机验收单独记录，不能用历史本机测试结果替代。
 
-```powershell
-.\android\gradlew.bat -p android --no-daemon '-Pkeepsite.debugBaseUrl=http://127.0.0.1:4180' :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug
-```
+`OnlineUiInstrumentedTest` 提供只读线上检查：使用未登录的测试设备，加载 EC2 登录页，检查键盘弹出及旋转后的输入框可见性，不填写或提交登录信息、不写云端数据。已登录设备会跳过检查并保留账号。安装上述应用及 `assembleDebugAndroidTest` 生成的测试驱动后，按明确设备 serial 运行此测试类；不要直接运行全部历史 instrumentation 用例。
 
-该命令只构建，不启动服务器或设备。互通测试另需受本轮随机 token 保护的合成服务、明确选择的测试设备和本轮端口转发；测试后只关闭自己创建的服务、浏览器、转发与模拟器。不要把本机测试地址用于正式 APK，也不要为运行本机测试启动 EC2。
+此前装过本机测试包的手机需要重新安装上节生成的线上连接 APK（不卸载、不清除应用数据）；仅启动 EC2 无法改变旧 APK 内的服务地址。
 
 ## 账号、图片与前后台
 
