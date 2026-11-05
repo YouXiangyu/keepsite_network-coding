@@ -977,6 +977,10 @@ async function editorGeometry(page: Page) {
     const visible = { top: viewport?.offsetTop ?? 0, left: viewport?.offsetLeft ?? 0,
       bottom: (viewport?.offsetTop ?? 0) + (viewport?.height ?? innerHeight), right: (viewport?.offsetLeft ?? 0) + (viewport?.width ?? innerWidth) };
     const inside = (box: DOMRect) => box.top >= visible.top - 1 && box.bottom <= visible.bottom + 1 && box.left >= visible.left - 1 && box.right <= visible.right + 1;
+    const active = document.activeElement;
+    const input = active instanceof HTMLInputElement && !!active.closest('.ticket-fields') ? active : null;
+    const inputBox = input?.getBoundingClientRect();
+    const hit = inputBox ? document.elementFromPoint(inputBox.x + inputBox.width / 2, inputBox.y + inputBox.height / 2) : null;
     return {
       top: bounds.top, bottom: bounds.bottom, height: bounds.height,
       viewport: visible, scale: viewport?.scale ?? 1,
@@ -987,6 +991,11 @@ async function editorGeometry(page: Page) {
         const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
         return inside(box) && !!hit && control.contains(hit);
       }),
+      compact: document.querySelector<HTMLElement>('.ticket-editor-page')!.dataset.compactActions === 'true',
+      input: inputBox?.toJSON(),
+      inputVisible: !!inputBox && inside(inputBox),
+      inputClear: !!inputBox && (inputBox.right <= bounds.left || inputBox.left >= bounds.right || inputBox.bottom <= bounds.top || inputBox.top >= bounds.bottom),
+      inputHit: !!hit && !!input?.contains(hit),
       overflow: document.documentElement.scrollWidth > innerWidth,
       scrollY,
     };
@@ -1119,28 +1128,31 @@ test('editor action bar measures large text, navigation wrapping and error clear
   await expect(page.getByLabel('片名')).toHaveValue('保留未保存修改');
 });
 
+async function installEditorViewportFixture(page: Page) {
+  // This platform fixture checks geometry/events, not a real system keyboard.
+  await page.addInitScript(() => {
+    const viewport = new EventTarget();
+    const values: Record<string, number> = { offsetTop: 0, offsetLeft: 0, scale: 1 };
+    for (const key of ['offsetTop', 'offsetLeft', 'scale', 'height', 'width']) {
+      Object.defineProperty(viewport, key, { get: () => values[key] ?? (key === 'width' ? innerWidth : innerHeight) });
+    }
+    const listeners = new Map<string, Set<EventListenerOrEventListenerObject>>();
+    const add = viewport.addEventListener.bind(viewport), remove = viewport.removeEventListener.bind(viewport);
+    viewport.addEventListener = (type, callback, options) => {
+      if (callback) { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type)!.add(callback); }
+      add(type, callback, options);
+    };
+    viewport.removeEventListener = (type, callback, options) => { if (callback) listeners.get(type)?.delete(callback); remove(type, callback, options); };
+    Object.defineProperty(window, 'visualViewport', { value: viewport, configurable: true });
+    (window as any).__editorViewportFixture = {
+      set(next: Record<string, number>, event: string) { Object.assign(values, next); viewport.dispatchEvent(new Event(event)); },
+      count() { return [...listeners.values()].reduce((sum, callbacks) => sum + callbacks.size, 0); },
+    };
+  });
+}
 for (const mode of ['new', 'edit']) {
   test(`editor action bar follows synthetic visual viewport geometry ${mode}`, async ({ page }, info) => {
-    // This platform fixture checks geometry/events, not a real system keyboard.
-    await page.addInitScript(() => {
-      const viewport = new EventTarget();
-      const values: Record<string, number> = { offsetTop: 0, offsetLeft: 0, scale: 1 };
-      for (const key of ['offsetTop', 'offsetLeft', 'scale', 'height', 'width']) {
-        Object.defineProperty(viewport, key, { get: () => values[key] ?? (key === 'width' ? innerWidth : innerHeight) });
-      }
-      const listeners = new Map<string, Set<EventListenerOrEventListenerObject>>();
-      const add = viewport.addEventListener.bind(viewport), remove = viewport.removeEventListener.bind(viewport);
-      viewport.addEventListener = (type, callback, options) => {
-        if (callback) { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type)!.add(callback); }
-        add(type, callback, options);
-      };
-      viewport.removeEventListener = (type, callback, options) => { if (callback) listeners.get(type)?.delete(callback); remove(type, callback, options); };
-      Object.defineProperty(window, 'visualViewport', { value: viewport, configurable: true });
-      (window as any).__editorViewportFixture = {
-        set(next: Record<string, number>, event: string) { Object.assign(values, next); viewport.dispatchEvent(new Event(event)); },
-        count() { return [...listeners.values()].reduce((sum, callbacks) => sum + callbacks.size, 0); },
-      };
-    });
+    await installEditorViewportFixture(page);
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
     await mockApi(page, { user: 'a' });
     await page.setViewportSize({ width: 412, height: 628 });
@@ -1194,3 +1206,70 @@ test('editor action bar retains the native fallback without visualViewport', asy
   const last = await page.getByLabel('放映时间').boundingBox();
   expect(last!.y + last!.height).toBeLessThanOrEqual((await editorGeometry(page)).top + 1);
 });
+
+for (const mode of ['new', 'edit']) {
+  test(`editor action bar shares a synthetic short viewport without hiding input ${mode}`, async ({ page }, info) => {
+    await installEditorViewportFixture(page);
+    const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+    await mockApi(page, { user: 'a' });
+    await page.setViewportSize({ width: 732, height: 308 });
+    await page.goto(mode === 'new' ? '/tickets/new' : '/tickets/item-1/edit');
+    await page.getByLabel('片名').fill('横屏输入保持');
+    const normal = await editorGeometry(page);
+    const metrics = await page.evaluate(() => {
+      const input = document.querySelector<HTMLInputElement>('.ticket-fields input')!;
+      return { inputHeight: input.getBoundingClientRect().height, minWidth: 16 * parseFloat(getComputedStyle(input).fontSize), sectionLeft: document.querySelector('.ticket-editor-page')!.getBoundingClientRect().left };
+    });
+    const update = async (values: Record<string, number>, compact: boolean) => {
+      await page.evaluate(values => (window as any).__editorViewportFixture.set(values, 'resize'), values);
+      await expect.poll(async () => (await editorGeometry(page)).compact).toBe(compact);
+      await expectEditorActions(page);
+    };
+    await update({ width: 732, height: 71.238, offsetTop: 53.714, offsetLeft: 0 }, true);
+    const sidebarWidth = await page.locator('.ticket-editor-actions').evaluate(element => element.getBoundingClientRect().width);
+    const centerInput = async (name: string) => {
+      const input = page.getByLabel(name);
+      await input.focus();
+      // A synthetic VV cannot trigger the browser's real IME panning; scroll explicitly.
+      await input.evaluate(input => {
+        const viewport = window.visualViewport!;
+        window.scrollBy(0, input.getBoundingClientRect().top - viewport.offsetTop - 4);
+      });
+      await expect.poll(() => editorGeometry(page)).toMatchObject({ compact: true, inputVisible: true, inputClear: true, inputHit: true });
+    };
+    for (const name of ['片名', '座位', '放映时间']) await centerInput(name);
+    await page.screenshot({ path: info.outputPath(`synthetic-compact-${mode}.png`) });
+    await info.attach('compact-geometry', { body: JSON.stringify(await editorGeometry(page)), contentType: 'application/json' });
+    const margins = await page.getByLabel('放映时间').evaluate(input => ({ start: parseFloat(getComputedStyle(input).scrollMarginBlockStart), end: parseFloat(getComputedStyle(input).scrollMarginBlockEnd) }));
+    expect(margins.start).toBeCloseTo(53.714 + 4, 1);
+    expect(margins.end).toBeCloseTo(308 - (53.714 + 71.238) + 4, 1);
+    const heightBoundary = normal.height + metrics.inputHeight + 16;
+    for (const delta of [-2, -1, 1, 2, -1, 1]) {
+      await update({ height: heightBoundary + delta, offsetTop: 0 }, delta < 0);
+      const stable = await page.evaluate(async () => {
+        const root = document.querySelector<HTMLElement>('.ticket-editor-page')!;
+        const changes: string[] = [];
+        const observer = new MutationObserver(records => changes.push(...records.map(() => root.dataset.compactActions ?? 'normal')));
+        observer.observe(root, { attributes: true, attributeFilter: ['data-compact-actions'] });
+        for (let index = 0; index < 20; index++) (window as any).__editorViewportFixture.set({}, index % 2 ? 'resize' : 'scroll');
+        for (let index = 0; index < 10; index++) await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        observer.disconnect(); return changes;
+      });
+      expect(stable).toEqual([]);
+    }
+    const widthBoundary = sidebarWidth + 12 + metrics.minWidth + metrics.sectionLeft;
+    for (const delta of [-2, -1, 1, 2, -1, 1]) await update({ height: 71.238, offsetTop: 53.714, width: widthBoundary + delta }, delta > 0);
+    await update({ width: 732, height: 71.238, offsetTop: 53.714 }, true);
+    await centerInput('座位');
+    await page.getByLabel('座位').press('End'); await page.getByLabel('座位').press('x');
+    await expect(page.getByLabel('片名')).toHaveValue('横屏输入保持');
+    await update({ width: 732, height: 308, offsetTop: 0 }, false);
+    await expect(page.locator('.ticket-editor-page')).not.toHaveAttribute('data-compact-actions', 'true');
+    expect(await page.locator('.ticket-editor > fieldset').evaluate(element => getComputedStyle(element).marginInlineEnd)).toBe('0px');
+    await page.setViewportSize({ width: 390, height: 844 });
+    await update({ width: 390, height: 844, offsetTop: 0 }, false);
+    await expect(page.getByLabel('片名')).toHaveValue('横屏输入保持');
+    await page.screenshot({ path: info.outputPath(`synthetic-compact-${mode}-restored.png`) });
+    expect(errors).toEqual([]);
+  });
+}

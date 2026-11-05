@@ -60,7 +60,32 @@ export default function TicketEditor({ item, busy, runMutation, runReconciliatio
       root.style.setProperty('--editor-viewport-left', `${left}px`);
       root.style.setProperty('--editor-viewport-right', `${Math.max(0, width - right)}px`);
       root.style.setProperty('--editor-bottom-inset', `${bottomInset}px`);
-      const covered = footer.getBoundingClientRect().height + bottomInset + 16;
+      const section = root.getBoundingClientRect();
+      const contentLeft = Math.max(section.left, left);
+      const contentRight = Math.min(section.right, right);
+      root.style.setProperty('--editor-compact-right', `${Math.max(0, width - contentRight)}px`);
+      // Probe both profiles without changing the field layout until the final decision.
+      footer.dataset.layout = 'normal';
+      const normalHeight = footer.getBoundingClientRect().height;
+      footer.dataset.layout = 'compact';
+      const side = footer.getBoundingClientRect();
+      const inputs = [...root.querySelectorAll<HTMLInputElement>('.ticket-fields input')];
+      const inputHeight = Math.max(...inputs.map(input => input.getBoundingClientRect().height));
+      const fieldWidth = 16 * parseFloat(getComputedStyle(inputs[0]).fontSize);
+      const availableHeight = Math.max(0, Math.min(bottom, height - navHeight) - top);
+      const compact = availableHeight < normalHeight + inputHeight + 16 &&
+        availableHeight >= Math.max(side.height, inputHeight + 8) && contentRight - contentLeft >= side.width + 12 + fieldWidth;
+      footer.dataset.layout = compact ? 'compact' : 'normal';
+      if (compact) {
+        root.style.setProperty('--editor-inline-start', `${Math.max(0, contentLeft - section.left)}px`);
+        root.style.setProperty('--editor-inline-end', `${Math.max(0, section.right - contentRight) + side.width + 12}px`);
+        if (root.dataset.compactActions !== 'true') root.dataset.compactActions = 'true';
+      } else {
+        delete root.dataset.compactActions;
+        root.style.removeProperty('--editor-inline-start'); root.style.removeProperty('--editor-inline-end');
+      }
+      root.style.setProperty('--editor-focus-gap', compact ? '4px' : '16px');
+      const covered = compact ? bottomInset + 4 : normalHeight + bottomInset + 16;
       root.style.setProperty('--editor-covered-height', `${covered}px`);
       root.style.setProperty('--editor-bottom-space', `${Math.max(0, covered - parseFloat(getComputedStyle(workspace).paddingBottom))}px`);
     };

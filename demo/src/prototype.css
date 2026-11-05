@@ -66,9 +66,12 @@ h1 { font-size: clamp(28px, 4vw, 40px); font-weight: 600; line-height: 1.25; let
 .ticket-fields label small { font-weight: 400; color: var(--muted); margin-left: 8px; }
 .ticket-fields input { display: block; width: 100%; min-width: 0; min-height: 48px; margin-top: 8px; padding: 11px 12px; border: 1px solid #b7bcb2; border-radius: 7px; background: #fff; color: var(--ink); }
 .ticket-editor-page { padding-bottom: var(--editor-bottom-space, 80px); }
-.ticket-editor-page :is(input, .form-error, .ticket-fields > .secondary-button) { scroll-margin-block: calc(var(--editor-viewport-top, 0px) + 16px) var(--editor-covered-height, 160px); }
+.ticket-editor-page :is(input, .form-error, .ticket-fields > .secondary-button) { scroll-margin-block: calc(var(--editor-viewport-top, 0px) + var(--editor-focus-gap, 16px)) var(--editor-covered-height, 160px); }
 .ticket-editor-actions { position: fixed; inset: auto var(--editor-viewport-right, 0px) var(--editor-bottom-inset, 0px) var(--editor-viewport-left, 0px); z-index: 29; max-width: 1320px; margin-inline: auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 12px; padding: 12px 32px calc(12px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: #fff; }
 .ticket-editor-actions > :is(button, a) { min-width: 0; }
+.ticket-editor-actions[data-layout='compact'] { left: auto; right: var(--editor-compact-right); width: max-content; max-width: none; flex-wrap: nowrap; }
+.ticket-editor-actions[data-layout='compact'] > :is(button, a) { flex: 0 0 auto; }
+.ticket-editor-page[data-compact-actions='true'] .ticket-editor > fieldset { grid-template-columns: minmax(0, 1fr); margin-inline: var(--editor-inline-start) var(--editor-inline-end); }
 @media (max-width: 760px) {
   .ticket-editor-actions { padding: 12px 18px; }
   .ticket-editor-actions > .primary-button { flex: 1 1 160px; }
