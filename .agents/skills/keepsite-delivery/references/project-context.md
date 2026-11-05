@@ -1,10 +1,36 @@
 # keepsite 项目运行信息
 
+## 2026-11-05 现状核验（只读）
+
+北京时间19:05至19:06，通过既有可信SSH核对准确实例 `i-0e9ba9bc6f4b1c019`，当前发布链接及实际MainPID工作目录均为 `/opt/keepsite/releases/32b4e0326ad6bdb1c0603049491b9a753e71ae81`。`keepsite.service` 为active/running、NRestarts=0；内部及公网 `/api/health` 均返回HTTP 200和status=ok，公网首页HTTPS 200。
+
+本次文档整理前，GitHub远端main为 `823e4417c0642c45647bf288dfda9e8196d8496d`（2026-10-27北京时间01:56合并PR #17）。该提交与服务器32b4e03之间的差异仅涉及Android、AGENTS及Android说明/设计文档，`backend/`、`demo/`、`deploy/`、`scripts/`及工作流无差异；不能据此声称服务器提交已经等于最新main。
+
+准确main的Application CI运行40373313695中Backend tests、Frontend tests、Android tests均成功，Deployment recovery运行40373313633成功，但Publish checked main artifact任务为skipped。工作流仍以旧仓库名 `YouXiangyu/network-coding` 作为发布条件，实际仓库已改名为 `YouXiangyu/keepsite_network-coding`；自动制品发布名称条件及OIDC/发布器链路的同步验证仍为待办，本次未修复。服务器 `keepsite-autodeploy.timer` 为enabled/active，最近worker仍返回current/32b4e03；轮询运行不代表已收到最新main制品。
+
+`keepsite-auto-stop.timer` 与旧 `memoverse-auto-stop.timer` 均为disabled/inactive，继续按全天运行约定管理。本次只读核验，未部署、启停或修改服务器设置，也未重新检查AWS云控制面、Cognito配置及GitHub分支保护。下方历史配置和验收结论只代表各自记录日期。
+
+Android后续进展：PR #17已合并，v0.1 Release已更新到main 823e4417，APK为versionName=0.1.0、versionCode=3，固定连接 `https://keepsite.space`。APK发布与EC2运行版本分别记录；下方10月26日“旧提示随下次APK发布更新、本次未发布APK”仅指当日发布范围，不代表目前APK仍待更新。两台Android真机验收仍由用户执行，不能由CI或历史本机结果替代。
+
+## 2026-10-26 密码规则上线（main 32b4e03）
+
+用户明确要求部署已合并的新版。准确main为 `32b4e0326ad6bdb1c0603049491b9a753e71ae81`，Application CI 40283190710及Deployment recovery 40283190700全部成功，应用与文档独立审查在PR #13/#15阶段完成。GitHub制品发布任务因仓库改名后的旧名称门禁而跳过；本次走正式手工发布入口，不把CI成功当作制品已发布。
+
+准备期间共享工作区被其他任务切换到 `codex/android-mine-library-refresh` 并有两张UI参考图的未提交删除，发布入口正确拒绝脏工作区。本次保留另一任务分支及改动，改用D盘 `.cache/password-deploy-32b4e03` 的干净、分离HEAD工作树，以准确提交构建并发布；未把共享开发状态带上服务器。
+
+发布前在线备份业务与认证SQLite到 `/opt/keepsite/predeploy-backups/password-32b4e03-20261026T130018Z`，目录root0700、数据库文件0600。Cognito完整原始池配置、原可回滚更新请求及目标请求也以root0600保存在同目录的cognito-*.json。本机受限配置备份位于 `.cache/server/password-release-32b4e03-0fb883b403`，不进入Git。
+
+Cognito更新方案经独立复核。初次显式payload被自动审批拒绝，担心省略设备/短信/add-on配置；并未发生云端写入。随后用实时Describe证明这些字段原本未配置，在同一MCP脚本按当前SDK全部可写字段复制已有配置、断言仅五个密码字段变化后更新，读回所有其他可写配置完全一致，未捏造可能启用设备跟踪的空对象。新密码MinimumLength=8，RequireUppercase/RequireLowercase/RequireNumbers/RequireSymbols全部false，TemporaryPasswordValidityDays仍为3；邮件、验证、MFA、恢复方式、标签、tier、key/issuer和不可变身份配置均保持。AWS短期会话过期时按原授权刷新，未把本机AWS凭据放到服务器。
+
+通过scripts/deploy-ubuntu.ps1先PrepareOnly再Execute，current与实际MainPID cwd均为32b4e03，服务active、NRestarts=0；回滚证据 `/opt/keepsite/activation-backups/activation-vrJW2jXj`。正式tar大小11388928bytes、SHA256=e1f333647e71fa3746d0f779b6bb82fb59ececa2385423be6a5cac6c43483fba。再次核对GitHub main准确SHA及各工作流/任务成功后，以条件写上传同一tar及commit manifest到既有私有部署前缀，校验服务器完整SHA256及元数据，再以旧ETag条件更新latest到32b4e03；保留v1协议中的既有仓库别名，未改用户媒体。自动拉取恢复enabled/active，真实worker返回current/32b4e03，不会因旧latest切回5d27e90。改名后的下一次GitHub制品发布名称及OIDC同步仍需单独处理。
+
+真实验收使用本次临时合成Cognito账号（邮件SUPPRESS，随机密码仅存内存）：8位纯小写密码成功创建并登录，7位被Cognito及后端注册接口拒绝；空票夹归属、匿名私有API401、缺失媒体404、退出后401通过。测试身份、会话和自身空记录已精确清理并核验；没有上传验收照片或调用VLM。公网HTTPS200/TLS校验通过。与发布前备份比较，原3个用户、7张票根、11个资产的ID全部保留，SQLite integrity/FK通过。两auto-stop timer仍disabled/inactive，继续全天运行。既有Android APK可以提交简单密码，旧提示随下次APK发布更新；本次未发布APK。
+
 ## 2026-10-26 合并审查约定更新
 
 用户明确授权检查通过后合并PR #13、#15，并要求后续取消AGENTS.md中的GitHub Codex自动审查要求。现行合并门槛保留准确head提交的CI成功、独立子代理代码审查及用户明确合并授权；无GitHub Codex结果不再单独阻塞。历史各节的Codex等待/本次例外仅反映当时规则，不作为今后强制要求。
 
-项目约定变更不代表GitHub平台保护已改变。本次实际Merge API返回405，要求至少1个有写权限的账号批准，尚未合并。只读核验main classic protection：required_approving_review_count=1、require_code_owner_reviews=true、enforce_admins=true；规则集为空，required_status_checks当前无强制context（项目CI检查约定仍执行）。平台批准条件须单独满足或经用户明确授权调整，不能把文档修改报告成平台保护已改变。
+首次Merge API返回405，要求至少1个有写权限的代码所有者批准。随后用户另外明确授权将required_approving_review_count从1改0、require_code_owner_reviews从true改false；已读改写并逐项验证其余保护不变，enforce_admins仍true。该次操作完成后，GitHub平台不再强制这两项批准条件；这是2026-10-26的核验结果，后续操作前须重新核对。项目的准确head CI、独立审查及明确合并授权仍保留。PR #13以cf3b389、PR #15以32b4e03合入main。规则集为空，平台required_status_checks无强制context的历史现状未在该操作中改变。
 
 ## 2026-10-26 main新版发布与准备权限修复
 
@@ -152,7 +178,7 @@ TMDB 只读令牌已从本机 `.cache/server/keepsite-tmdb.env` 安全配置到�
 | --- | --- |
 | 项目 | keepsite / network-coding |
 | 本机根目录 | `D:\100-code\110-Project\network-coding` |
-| GitHub 私人仓库 | `https://github.com/YouXiangyu/keepsite_network-coding`，repository ID 1423372245；原network-coding地址为重定向 |
+| GitHub 仓库 | `https://github.com/YouXiangyu/keepsite_network-coding`，repository ID 1423372245；原network-coding地址为重定向 |
 | 默认分支 | `main` |
 | 改版前 Git 核验（2026-10-21） | GitHub `main` 为 `eb486c9`；当前工作分支 `docs/spec-and-dev-plan` 的改版前检查点 `d7945d8` 已推送并读回核对。检查点无源码改动；之后的文档提交以 Git 日志为准 |
 | 本机技能入口 | `C:\Users\游翔宇\.codex\skills\keepsite-delivery`，链接到项目 `.agents/skills/keepsite-delivery` |
@@ -161,8 +187,8 @@ TMDB 只读令牌已从本机 `.cache/server/keepsite-tmdb.env` 安全配置到�
 | 实例 ID / 名称 / 可用区 | `i-0e9ba9bc6f4b1c019` / `memoverse-keepsite` / `ap-northeast-1a` |
 | 规格 | `t3.small`：x86_64、2 vCPU、2 GB RAM；CPU credits 为 standard，避免 surplus credit 费用 |
 | 系统与磁盘 | Canonical Ubuntu 24.04；10 GB 加密 gp3 根卷 `vol-0bb6aa01805d28c75`，旧 20 GB 卷已删除 |
-| 最近运行状态 | 2026-10-26 09:08:41（北京时间）启动，running、2/2检查及HTTPS 200通过；两个auto-stop timer均disabled/inactive，全天持续运行。操作前重新查询 |
-| 最近应用运行提交 | 2026-10-26已实际部署main `5d27e907aec3f53740c24b39b8b22f0b7c6e3590`，current与MainPID cwd一致、服务健康；自动worker确认current且attempts=0。历史5b8e35d保留回滚 |
+| 最近运行状态 | 2026-11-05北京时间19:05至19:06经SSH核对准确实例，应用active/running、内部/公网health及首页HTTPS 200；两个auto-stop timer均disabled/inactive。此轮未查EC2控制面状态检查；操作前重新查询 |
+| 最近应用运行提交 | 2026-11-05现场核对仍为 `32b4e0326ad6bdb1c0603049491b9a753e71ae81`，current与MainPID cwd一致、服务健康，自动worker确认current；与本次文档整理前远端main 823e4417不同。Cognito密码策略见10月26日历史记录，本次未重查 |
 | 公网 IPv4 | 固定 Elastic IP `13.230.217.247`，allocation `eipalloc-012aaafbbd3622359`，绑定本实例。停机仍保留及计费；操作前仍核对绑定。此前动态地址仅供历史定位 |
 | Launch template / 新建默认版本 | `lt-016bca8507ac81480` / `2`，根盘默认 10 GB |
 | 安全组 / SSH key pair | `sg-0f472ac3891c65681` / `memoverse-ec2-20261017` |
