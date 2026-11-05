@@ -973,14 +973,19 @@ async function editorGeometry(page: Page) {
     const nav = navigation.getBoundingClientRect();
     const fixedNav = getComputedStyle(navigation).position === 'fixed';
     const controls = [...bar.querySelectorAll<HTMLElement>('button, a')];
+    const viewport = window.visualViewport;
+    const visible = { top: viewport?.offsetTop ?? 0, left: viewport?.offsetLeft ?? 0,
+      bottom: (viewport?.offsetTop ?? 0) + (viewport?.height ?? innerHeight), right: (viewport?.offsetLeft ?? 0) + (viewport?.width ?? innerWidth) };
+    const inside = (box: DOMRect) => box.top >= visible.top - 1 && box.bottom <= visible.bottom + 1 && box.left >= visible.left - 1 && box.right <= visible.right + 1;
     return {
       top: bounds.top, bottom: bounds.bottom, height: bounds.height,
-      visible: bounds.top >= 0 && bounds.bottom <= innerHeight && bounds.left >= 0 && bounds.right <= innerWidth,
+      viewport: visible, scale: viewport?.scale ?? 1,
+      visible: inside(bounds),
       aboveNavigation: !fixedNav || bounds.bottom <= nav.top + 1,
       controlsVisible: controls.length === 2 && controls.every(control => {
         const box = control.getBoundingClientRect();
         const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
-        return box.top >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth && !!hit && control.contains(hit);
+        return inside(box) && !!hit && control.contains(hit);
       }),
       overflow: document.documentElement.scrollWidth > innerWidth,
       scrollY,
@@ -1112,4 +1117,80 @@ test('editor action bar measures large text, navigation wrapping and error clear
   }
   await page.screenshot({ path: info.outputPath('large-text-error-390x450.png') });
   await expect(page.getByLabel('片名')).toHaveValue('保留未保存修改');
+});
+
+for (const mode of ['new', 'edit']) {
+  test(`editor action bar follows synthetic visual viewport geometry ${mode}`, async ({ page }, info) => {
+    // This platform fixture checks geometry/events, not a real system keyboard.
+    await page.addInitScript(() => {
+      const viewport = new EventTarget();
+      const values: Record<string, number> = { offsetTop: 0, offsetLeft: 0, scale: 1 };
+      for (const key of ['offsetTop', 'offsetLeft', 'scale', 'height', 'width']) {
+        Object.defineProperty(viewport, key, { get: () => values[key] ?? (key === 'width' ? innerWidth : innerHeight) });
+      }
+      const listeners = new Map<string, Set<EventListenerOrEventListenerObject>>();
+      const add = viewport.addEventListener.bind(viewport), remove = viewport.removeEventListener.bind(viewport);
+      viewport.addEventListener = (type, callback, options) => {
+        if (callback) { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type)!.add(callback); }
+        add(type, callback, options);
+      };
+      viewport.removeEventListener = (type, callback, options) => { if (callback) listeners.get(type)?.delete(callback); remove(type, callback, options); };
+      Object.defineProperty(window, 'visualViewport', { value: viewport, configurable: true });
+      (window as any).__editorViewportFixture = {
+        set(next: Record<string, number>, event: string) { Object.assign(values, next); viewport.dispatchEvent(new Event(event)); },
+        count() { return [...listeners.values()].reduce((sum, callbacks) => sum + callbacks.size, 0); },
+      };
+    });
+    const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+    await mockApi(page, { user: 'a' });
+    await page.setViewportSize({ width: 412, height: 628 });
+    await page.goto(mode === 'new' ? '/tickets/new' : '/tickets/item-1/edit');
+    await expectEditorActions(page);
+    const originalNav = await page.getByRole('navigation', { name: '主导航' }).boundingBox();
+    const cases = [
+      { name: 'nonzero-offset', event: 'resize', values: { height: 272, width: 412, offsetTop: 177.90, offsetLeft: 0, scale: 1 } },
+      { name: 'pan', event: 'scroll', values: { offsetTop: 113.14 } },
+      { name: 'zoom', event: 'resize', values: { height: 314, width: 206, offsetTop: 80, offsetLeft: 100, scale: 2 } },
+      { name: 'zoom-pan', event: 'scroll', values: { offsetTop: 150, offsetLeft: 160 } },
+      { name: 'restored', event: 'resize', values: { height: 628, width: 412, offsetTop: 0, offsetLeft: 0, scale: 1 } },
+    ];
+    for (const item of cases) {
+      await page.evaluate(({ values, event }) => (window as any).__editorViewportFixture.set(values, event), item);
+      await expectEditorActions(page);
+      await expect.poll(async () => {
+        const bar = await editorGeometry(page);
+        return Math.abs(bar.bottom - Math.min(bar.viewport.bottom, originalNav!.y)) < 1;
+      }).toBe(true);
+      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+      await expect.poll(async () => {
+        const last = await page.getByLabel('放映时间').boundingBox(), bar = await editorGeometry(page);
+        return last!.y >= bar.viewport.top - 1 && last!.y + last!.height <= bar.top + 1;
+      }).toBe(true);
+      await page.screenshot({ path: info.outputPath(`synthetic-${mode}-${item.name}.png`) });
+      await info.attach(item.name, { body: JSON.stringify(await editorGeometry(page)), contentType: 'application/json' });
+    }
+    expect(await page.getByRole('navigation', { name: '主导航' }).boundingBox()).toEqual(originalNav);
+    expect(await page.evaluate(() => (window as any).__editorViewportFixture.count())).toBe(2);
+    await page.evaluate(() => {
+      (window as any).__editorViewportFixture.set({ height: 272, offsetTop: 177.90 }, 'resize');
+      document.querySelector<HTMLAnchorElement>('.ticket-editor-actions a')!.click();
+    });
+    await expect(page.locator('.ticket-editor-actions')).toHaveCount(0);
+    expect(await page.evaluate(() => (window as any).__editorViewportFixture.count())).toBe(0);
+    await page.evaluate(() => (window as any).__editorViewportFixture.set({ height: 628, offsetTop: 0 }, 'scroll'));
+    await page.getByRole('link', { name: '上传电影票', exact: true }).click();
+    await expectEditorActions(page);
+    expect(await page.evaluate(() => (window as any).__editorViewportFixture.count())).toBe(2);
+    expect(errors).toEqual([]);
+  });
+}
+
+test('editor action bar retains the native fallback without visualViewport', async ({ page }) => {
+  await page.addInitScript(() => Object.defineProperty(window, 'visualViewport', { value: undefined, configurable: true }));
+  await mockApi(page, { user: 'a' });
+  await page.setViewportSize({ width: 390, height: 450 }); await page.goto('/tickets/new');
+  await expectEditorActions(page);
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  const last = await page.getByLabel('放映时间').boundingBox();
+  expect(last!.y + last!.height).toBeLessThanOrEqual((await editorGeometry(page)).top + 1);
 });
