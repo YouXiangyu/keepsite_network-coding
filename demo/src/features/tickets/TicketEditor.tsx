@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import { Camera, Check } from '@phosphor-icons/react';
 import { ApiError, assertSessionEpoch, errorMessage, getOperationStatus, getUploadStatus, mutate, sessionEpoch, uploadMedia, type SyncPosition } from '../../api';
 import { emptyFields, fieldNames, type FieldName, type Ticket, type TicketFields } from '../../data';
@@ -35,6 +35,27 @@ export default function TicketEditor({ item, busy, runMutation, runReconciliatio
   const objectUrl = useRef('');
   const alive = useRef(true);
   const operation = useRef<{ fingerprint: string; id: string } | null>(null);
+  const page = useRef<HTMLElement>(null);
+  const actions = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const root = page.current;
+    const footer = actions.current;
+    const workspace = root?.closest<HTMLElement>('.workspace');
+    const navigation = root?.closest('.keepsite-shell')?.querySelector<HTMLElement>('.app-header nav');
+    if (!root || !footer || !workspace || !navigation) return;
+    const measure = () => {
+      const navHeight = getComputedStyle(navigation).position === 'fixed' ? navigation.getBoundingClientRect().height : 0;
+      root.style.setProperty('--editor-nav-height', `${navHeight}px`);
+      const covered = footer.getBoundingClientRect().height + navHeight + 16;
+      root.style.setProperty('--editor-covered-height', `${covered}px`);
+      root.style.setProperty('--editor-bottom-space', `${Math.max(0, covered - parseFloat(getComputedStyle(workspace).paddingBottom))}px`);
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(footer); observer.observe(navigation);
+    window.addEventListener('resize', measure);
+    measure();
+    return () => { observer.disconnect(); window.removeEventListener('resize', measure); };
+  }, []);
   const currentFields = item?.fields ?? baseline.current;
   const currentSources = item?.fieldSources ?? baselineSources.current;
   const userChange = (key: FieldName) => touched.current.has(key) && (fields[key] !== currentFields[key] || currentSources[key] !== 'user');
@@ -168,7 +189,7 @@ export default function TicketEditor({ item, busy, runMutation, runReconciliatio
       setError(current ? '已核对保存结果，草稿中尚未提交的修改仍保留。再次保存会更新同一条记录。' : '尚未找到保存记录，草稿保留，可以重试。');
     },
   });
-  return <section><h1>{editing ? '编辑票根' : '上传电影票'}</h1><p className="page-intro">保留原票照片，电影信息可以稍后补充。</p>
+  return <section ref={page} className="ticket-editor-page"><h1>{editing ? '编辑票根' : '上传电影票'}</h1><p className="page-intro">保留原票照片，电影信息可以稍后补充。</p>
     <form className="ticket-editor" onSubmit={submit}><fieldset disabled={busy}>
       <div><button type="button" className="upload-card" onClick={() => fileInput.current?.click()}>
         {displayPreview ? <img src={displayPreview} alt="原票预览" /> : <span><Camera size={36} /><strong>选择电影票照片</strong><small>JPG / PNG / WebP · 最大 12 MiB</small></span>}
@@ -184,8 +205,7 @@ export default function TicketEditor({ item, busy, runMutation, runReconciliatio
         {error && <p className="form-error" role="alert">{error}</p>}
         {deleted && <Link to="/tickets/new" className="secondary-button">返回上传页另建票根</Link>}
         {uncertain && <button type="button" className="secondary-button" onClick={reconcile}>核对保存结果，保留草稿</button>}
-        <div className="action-row"><button type="submit" className="primary-button" disabled={deleted}><Check size={20} />{busy ? '正在保存…' : '保存票根'}</button><Link to={editing ? `/tickets/${encodeURIComponent(id)}` : '/tickets'} className="secondary-button" disabled={busy}>取消</Link></div>
       </div>
-    </fieldset></form>
+    </fieldset><footer ref={actions} className="ticket-editor-actions" aria-label="票根操作"><Link to={editing ? `/tickets/${encodeURIComponent(id)}` : '/tickets'} className="secondary-button" disabled={busy}>取消</Link><button type="submit" className="primary-button" disabled={busy || deleted}><Check size={20} />{busy ? '正在保存…' : '保存票根'}</button></footer></form>
   </section>;
 }

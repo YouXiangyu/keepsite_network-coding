@@ -964,3 +964,152 @@ test('explicitly clearing a new manual field preserves its user intent while unt
   const created = api.requests.find(request => request.path === '/api/tickets' && request.method === 'POST')!;
   expect(created.body.fields).toEqual({ title: '' });
 });
+
+async function editorGeometry(page: Page) {
+  return page.evaluate(() => {
+    const bar = document.querySelector<HTMLElement>('.ticket-editor-actions')!;
+    const navigation = document.querySelector<HTMLElement>('.app-header nav')!;
+    const bounds = bar.getBoundingClientRect();
+    const nav = navigation.getBoundingClientRect();
+    const fixedNav = getComputedStyle(navigation).position === 'fixed';
+    const controls = [...bar.querySelectorAll<HTMLElement>('button, a')];
+    return {
+      top: bounds.top, bottom: bounds.bottom, height: bounds.height,
+      visible: bounds.top >= 0 && bounds.bottom <= innerHeight && bounds.left >= 0 && bounds.right <= innerWidth,
+      aboveNavigation: !fixedNav || bounds.bottom <= nav.top + 1,
+      controlsVisible: controls.length === 2 && controls.every(control => {
+        const box = control.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+        return box.top >= 0 && box.bottom <= innerHeight && box.left >= 0 && box.right <= innerWidth && !!hit && control.contains(hit);
+      }),
+      overflow: document.documentElement.scrollWidth > innerWidth,
+      scrollY,
+    };
+  });
+}
+async function expectEditorActions(page: Page) {
+  await expect(page.locator('.ticket-editor-actions')).toHaveCount(1);
+  await expect.poll(() => editorGeometry(page)).toMatchObject({ visible: true, aboveNavigation: true, controlsVisible: true, overflow: false });
+}
+
+for (const viewport of [{ width: 360, height: 800 }, { width: 390, height: 844 }, { width: 390, height: 450 }, { width: 760, height: 450 }, { width: 761, height: 450 }, { width: 768, height: 1024 }, { width: 1280, height: 800 }, { width: 1440, height: 900 }]) {
+  for (const mode of ['new', 'edit']) {
+    test(`editor action bar stays available ${mode} ${viewport.width}x${viewport.height}`, async ({ page }, info) => {
+      const api = await mockApi(page, { user: 'a' });
+      const long = imageFixture(194, 240, 1800);
+      const ticket = sampleItem('item-1'); ticket.fields.title = '基线长图电影票'; ticket.media.original = long.asset;
+      api.data.set('a', { tickets: [ticket] });
+      await page.route('**/api/media/' + long.asset.sha256, route => route.fulfill({ contentType: 'image/png', body: long.bytes }));
+      await page.setViewportSize(viewport);
+      await page.goto(mode === 'new' ? '/tickets/new' : '/tickets/item-1/edit');
+      if (mode === 'new') await page.getByLabel('选择原票照片').setInputFiles({ name: 'baseline-long.png', mimeType: 'image/png', buffer: long.bytes });
+      const image = page.getByRole('img', { name: '原票预览' });
+      await expect(image).toBeVisible();
+      await expect.poll(() => image.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth === 240)).toBe(true);
+      await expectEditorActions(page);
+      const initial = await editorGeometry(page);
+      expect(initial.scrollY).toBe(0);
+      await page.screenshot({ path: info.outputPath(`${mode}-${viewport.width}x${viewport.height}-initial.png`) });
+      for (const name of ['影院', '座位', '放映时间']) {
+        await page.getByLabel(name).evaluate(input => input.scrollIntoView({ block: 'start' }));
+        await expectEditorActions(page);
+        expect((await editorGeometry(page)).top).toBeCloseTo(initial.top, 1);
+      }
+      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+      const last = await page.getByLabel('放映时间').boundingBox();
+      expect(last!.y).toBeGreaterThanOrEqual(0);
+      expect(last!.y + last!.height).toBeLessThanOrEqual((await editorGeometry(page)).top);
+      await page.screenshot({ path: info.outputPath(`${mode}-${viewport.width}x${viewport.height}-end.png`) });
+      await info.attach('geometry', { body: JSON.stringify({ initial, end: await editorGeometry(page), last }), contentType: 'application/json' });
+      expect(api.requests.filter(request => request.method !== 'GET')).toHaveLength(0);
+    });
+  }
+}
+
+test('editor action bar preserves busy protection, one submission and cancel targets', async ({ page }, info) => {
+  const api = await mockApi(page, { user: 'a' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/tickets/new');
+  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveText('请先选择一张电影票照片。');
+  await page.getByLabel('选择原票照片').setInputFiles({ name: 'ticket.png', mimeType: 'image/png', buffer: png });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await expectEditorActions(page);
+  expect((await editorGeometry(page)).scrollY).toBe(0);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let started = false;
+  await page.route('**/api/tickets', async route => {
+    if (route.request().method() === 'POST') { started = true; await gate; }
+    await route.fallback();
+  });
+  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await expect.poll(() => started).toBe(true);
+  await expect(page.getByRole('button', { name: '正在保存…', exact: true })).toBeDisabled();
+  await expect(page.getByRole('link', { name: '取消', exact: true })).toHaveAttribute('aria-disabled', 'true');
+  await page.screenshot({ path: info.outputPath('busy.png') });
+  await page.getByRole('link', { name: '取消', exact: true }).click({ force: true });
+  await expect(page).toHaveURL(/\/tickets\/new$/);
+  await page.evaluate(() => {
+    document.querySelector<HTMLButtonElement>('.ticket-editor-actions button')!.click();
+    document.querySelector<HTMLFormElement>('.ticket-editor')!.requestSubmit();
+    document.querySelector<HTMLFormElement>('.ticket-editor')!.requestSubmit();
+  });
+  release();
+  await expect(page).toHaveURL(/\/tickets\/[^/]+$/);
+  expect(api.requests.filter(request => request.path === '/api/media' && request.method === 'POST')).toHaveLength(1);
+  expect(api.requests.filter(request => request.path === '/api/tickets' && request.method === 'POST')).toHaveLength(1);
+  expect(api.data.get('a')!.tickets).toHaveLength(2);
+  await expect(page.locator('.ticket-editor-actions')).toHaveCount(0);
+  await page.goto('/tickets/item-1/edit');
+  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveText('尚未修改电影信息或原票。');
+  await page.getByLabel('片名').fill('底栏编辑后回车保存');
+  await page.getByLabel('片名').press('Enter');
+  await expect(page).toHaveURL(/\/tickets\/item-1$/);
+  expect(api.requests.filter(request => request.path === '/api/tickets/item-1' && request.method === 'PATCH')).toHaveLength(1);
+  await page.goto('/tickets/item-1/edit');
+  await page.getByRole('link', { name: '取消', exact: true }).click();
+  await expect(page).toHaveURL(/\/tickets\/item-1$/);
+  await page.goto('/tickets/new');
+  await page.getByRole('link', { name: '取消', exact: true }).click();
+  await expect(page).toHaveURL(/\/tickets$/);
+  await expect(page.locator('.ticket-editor-actions')).toHaveCount(0);
+});
+
+test('editor action bar measures large text, navigation wrapping and error clearance across breakpoint', async ({ page }, info) => {
+  await mockApi(page, { user: 'a' });
+  await page.setViewportSize({ width: 760, height: 600 });
+  await page.goto('/tickets/item-1/edit');
+  await page.getByLabel('片名').fill('保留未保存修改');
+  const message = '测试保存失败，草稿仍保留。请检查网络后重试。';
+  await page.route('**/api/tickets/item-1', route => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: message }) }));
+  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await expect(page.getByRole('alert')).toHaveText(message);
+  await page.evaluate(() => {
+    const sizes = [...document.querySelectorAll<HTMLElement>('.ticket-editor-page *, .app-header nav *')].map(element => ({ element, size: parseFloat(getComputedStyle(element).fontSize) }));
+    for (const { element, size } of sizes) element.style.fontSize = `${size * 2}px`;
+  });
+  for (const width of [760, 761, 390]) {
+    await page.setViewportSize({ width, height: 600 });
+    await expectEditorActions(page);
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await expect.poll(async () => {
+      const bar = await editorGeometry(page);
+      const elements = await page.locator('.ticket-fields input[type="datetime-local"], .ticket-fields .form-error, .ticket-fields > .secondary-button').evaluateAll(nodes => nodes.map(node => { const rect = node.getBoundingClientRect(); return { top: rect.top, bottom: rect.bottom }; }));
+      return elements.every(rect => rect.top >= 0 && rect.bottom <= bar.top);
+    }).toBe(true);
+    await page.screenshot({ path: info.outputPath(`large-text-error-${width}.png`) });
+    await info.attach(`geometry-${width}`, { body: JSON.stringify(await editorGeometry(page)), contentType: 'application/json' });
+  }
+  await page.setViewportSize({ width: 390, height: 450 });
+  for (const target of [page.getByLabel('放映时间'), page.getByRole('alert'), page.getByRole('button', { name: '核对保存结果，保留草稿' })]) {
+    await target.evaluate(element => element.scrollIntoView({ block: 'start' }));
+    await expectEditorActions(page);
+    const box = await target.boundingBox();
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    expect(box!.y + box!.height).toBeLessThanOrEqual((await editorGeometry(page)).top);
+  }
+  await page.screenshot({ path: info.outputPath('large-text-error-390x450.png') });
+  await expect(page.getByLabel('片名')).toHaveValue('保留未保存修改');
+});
