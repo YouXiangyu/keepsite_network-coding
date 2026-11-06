@@ -453,3 +453,24 @@ export async function downloadMedia(media: MediaRef, signal: AbortSignal, observ
   assertSessionEpoch(scope);
   return read(`/api/media/${media.assetId}`, 'server');
 }
+
+const repository = 'YouXiangyu/keepsite_network-coding';
+export type AndroidRelease = { version: string; notes: string; url?: string };
+type ReleaseAsset = { name?: string; state?: string; size?: number; browser_download_url?: string };
+
+export async function latestAndroidRelease(signal: AbortSignal): Promise<AndroidRelease | null> {
+  const response = await fetch(`https://api.github.com/repos/${repository}/releases/latest`, {
+    signal, credentials: 'omit', cache: 'no-cache',
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`GitHub 返回 HTTP ${response.status}，请稍后重试。`);
+  const release = await response.json();
+  if (release.draft || release.prerelease) return null;
+  if (typeof release.tag_name !== 'string' || !release.tag_name.trim() || !Array.isArray(release.assets))
+    throw new Error('GitHub 返回的版本信息不完整。');
+  const asset = release.assets.find((item: ReleaseAsset) => item && item.state === 'uploaded' && Number(item.size) > 0
+    && typeof item.name === 'string' && /\.apk$/i.test(item.name)
+    && typeof item.browser_download_url === 'string'
+    && item.browser_download_url.startsWith(`https://github.com/${repository}/releases/download/`));
+  return { version: release.tag_name, notes: typeof release.body === 'string' ? release.body : '', url: asset?.browser_download_url };
+}

@@ -243,6 +243,7 @@ function AuthPage({ mode, session, serviceError, retry, onSignedIn }: {
           void perform(async () => { await resendCode(email.trim()); setMessage('验证码已重新发送，请检查收件箱。'); });
         }}>重新发送验证码</button>}
         <div className="auth-switch">{mode === 'login' ? <>还没有账户？<button disabled={busy} onClick={() => move('register')}>注册账户</button></> : mode === 'register' ? <>已经有账户？<button disabled={busy} onClick={() => move('login')}>登录</button></> : <button disabled={busy} onClick={() => move('login')}><ArrowLeft size={16} />返回登录</button>}</div>
+        {mode === 'login' && <a className="auth-text-button" href="/download/android">下载 Android App</a>}
         <p className="auth-footer">登录后，你的票根只在自己的账户中保存与管理。</p>
       </div>
     </section>
