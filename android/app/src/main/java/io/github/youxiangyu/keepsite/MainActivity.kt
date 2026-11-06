@@ -550,7 +550,9 @@ class MainActivity : AppCompatActivity() {
         }, Space.M)
     }
     private fun editorScreen(state: AppState) {
-        val body = scrollColumn(); val draft = state.draft ?: run { body.add(label("正在准备录入…", color = R.color.mv_muted), Space.XL); return }
+        val layout = TicketEditorLayout(this)
+        binding.content.addView(layout.root, ViewGroup.LayoutParams(-1, -1))
+        val body = layout.body; val draft = state.draft ?: run { body.add(label("正在准备录入…", color = R.color.mv_muted), Space.XL); return }
         body.add(pageTitle(if (draft.ticketId == null) "录入电影票" else "编辑电影票"), Space.S)
         body.add(label("票面为必需，其他信息可稍后填写；自动识别不会覆盖你的手动修改。", color = R.color.mv_muted), Space.S)
         editorPhoto = picture(body, "待保存的票面", top = Space.XL)
@@ -574,8 +576,9 @@ class MainActivity : AppCompatActivity() {
             iconTint = ColorStateList.valueOf(getColor(R.color.mv_muted)); minHeight = dp(Size.INPUT)
         }.also { body.add(it) }
         editorStatus = label("", Type.Caption, R.color.mv_muted).also { body.add(it, Space.XL) }
-        editorSave = action("保存电影票", ButtonKind.Primary, controller::saveDraft).also { body.add(it, Space.M) }
-        body.add(action("取消", ButtonKind.Text) { leaveDraft() }, Space.S)
+        editorSave = action("保存电影票", ButtonKind.Primary, controller::saveDraft).also {
+            layout.addActions(it, action("取消", ButtonKind.Text) { leaveDraft() })
+        }
     }
     private fun updateEditor(state: AppState) {
         val draft = state.draft ?: return
