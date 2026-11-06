@@ -1,14 +1,18 @@
 package io.github.youxiangyu.keepsite
 
+import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Rect
 import android.os.Bundle
 import android.view.Gravity
+import android.view.ContextThemeWrapper
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -28,6 +32,7 @@ class EditorLayoutHostActivity : AppCompatActivity() {
     lateinit var cancel: Button; private set
     lateinit var date: Button; private set
     lateinit var fields: List<EditText>; private set
+    lateinit var status: TextView; private set
     var saveClicks = 0; private set
     var cancelClicks = 0; private set
     private var keyboardVisible = false
@@ -41,11 +46,14 @@ class EditorLayoutHostActivity : AppCompatActivity() {
         WindowCompat.getInsetsController(window, binding.root).isAppearanceLightNavigationBars = true
         binding.brand.isVisible = false; binding.connection.isVisible = false
         binding.notice.isVisible = false; binding.progress.isVisible = false
-        listOf("票夹", "录入", "我的").forEach { text ->
+        val uiContext = if (intent.getBooleanExtra("largeText", false)) ContextThemeWrapper(
+            createConfigurationContext(Configuration(resources.configuration).apply { fontScale = 2f }), R.style.Theme_keepsite
+        ) else this
+        with(uiContext) { listOf("票夹", "录入", "我的").forEach { text ->
             binding.navigation.addView(label(text, Type.Nav).apply {
                 gravity = Gravity.CENTER; minimumHeight = dp(Size.NAV_ITEM)
             }, LinearLayout.LayoutParams(0, -2, 1f))
-        }
+        } }
         binding.content.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
             if (keyboardVisible) currentFocus?.takeIf { it is EditText }?.let { focused ->
                 focused.requestRectangleOnScreen(Rect(0, 0, focused.width, focused.height + dp(8)), true)
@@ -58,6 +66,11 @@ class EditorLayoutHostActivity : AppCompatActivity() {
             binding.navigation.isVisible = !keyboardVisible
             insets
         }
+        buildEditor(binding, uiContext)
+        binding.root.isFocusableInTouchMode = true; binding.root.requestFocus()
+    }
+
+    private fun buildEditor(binding: ActivityMainBinding, context: Context) = with(context) {
         editor = TicketEditorLayout(this)
         binding.content.addView(editor.root, ViewGroup.LayoutParams(-1, -1))
         val body = editor.body
@@ -84,10 +97,11 @@ class EditorLayoutHostActivity : AppCompatActivity() {
             setIconResource(R.drawable.ic_calendar); iconGravity = MaterialButton.ICON_GRAVITY_END
             minHeight = dp(Size.INPUT)
         }.also { body.add(it) }
-        body.add(label("本地合成预览 · 仅检查布局与系统窗口", Type.Caption, R.color.mv_muted), Space.XL)
+        val longHint = intent.getBooleanExtra("longHint", false)
+        val hint = if (longHint) "本地合成错误提示：保存未完成，草稿仍保留；检查末尾状态完整滚达操作栏上方。".repeat(2) else "本地合成预览 · 仅检查布局与系统窗口"
+        status = label(hint, Type.Caption, if (longHint) R.color.mv_error else R.color.mv_muted).also { body.add(it, Space.XL) }
         save = action("保存电影票", ButtonKind.Primary) { saveClicks++ }
         cancel = action("取消", ButtonKind.Text) { cancelClicks++ }
         editor.addActions(save, cancel)
-        binding.root.isFocusableInTouchMode = true; binding.root.requestFocus()
     }
 }
