@@ -9,8 +9,8 @@ import { verifyMediaBlob } from '../../mediaCache';
 import { sourceLabels } from './processing';
 
 export const fieldLabels: Record<FieldName, string> = { title: '片名', cinema: '影院', hall: '影厅', seat: '座位', showtime: '放映时间' };
-export default function TicketEditor({ item, busy, runMutation, runReconciliation, editId, onSaved, processingEnabled, processingUnavailableReason }: {
-  item?: Ticket; editId?: string; busy: boolean; runMutation: RunMutation; runReconciliation: RunReconciliation; onSaved: (id: string) => void; processingEnabled: boolean; processingUnavailableReason: string | null;
+export default function TicketEditor({ item, busy, runMutation, runReconciliation, editId, onSaved, processingEnabled, processingUnavailableReason, cancelTo }: {
+  item?: Ticket; editId?: string; busy: boolean; runMutation: RunMutation; runReconciliation: RunReconciliation; onSaved: (id: string) => void; processingEnabled: boolean; processingUnavailableReason: string | null; cancelTo?: string;
 }) {
   const [id] = useState(() => editId ?? item?.id ?? crypto.randomUUID());
   const [fields, setFields] = useState<TicketFields>(() => item?.fields ?? emptyFields());
@@ -184,7 +184,7 @@ export default function TicketEditor({ item, busy, runMutation, runReconciliatio
         {error && <p className="form-error" role="alert">{error}</p>}
         {deleted && <Link to="/tickets/new" className="secondary-button">返回上传页另建票根</Link>}
         {uncertain && <button type="button" className="secondary-button" onClick={reconcile}>核对保存结果，保留草稿</button>}
-        <div className="action-row"><button type="submit" className="primary-button" disabled={deleted}><Check size={20} />{busy ? '正在保存…' : '保存票根'}</button><Link to={editing ? `/tickets/${encodeURIComponent(id)}` : '/tickets'} className="secondary-button" disabled={busy}>取消</Link></div>
+        <div className="action-row"><button type="submit" className="primary-button" disabled={deleted}><Check size={20} />{busy ? '正在保存…' : '保存票根'}</button><Link to={cancelTo ?? (editing ? `/tickets/${encodeURIComponent(id)}` : '/tickets')} className="secondary-button" disabled={busy}>取消</Link></div>
       </div>
     </fieldset></form>
   </section>;
