@@ -1,5 +1,13 @@
 # keepsite 项目运行信息
 
+## 2026-11-06 自动发布修复准备
+
+用户明确选择恢复 GitHub Actions 构建、EC2 从私有 S3 拉取的既定流程。北京时间22:25起现场核对：远端main为 `a65fba4d7e577635431c680fa83ba0fd99f0f835`，Backend、Frontend、Android、deployment-recovery检查成功；发布任务因旧仓库名称门禁而skipped。准确实例 `i-0e9ba9bc6f4b1c019` 为running，两项状态检查ok，公网IP为固定EIP `13.230.217.247`。current及实际MainPID cwd仍为32b4e03，服务健康；自动拉取timer enabled/active，两个自动关机timer disabled/inactive。
+
+本次先用准确main的独立工作树完成手工候选准备，尚未激活；制品SHA256为 `3f34940257d68d28466c3b0f2fe3a52cf099bc4a2d4c63fb1ea94f39379cedec`，11420672bytes。用户选择自动流程后停止手工切换。业务及认证SQLite在线备份位于 `/opt/keepsite/predeploy-backups/main-a65fba4-20261106T143037Z`，root-only；两库integrity及外键检查通过。该候选和备份保留，不将其视为GitHub制品已发布或EC2已更新。
+
+修复将GitHub当前名称/API与v1 manifest固定标识分开，并按稳定repository ID限制工作流；不修改已安装reader、S3前缀或IAM。AWS实时信任仍为原immutable subject；连接器不支持OIDC设置查询，通过本机Git凭据查询的替代方案被自动审批拒绝且未执行。实际OIDC交换、S3新制品发布、EC2自动激活及最终运行提交，须在修复获授权合并后现场验收；本节不宣称链路已恢复。
+
 ## 2026-11-05 现状核验（只读）
 
 北京时间19:05至19:06，通过既有可信SSH核对准确实例 `i-0e9ba9bc6f4b1c019`，当前发布链接及实际MainPID工作目录均为 `/opt/keepsite/releases/32b4e0326ad6bdb1c0603049491b9a753e71ae81`。`keepsite.service` 为active/running、NRestarts=0；内部及公网 `/api/health` 均返回HTTP 200和status=ok，公网首页HTTPS 200。

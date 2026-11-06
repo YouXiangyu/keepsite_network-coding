@@ -168,7 +168,8 @@ def test_unknown_activation_interruption_blocks_further_automatic_deployments(ho
     assert host.s3.calls == []
 
 
-@pytest.mark.parametrize('change', [{'commit': '../escape'}, {'key': 'media/private'}, {'size': True}, {'version': True}, {'unexpected': 1}])
+@pytest.mark.parametrize('change', [{'commit': '../escape'}, {'key': 'media/private'}, {'size': True}, {'version': True}, {'unexpected': 1},
+                                  {'repository': 'YouXiangyu/keepsite_network-coding'}])
 def test_manifest_rejects_path_escape_wrong_prefix_or_schema(change):
     with pytest.raises(ValueError):
         decode(json.dumps({**CANDIDATE, **change}).encode())
@@ -185,6 +186,7 @@ def test_publisher_reuses_same_commit_identity_and_never_publishes_unchecked_hea
     s3 = S3({})
     monkeypatch.setattr(publisher, 'ready', lambda *args: True)
     assert publisher.publish(s3, worker.BUCKET, B, archive, 'synthetic') ['published'] is True
+    assert decode(s3.objects[LATEST_KEY])['repository'] == 'YouXiangyu/network-coding'
     archive.write_bytes(b'another build must not replace this commit')
     assert publisher.publish(s3, worker.BUCKET, B, archive, 'synthetic')['sha256'] == CANDIDATE['sha256']
     assert s3.puts.count(CANDIDATE['key']) == 1
@@ -291,13 +293,43 @@ def test_service_runs_root_owned_admin_runtime_and_keeps_shutdown_policy_indepen
     assert 'keepsite-auto-stop' not in service + timer
 
 
+def test_publisher_uses_current_github_repository_without_changing_manifest_identity(monkeypatch):
+    requests = []
+    def open_request(request, **kwargs):
+        requests.append(request)
+        return io.BytesIO(b'{}')
+    monkeypatch.setattr(publisher, 'urlopen', open_request)
+    assert publisher.github('/git/ref/heads/main', 'synthetic') == {}
+    assert requests[0].full_url == 'https://api.github.com/repos/YouXiangyu/keepsite_network-coding/git/ref/heads/main'
+    assert CANDIDATE['repository'] == 'YouXiangyu/network-coding'
+
+
+@pytest.mark.parametrize('repository,repository_id', [
+    ('Other/repository', publisher.GITHUB_REPOSITORY_ID),
+    ('YouXiangyu/network-coding', publisher.GITHUB_REPOSITORY_ID),
+    (publisher.GITHUB_REPOSITORY, '1'),
+    (publisher.GITHUB_REPOSITORY, None),
+])
+def test_publisher_rejects_wrong_or_missing_repository_identity_before_any_release_work(monkeypatch, repository, repository_id):
+    monkeypatch.setenv('GITHUB_REPOSITORY', repository)
+    if repository_id is None:
+        monkeypatch.delenv('GITHUB_REPOSITORY_ID', raising=False)
+    else:
+        monkeypatch.setenv('GITHUB_REPOSITORY_ID', repository_id)
+    monkeypatch.setattr(sys, 'argv', ['publish', '--commit', B, '--bucket', 'synthetic'])
+    monkeypatch.setattr(publisher, 'ready', lambda *args: pytest.fail('Untrusted identity reached release checks'))
+    with pytest.raises(SystemExit, match='Trusted repository and exact commit required'):
+        publisher.main()
+
+
 def test_publisher_closes_sdk_client_without_requiring_context_manager(tmp_path, monkeypatch, capsys):
     class Client:
         closed = False
         def close(self):
             self.closed = True
     client = Client()
-    monkeypatch.setenv('GITHUB_REPOSITORY', publisher.REPOSITORY)
+    monkeypatch.setenv('GITHUB_REPOSITORY', publisher.GITHUB_REPOSITORY)
+    monkeypatch.setenv('GITHUB_REPOSITORY_ID', publisher.GITHUB_REPOSITORY_ID)
     monkeypatch.setenv('GITHUB_TOKEN', 'synthetic')
     monkeypatch.setattr(sys, 'argv', ['publish', '--commit', B, '--bucket', 'synthetic'])
     monkeypatch.setattr(publisher, 'ready', lambda *args: True)

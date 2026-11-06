@@ -2,6 +2,8 @@
 import json
 import re
 
+# Fixed v1 wire identity, also enforced by the installed EC2 reader.
+# GitHub API routing and workflow identity are separate from this protocol field.
 REPOSITORY = 'YouXiangyu/network-coding'
 PREFIX = 'deploy/keepsite/'
 LATEST_KEY = PREFIX + 'latest.json'

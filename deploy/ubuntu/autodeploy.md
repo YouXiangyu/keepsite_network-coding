@@ -2,6 +2,8 @@
 
 GitHub Actions 负责测试和同源前端构建，EC2 不安装 Node/npm。仅本仓库 main 的 push 可发布；发布任务依赖 Backend、Frontend、Android，并核对准确 SHA、main push 对应的工作流路径、GitHub Actions App/check suite 和 Deployment recovery 成功。main 已推进或检查未成功时不更新候选。PR 不取得生产写入身份，不自动合并 PR，也不为发布自动开机。
 
+当前 GitHub 仓库为 `YouXiangyu/keepsite_network-coding`，稳定 repository ID 为 `1423372245`。工作流按该 ID 限定发布，publisher 同时核对当前名称和 ID，并请求当前仓库 API。v1 manifest 的 `repository=YouXiangyu/network-coding` 是已安装 EC2 reader 使用的固定协议标识，不能随仓库显示名称修改；这不是另一套代码或兼容地址回退。OIDC 信任另按实际 token 核验，不能仅凭改名替换其中的 immutable subject。
+
 私有 S3 桶使用独立 `deploy/keepsite/` 前缀，保持 HTTPS、AES256、阻止公开访问和禁用 ACL。GitHub 通过 OIDC 获取短期角色，EC2 实例角色只读该前缀，不写静态 AWS 密钥。实际仓库采用 immutable subject：`repo:YouXiangyu@148185441/network-coding@1423372245:ref:refs/heads/main`。制品写入权限等同生产代码发布权限，不能授予媒体接口。
 
 每个 commit 的 manifest 只创建一次，重复构建复用第一次已核对的 tar，避免同 SHA 不同制品冲突。先保存 tar 与 commit manifest，再核对 main/检查并更新 latest。读取方严格校验 schema、commit、SHA-256、大小和固定前缀，拒绝任意 URL、命令或外部路径。

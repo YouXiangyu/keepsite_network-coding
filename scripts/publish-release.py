@@ -16,13 +16,15 @@ import boto3
 from botocore.config import Config
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'deploy/ubuntu'))
-from release_manifest import LATEST_KEY, MAX_ARCHIVE, PREFIX, REPOSITORY, SHA, decode, encode, manifest
+from release_manifest import LATEST_KEY, MAX_ARCHIVE, PREFIX, SHA, decode, encode, manifest
 
+GITHUB_REPOSITORY = 'YouXiangyu/keepsite_network-coding'
+GITHUB_REPOSITORY_ID = '1423372245'
 REQUIRED = {'Backend tests', 'Frontend tests', 'Android tests', 'deployment-recovery'}
 
 
 def github(path, token):
-    request = Request('https://api.github.com/repos/' + REPOSITORY + path,
+    request = Request('https://api.github.com/repos/' + GITHUB_REPOSITORY + path,
                       headers={'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json',
                                'X-GitHub-Api-Version': '2026-03-10'})
     with urlopen(request, timeout=15) as response:
@@ -121,7 +123,9 @@ def main():
     parser.add_argument('--region', default='ap-northeast-1')
     parser.add_argument('--wait-seconds', type=int, default=0)
     args = parser.parse_args()
-    if SHA.fullmatch(args.commit) is None or os.environ.get('GITHUB_REPOSITORY') != REPOSITORY:
+    if (SHA.fullmatch(args.commit) is None
+            or os.environ.get('GITHUB_REPOSITORY') != GITHUB_REPOSITORY
+            or os.environ.get('GITHUB_REPOSITORY_ID') != GITHUB_REPOSITORY_ID):
         raise SystemExit('Trusted repository and exact commit required')
     token = os.environ['GITHUB_TOKEN']
     deadline = time.monotonic() + min(max(args.wait_seconds, 0), 600)
