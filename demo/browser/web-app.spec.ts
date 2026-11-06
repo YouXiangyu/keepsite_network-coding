@@ -143,11 +143,36 @@ async function login(page: Page, email = 'a@example.test') { await page.getByLab
 test.describe('monthly review', () => {
   test.use({ timezoneId: 'Asia/Macau' });
 
-  test('responsive mine, complete history and month pages keep all months accessible', async ({ page }, info) => {
+  async function prepareMonthlyLibrary(page: Page) {
     const api = await mockApi(page, { user: 'a' });
     const tickets = monthlyTickets();
     tickets.forEach((ticket, index) => { const fixture = imageFixture(index * 7000, 60, 80); ticket.media.original = fixture.asset; api.mediaBytes.set(fixture.asset.assetId, fixture.bytes); });
     api.data.set('a', { tickets });
+  }
+
+  for (const width of [360, 390, 768, 1280, 1440]) test(`responsive monthly pages at ${width}px`, async ({ page }, info) => {
+    await prepareMonthlyLibrary(page);
+    await page.setViewportSize({ width, height: 900 });
+    const geometry = [];
+    for (const [route, title] of [['/mine', '我的'], ['/months', '全部月份'], ['/months/2026-01', '2026年1月']]) {
+      await page.goto(route);
+      await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
+      const bounds = await page.evaluate(() => ({ width: innerWidth, scrollWidth: document.documentElement.scrollWidth,
+        outside: [...document.querySelectorAll('body *')].map(node => ({ node: node.tagName, class: node.className, x: node.getBoundingClientRect().x, right: node.getBoundingClientRect().right }))
+          .filter(box => box.right > innerWidth + 1 && box.x < innerWidth).slice(0, 16) }));
+      if (bounds.scrollWidth > bounds.width) await page.screenshot({ path: info.outputPath(`overflow-${width}.png`), fullPage: true });
+      expect(bounds.scrollWidth, JSON.stringify({ route, ...bounds })).toBeLessThanOrEqual(bounds.width);
+      if (width === 390 || width === 768 || width === 1440) {
+        await expect(page.locator('.ticket-image img').first()).toBeVisible();
+        await page.screenshot({ path: info.outputPath(`${route.replaceAll('/', '-')}-${width}.png`), fullPage: true });
+      }
+      geometry.push({ route, width, ...await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, title: document.title })) });
+    }
+    await info.attach('responsive-geometry', { body: JSON.stringify(geometry, null, 2), contentType: 'application/json' });
+  });
+
+  test('account summary and complete history keep all months accessible', async ({ page }) => {
+    await prepareMonthlyLibrary(page);
     await page.goto('/tickets');
     await page.getByRole('navigation').getByRole('link', { name: '我的', exact: true }).click();
     await expect(page.getByRole('heading', { name: '我的', exact: true })).toBeVisible();
@@ -157,26 +182,7 @@ test.describe('monthly review', () => {
     await expect(page.locator('.month-card')).toHaveCount(6);
     await expect(page.locator('.month-card h3').first()).toHaveText('2026年7月');
     await expect(page.locator('.month-card a button,.recent-tickets a button')).toHaveCount(0);
-    const geometry = [];
-    for (const width of [360, 390, 768, 1280, 1440]) {
-      await page.setViewportSize({ width, height: 900 });
-      for (const [route, title] of [['/mine', '我的'], ['/months', '全部月份'], ['/months/2026-01', '2026年1月']]) {
-        await page.goto(route);
-        await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
-        const bounds = await page.evaluate(() => ({ width: innerWidth, scrollWidth: document.documentElement.scrollWidth,
-          outside: [...document.querySelectorAll('body *')].map(node => ({ node: node.tagName, class: node.className, x: node.getBoundingClientRect().x, right: node.getBoundingClientRect().right }))
-            .filter(box => box.right > innerWidth + 1 && box.x < innerWidth).slice(0, 16) }));
-        if (bounds.scrollWidth > bounds.width) await page.screenshot({ path: info.outputPath(`overflow-${width}.png`), fullPage: true });
-        expect(bounds.scrollWidth, JSON.stringify({ route, ...bounds })).toBeLessThanOrEqual(bounds.width);
-        if (width === 390 || width === 768 || width === 1440) {
-          await expect(page.locator('.ticket-image img').first()).toBeVisible();
-          await page.screenshot({ path: info.outputPath(`${route.replaceAll('/', '-')}-${width}.png`), fullPage: true });
-        }
-        geometry.push({ route, width, ...await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, title: document.title })) });
-      }
-    }
-    await info.attach('responsive-geometry', { body: JSON.stringify(geometry, null, 2), contentType: 'application/json' });
-    await page.goto('/mine'); await page.getByRole('link', { name: '查看全部月份' }).click();
+    await page.getByRole('link', { name: '查看全部月份' }).click();
     await expect(page.locator('.month-card')).toHaveCount(7);
     await page.locator('.month-card').filter({ hasText: '2026年1月' }).click();
     await expect(page.locator('.ticket-card')).toHaveCount(2);
