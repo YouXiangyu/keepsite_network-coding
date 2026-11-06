@@ -965,6 +965,25 @@ test('explicitly clearing a new manual field preserves its user intent while unt
   expect(created.body.fields).toEqual({ title: '' });
 });
 
+async function editorWidthDiagnostics(page: Page) {
+  return page.evaluate(() => {
+    const selectors = ['.ticket-editor-page', '.ticket-editor > fieldset', '.ticket-fields', 'input[type="datetime-local"]', '.ticket-editor-actions'];
+    const snapshot = (element: HTMLElement) => {
+      const box = element.getBoundingClientRect(), style = getComputedStyle(element);
+      return { tag: element.tagName, class: element.className, type: element.getAttribute('type'), x: box.x, right: box.right, width: box.width,
+        clientWidth: element.clientWidth, scrollWidth: element.scrollWidth, minWidth: style.minWidth, gridColumns: style.gridTemplateColumns,
+        fontFamily: style.fontFamily, fontSize: style.fontSize, letterSpacing: style.letterSpacing };
+    };
+    return { innerWidth, clientWidth: document.documentElement.clientWidth, scrollWidth: document.documentElement.scrollWidth,
+      nodes: selectors.flatMap(selector => { const element = document.querySelector<HTMLElement>(selector); return element ? [{ selector, ...snapshot(element) }] : []; }),
+      overflowNodes: [...document.querySelectorAll<HTMLElement>('.ticket-editor-page *')].filter(element => element.getBoundingClientRect().right > innerWidth + 1).slice(0, 12).map(snapshot) };
+  });
+}
+test.afterEach(async ({ page }, info) => {
+  if (info.status === info.expectedStatus || page.isClosed()) return;
+  if (await page.locator('.ticket-editor').count()) await info.attach('editor-width-diagnostics', { body: JSON.stringify(await editorWidthDiagnostics(page)), contentType: 'application/json' });
+});
+
 async function editorGeometry(page: Page) {
   return page.evaluate(() => {
     const bar = document.querySelector<HTMLElement>('.ticket-editor-actions')!;
@@ -1273,3 +1292,27 @@ for (const mode of ['new', 'edit']) {
     expect(errors).toEqual([]);
   });
 }
+
+test('native date intrinsic-width pressure stays inside the editor column', async ({ page }, info) => {
+  await mockApi(page, { user: 'a' });
+  await page.setViewportSize({ width: 390, height: 600 });
+  await page.goto('/tickets/item-1/edit');
+  const date = page.getByLabel('放映时间');
+  const original = await date.inputValue();
+  // Synthetic font pressure protects platform variation; it is not a Linux replay.
+  await date.evaluate(input => { input.style.fontFamily = 'monospace'; input.style.fontSize = '30px'; input.style.letterSpacing = '2px'; });
+  for (const width of [390, 360, 760, 761]) {
+    await page.setViewportSize({ width, height: 600 });
+    await expect.poll(() => page.evaluate(() => {
+      const fieldset = document.querySelector('.ticket-editor > fieldset')!.getBoundingClientRect();
+      const fields = document.querySelector('.ticket-fields')!.getBoundingClientRect();
+      return document.documentElement.scrollWidth <= innerWidth && fields.left >= fieldset.left - 1 && fields.right <= fieldset.right + 1 &&
+        [...document.querySelectorAll('.ticket-fields input')].every(input => { const rect = input.getBoundingClientRect(); return rect.left >= fields.left - 1 && rect.right <= fields.right + 1; });
+    })).toBe(true);
+    await date.focus(); await expect(date).toBeFocused();
+    await expect(date).toHaveAttribute('type', 'datetime-local');
+    await expect(date).toHaveValue(original);
+    await info.attach(`native-date-pressure-${width}`, { body: JSON.stringify(await editorWidthDiagnostics(page)), contentType: 'application/json' });
+    if (width === 390) await page.screenshot({ path: info.outputPath('native-date-pressure-390.png') });
+  }
+});

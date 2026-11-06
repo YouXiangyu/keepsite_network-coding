@@ -61,7 +61,7 @@ h1 { font-size: clamp(28px, 4vw, 40px); font-weight: 600; line-height: 1.25; let
 .upload-card img { width: 100%; height: 100%; object-fit: contain; }
 .upload-card > span { display: grid; justify-items: center; gap: 16px; color: #53594f; }
 .upload-card small { font-size: 13px; }
-.ticket-fields { display: flex; flex-direction: column; gap: 18px; }
+.ticket-fields { min-width: 0; display: flex; flex-direction: column; gap: 18px; }
 .ticket-fields label { display: block; font-size: 15px; font-weight: 550; }
 .ticket-fields label small { font-weight: 400; color: var(--muted); margin-left: 8px; }
 .ticket-fields input { display: block; width: 100%; min-width: 0; min-height: 48px; margin-top: 8px; padding: 11px 12px; border: 1px solid #b7bcb2; border-radius: 7px; background: #fff; color: var(--ink); }
