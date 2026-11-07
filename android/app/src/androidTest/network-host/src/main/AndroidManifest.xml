@@ -1,0 +1,10 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+    <!-- Deliberately no INTERNET permission and no production entry activity. -->
+    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
+    <application android:label="Keepsite isolated network verification" android:allowBackup="false" android:theme="@style/Theme.keepsite">
+        <activity android:name=".networkfixture.NetworkHostActivity" android:exported="false" />
+        <provider android:name=".networkfixture.NetworkDocuments" android:authorities="io.github.youxiangyu.keepsite.networkverification.documents" android:exported="true" android:grantUriPermissions="true" android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter><action android:name="android.content.action.DOCUMENTS_PROVIDER" /></intent-filter>
+        </provider>
+    </application>
+</manifest>
