@@ -9,7 +9,7 @@ import java.security.MessageDigest
 import java.util.concurrent.CancellationException
 
 /** Operates only inside the caller's update directory; never the media or account cache. */
-class UpdateFiles(directory: File) {
+class UpdateFiles(directory: File, private val isProtected: (File) -> Boolean = { false }) {
     private val directory = directory.canonicalFile
 
     fun candidateFile(candidate: UpdatePolicy.Candidate): File {
@@ -23,6 +23,7 @@ class UpdateFiles(directory: File) {
         for (path in listOf(target, File(directory, target.name + ".part"))) {
             val file = path.canonicalFile
             require(file.parentFile == directory) { "不能清理更新目录外的文件。" }
+            if (path == target && isProtected(file)) continue
             if (file.exists()) require(file.isFile && file.delete()) { "旧安装包暂时无法清理。" }
         }
     }
@@ -34,6 +35,7 @@ class UpdateFiles(directory: File) {
         val target = candidateFile(candidate)
         val part = File(directory, target.name + ".part")
         require(target.canonicalFile.parentFile == directory && part.canonicalFile.parentFile == directory)
+        if (isProtected(target.canonicalFile)) { verify(target, candidate, cancelled); return target }
         try {
             val digest = MessageDigest.getInstance("SHA-256")
             var count = 0L
