@@ -104,4 +104,14 @@ interface AppController : Closeable {
     fun clearCache()
     fun setPeerEnabled(enabled: Boolean)
     fun loadMedia(media: MediaRef, listener: (MediaLoad) -> Unit): Closeable
+    fun openNetworkPage(): NetworkPageOwner?
+    fun networkSnapshot(owner: NetworkPageOwner): NativeNetworkState?
+    fun networkDeviceNames(owner: NetworkPageOwner): List<String>
+    fun setNetworkDetailed(owner: NetworkPageOwner, enabled: Boolean)
+    fun pauseNetworkHistory(owner: NetworkPageOwner, paused: Boolean)
+    fun clearNetworkHistory(owner: NetworkPageOwner)
+    fun refreshServerTrace(owner: NetworkPageOwner, clearing: Boolean = false)
+    fun prepareNetworkReport(owner: NetworkPageOwner): NetworkReport?
+    fun renderNetworkReport(report: NetworkReport, format: NetworkReportFormat, callback: (String?) -> Unit): Closeable
+    fun saveNetworkReport(report: NetworkReport, format: NetworkReportFormat, uri: Uri, callback: (Boolean) -> Unit): Closeable
 }

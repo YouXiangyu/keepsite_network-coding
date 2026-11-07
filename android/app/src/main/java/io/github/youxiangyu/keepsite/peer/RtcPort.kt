@@ -1,6 +1,7 @@
 package io.github.youxiangyu.keepsite.peer
 
 import java.io.Closeable
+import io.github.youxiangyu.keepsite.core.MonitorRtcState
 
 /** The adapter copies native callback buffers before delivering them to this boundary. */
 internal interface RtcChannel : Closeable {
@@ -25,11 +26,12 @@ internal interface RtcPeer : Closeable {
     fun createLocal(type: String, result: (Result<RtcDescription>) -> Unit)
     fun setRemote(description: RtcDescription, result: (Boolean) -> Unit)
     fun addIce(ice: RtcIce?)
-    fun route(result: (String) -> Unit)
+    fun stats(result: (RtcSample) -> Unit)
     interface Listener {
         fun ice(ice: RtcIce?)
         fun channel(channel: RtcChannel)
         fun failed()
+        fun state(ice: MonitorRtcState? = null, pc: MonitorRtcState? = null) = Unit
     }
 }
 

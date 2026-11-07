@@ -9,3 +9,7 @@
 
 # Preserve the fixed upstream license notice byte-for-byte, including its whitespace.
 android/app/src/main/assets/licenses/WEBRTC-THIRD-PARTY-NOTICES.md -whitespace
+
+# Preserve the shared isolated trace sample's recorded SHA-256 on every platform.
+demo/tests/fixtures/server-trace.json -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+android/app/src/test/resources/diagnostics/server-r3-isolated-trace.json -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

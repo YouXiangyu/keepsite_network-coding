@@ -5,7 +5,7 @@ const hook = registerHooks({ resolve(specifier, context, nextResolve) {
   if (context.parentURL?.includes('/src/') && specifier.startsWith('.') && !specifier.endsWith('.ts')) return { url: new URL(specifier + '.ts', context.parentURL).href, shortCircuit: true };
   return nextResolve(specifier, context);
 } });
-const { frameSize, encodeChunk, decodeChunk, waitForBuffer, receiveFile, sendFile, selectedRoute, mergeRoute, FRAME_LIMIT, BUFFER_HIGH } = await import('../src/media/dataChannel.ts'); hook.deregister();
+const { frameSize, encodeChunk, decodeChunk, waitForBuffer, receiveFile, sendFile, selectedRoute, selectedConnectionSample, mergeRoute, FRAME_LIMIT, BUFFER_HIGH } = await import('../src/media/dataChannel.ts'); hook.deregister();
 class Channel extends EventTarget {
   readyState = 'open'; bufferedAmount = 0; bufferedAmountLowThreshold = 0; binaryType = 'arraybuffer'; frames = []; other;
   send(data) { this.frames.push(data); queueMicrotask(() => this.other?.dispatchEvent(new MessageEvent('message', { data }))); }
@@ -45,6 +45,19 @@ test('a retained contiguous prefix resumes once without resending that prefix', 
   assert.equal(source.frames.filter(frame => frame instanceof ArrayBuffer).reduce((sum, frame) => sum + frame.byteLength - 8, 0), bytes.length - prefixSize);
 });
 
+test('progress projection reports validated contiguous frames, requested prefix and valid ACKs while observer faults preserve delivery', async () => {
+  const [source, target] = pair(), data = new Uint8Array(48000).fill(9), media = asset(data.length), prefixSize = 16376;
+  const sent = [], received = [], sender = { ...options(), position(offset, prefix) { sent.push([offset, prefix]); throw Error('observation only'); } }, receiver = { ...options(), position(offset, prefix) { received.push([offset, prefix]); } };
+  const sending = sendFile(source, media, new Blob([data]), () => FRAME_LIMIT, sender);
+  const receiving = receiveFile(target, media, FRAME_LIMIT, { chunks: [data.slice(0, prefixSize).buffer], offset: prefixSize }, async blob => assert.equal(blob.size, data.length), receiver);
+  await Promise.all([sending, receiving]);
+  assert.deepEqual(sent[0], [prefixSize, prefixSize]); assert.deepEqual(received[0], [prefixSize, prefixSize]);
+  assert.equal(sent.at(-1)[0], media.size); assert.equal(received.at(-1)[0], media.size); assert.ok(sent.every(([offset]) => offset >= prefixSize && offset <= media.size));
+  const invalid = new Channel(), positions = [];
+  const failed = receiveFile(invalid, asset(10), FRAME_LIMIT, { chunks: [], offset: 0 }, async () => assert.fail(), { ...options(), position(offset) { positions.push(offset); } });
+  invalid.dispatchEvent(new MessageEvent('message', { data: encodeChunk(3, new Uint8Array([1, 2]).buffer) })); await assert.rejects(failed, /位置或长度/); assert.deepEqual(positions, [0]);
+});
+
 test('backpressure subscribes before rechecking and cancellation releases a blocked sender', async () => {
   const channel = new Channel(); channel.bufferedAmount = BUFFER_HIGH + 1;
   const original = channel.addEventListener.bind(channel);
@@ -69,9 +82,9 @@ test('out-of-order bytes are counted as discarded and cannot finish a transfer',
 });
 
 test('route classification uses the selected pair and never infers a route from configuration', async () => {
-  const stats = new Map([['transport', { type: 'transport', selectedCandidatePairId: 'pair' }], ['pair', { localCandidateId: 'local', remoteCandidateId: 'remote' }], ['local', { candidateType: 'host' }], ['remote', { candidateType: 'srflx' }]]);
+  const stats = new Map([['transport', { type: 'transport', selectedCandidatePairId: 'pair' }], ['pair', { type: 'candidate-pair', state: 'succeeded', localCandidateId: 'local', remoteCandidateId: 'remote' }], ['local', { type: 'local-candidate', candidateType: 'host' }], ['remote', { type: 'remote-candidate', candidateType: 'srflx' }]]);
   assert.equal(await selectedRoute({ getStats: async () => stats }), 'direct');
-  stats.set('remote', { candidateType: 'relay' }); assert.equal(await selectedRoute({ getStats: async () => stats }), 'relay');
+  stats.set('remote', { type: 'remote-candidate', candidateType: 'relay' }); assert.equal(await selectedRoute({ getStats: async () => stats }), 'relay');
   stats.delete('remote'); assert.equal(await selectedRoute({ getStats: async () => stats }), 'unknown');
 });
 
@@ -80,4 +93,47 @@ test('missing route statistics do not become evidence of a path change and a can
   assert.equal(mergeRoute('direct', 'relay'), 'mixed'); assert.equal(mergeRoute('mixed', 'direct'), 'mixed');
   const controller = new AbortController(); const pending = selectedRoute({ getStats: () => new Promise(() => {}) }, controller.signal);
   controller.abort(); assert.equal(await pending, 'unknown');
+});
+
+function selectedStats() {
+  return new Map([
+    ['transport', { type: 'transport', selectedCandidatePairId: 'pair', dtlsState: 'connected' }],
+    ['pair', { type: 'candidate-pair', state: 'succeeded', localCandidateId: 'local', remoteCandidateId: 'remote', currentRoundTripTime: 0.025 }],
+    ['local', { type: 'local-candidate', candidateType: 'host', address: '192.0.2.1' }],
+    ['remote', { type: 'remote-candidate', candidateType: 'srflx', address: 'private.example.test' }],
+    ['channel', { type: 'data-channel', dataChannelIdentifier: 7, label: 'private-label', bytesSent: 123, bytesReceived: 456 }],
+    ['other', { type: 'data-channel', dataChannelIdentifier: 9, bytesSent: 999999, bytesReceived: 999999 }],
+  ]);
+}
+test('one real selected-pair sample extracts only valid route, RTT milliseconds, DTLS and the matching channel counters', async () => {
+  const stats = selectedStats(); let calls = 0;
+  const result = await selectedConnectionSample({ getStats: async () => { calls++; return stats; } }, { id: 7, label: 'private-label' });
+  assert.equal(calls, 1); assert.deepEqual(result, { route: 'direct', localType: 'host', remoteType: 'srflx', dtlsState: 'connected', roundTripMs: 25, channelBytesSent: 123, channelBytesReceived: 456 });
+  assert.doesNotMatch(JSON.stringify(result), /192\.0\.2|example|private|999999|pair|transport/);
+});
+
+test('arbitrary candidate strings, missing candidates or ambiguous transports never manufacture a known path', async () => {
+  const stats = selectedStats(); stats.get('local').candidateType = 'private secret host';
+  assert.equal((await selectedConnectionSample({ getStats: async () => stats })).route, 'unknown');
+  stats.get('local').candidateType = 'relay'; stats.delete('remote');
+  assert.equal((await selectedConnectionSample({ getStats: async () => stats })).route, 'unknown');
+  const ambiguous = selectedStats(); ambiguous.set('second', { type: 'transport', selectedCandidatePairId: 'unrelated', dtlsState: 'connected' });
+  const result = await selectedConnectionSample({ getStats: async () => ambiguous }); assert.equal(result.route, 'unknown'); assert.equal(result.roundTripMs, null); assert.equal(result.dtlsState, null);
+  const failed = selectedStats(); failed.get('pair').state = 'failed'; assert.equal((await selectedConnectionSample({ getStats: async () => failed })).route, 'unknown');
+});
+
+test('nonfinite RTT or channel bytes and ambiguous channel matches stay unknown', async () => {
+  const stats = selectedStats(); stats.get('pair').currentRoundTripTime = -1; stats.get('channel').bytesSent = Infinity; stats.get('channel').bytesReceived = 1.5;
+  const result = await selectedConnectionSample({ getStats: async () => stats }, { id: 7 });
+  assert.equal(result.roundTripMs, null); assert.equal(result.channelBytesSent, null); assert.equal(result.channelBytesReceived, null);
+  stats.get('other').dataChannelIdentifier = 7;
+  const ambiguous = await selectedConnectionSample({ getStats: async () => stats }, { id: 7 }); assert.equal(ambiguous.channelBytesSent, null);
+});
+
+test('a silent stats request expires once and hostile report reflection cannot break transport work', async context => {
+  context.mock.timers.enable({ apis: ['setTimeout'] }); let calls = 0;
+  const pending = selectedConnectionSample({ getStats: () => { calls++; return new Promise(() => {}); } }); context.mock.timers.tick(1001);
+  assert.equal((await pending).route, 'unknown'); assert.equal(calls, 1);
+  const hostile = new Map([['secret', new Proxy({}, { getOwnPropertyDescriptor() { throw new Error('private report'); } })]]);
+  assert.equal((await selectedConnectionSample({ getStats: async () => hostile })).route, 'unknown');
 });

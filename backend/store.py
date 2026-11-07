@@ -9,6 +9,7 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 
 from .object_storage import ObjectStore
+from .diagnostics import CURRENT, TraceHub, safe
 
 CHANGE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 CHANGE_WINDOW = 10_000
@@ -19,6 +20,8 @@ class TrackedConnection(sqlite3.Connection):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.changed_owners = {}
+        self.trace_jobs = {}
+        self.trace_events = []
 
 
 class StoreError(Exception):
@@ -67,6 +70,7 @@ class Store:
                 if not binding and db.execute("SELECT COUNT(*) FROM assets").fetchone()[0]:
                     raise RuntimeError("Storage binding is unknown for existing media: use an explicitly verified isolated restore.")
         self.root, self.storage = root.resolve(), storage
+        self.diagnostics = TraceHub()
         self.processing_enabled = False
         self.processing_unavailable_reason = "电影票处理服务尚未配置。"
         self.processing_wake = lambda: None
@@ -180,17 +184,47 @@ class Store:
     @contextmanager
     def transaction(self, write=False, *, timeout=15):
         db = self.connect(timeout=timeout)
-        changes = ()
+        changes, jobs, trace_events = (), (), ()
+        ref = CURRENT.get()
+        ref = ref if ref is not None and ref.hub is self.diagnostics and write else None
+        committed, rolled_back, started, duration, trace_started = False, False, None, 0, None
         try:
             db.execute("BEGIN IMMEDIATE" if write else "BEGIN")
             yield db
+            if ref is not None:
+                trace_started = safe(self.diagnostics.monotonic)
+                started = time.monotonic_ns()
             db.commit()
+            committed = True
+            if started is not None:
+                duration = (time.monotonic_ns() - started) / 1_000_000
             changes = tuple(db.changed_owners.items())
+            jobs = tuple(db.trace_jobs.items())
+            trace_events = tuple(db.trace_events)
         except BaseException:
+            if ref is not None:
+                trace_started = safe(self.diagnostics.monotonic)
+                started = time.monotonic_ns()
             db.rollback()
+            rolled_back = True
+            if started is not None:
+                duration = (time.monotonic_ns() - started) / 1_000_000
             raise
         finally:
             db.close()
+            if ref is not None:
+                safe(self.diagnostics.record, ref, "sql.commit" if committed else "sql.rollback",
+                     "completed" if committed or rolled_back else "failed", span_id=uuid.uuid4().hex,
+                     started=trace_started, duration_ms=duration, error_code=None if committed else "operation_failed")
+        if ref is not None:
+            for event, status, attempt in trace_events:
+                safe(self.diagnostics.record, ref, event, status, span_id=uuid.uuid4().hex, attempt=attempt)
+            for owner, cursor in changes:
+                if owner == ref.owner:
+                    safe(self.diagnostics.remember, "cursor", cursor, ref)
+            for identifier, owner in jobs:
+                if owner == ref.owner:
+                    safe(self.diagnostics.remember, "job", identifier, ref)
         if changes:
             with self._change_lock:
                 subscribers = tuple(self._change_subscribers)

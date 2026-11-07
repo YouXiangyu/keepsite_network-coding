@@ -40,7 +40,8 @@ def test_ready_subscription_precedes_watermark_and_hint_has_only_metadata():
     store.on_read = during_read
     with TestClient(app) as client, client.websocket_connect("/api/sync/events", headers=HEADERS) as ws:
         ready = ws.receive_json()
-        assert ready == {"v": 1, "type": "sync.ready", "serverId": store.server_id, "userId": "alice", "cursor": 3}
+        assert ready == {"v": 1, "type": "sync.ready", "serverId": store.server_id, "userId": "alice", "cursor": 3,
+                         "heartbeatMs": 10_000, "diagnosticsVersion": 1}
         store.on_read = None
         store.commit("alice", 4)
         while (hint := ws.receive_json())["cursor"] < 4:

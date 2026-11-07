@@ -1,6 +1,8 @@
 package io.github.youxiangyu.keepsite.peer
 
 import android.content.Context
+import io.github.youxiangyu.keepsite.core.MonitorRtcState
+import io.github.youxiangyu.keepsite.core.diagnostic
 import org.webrtc.DataChannel
 import org.webrtc.IceCandidate
 import org.webrtc.Logging
@@ -63,9 +65,17 @@ internal class AndroidRtcFactory(private val context: Context) : RtcFactory {
             native = factory.createPeerConnection(configuration, object : PeerConnection.Observer {
                 override fun onSignalingChange(state: PeerConnection.SignalingState) = Unit
                 override fun onIceConnectionChange(state: PeerConnection.IceConnectionState) {
+                    diagnostic(Unit) { listener.state(ice = when (state) { PeerConnection.IceConnectionState.NEW -> MonitorRtcState.NEW
+                        PeerConnection.IceConnectionState.CHECKING -> MonitorRtcState.CHECKING; PeerConnection.IceConnectionState.CONNECTED -> MonitorRtcState.CONNECTED
+                        PeerConnection.IceConnectionState.COMPLETED -> MonitorRtcState.COMPLETED; PeerConnection.IceConnectionState.DISCONNECTED -> MonitorRtcState.DISCONNECTED
+                        PeerConnection.IceConnectionState.FAILED -> MonitorRtcState.FAILED; PeerConnection.IceConnectionState.CLOSED -> MonitorRtcState.CLOSED }) }
                     if (state in setOf(PeerConnection.IceConnectionState.FAILED, PeerConnection.IceConnectionState.DISCONNECTED)) dispatch { listener.failed() }
                 }
                 override fun onConnectionChange(state: PeerConnection.PeerConnectionState) {
+                    diagnostic(Unit) { listener.state(pc = when (state) { PeerConnection.PeerConnectionState.NEW -> MonitorRtcState.NEW
+                        PeerConnection.PeerConnectionState.CONNECTING -> MonitorRtcState.CONNECTING; PeerConnection.PeerConnectionState.CONNECTED -> MonitorRtcState.CONNECTED
+                        PeerConnection.PeerConnectionState.DISCONNECTED -> MonitorRtcState.DISCONNECTED; PeerConnection.PeerConnectionState.FAILED -> MonitorRtcState.FAILED
+                        PeerConnection.PeerConnectionState.CLOSED -> MonitorRtcState.CLOSED }) }
                     if (state in setOf(PeerConnection.PeerConnectionState.FAILED, PeerConnection.PeerConnectionState.DISCONNECTED)) dispatch { listener.failed() }
                 }
                 override fun onIceConnectionReceivingChange(receiving: Boolean) = Unit
@@ -136,17 +146,14 @@ internal class AndroidRtcFactory(private val context: Context) : RtcFactory {
             }
         }
 
-        override fun route(result: (String) -> Unit) = synchronized(lock) {
-            if (disposed.get()) { result("unknown"); return@synchronized }
+        override fun stats(result: (RtcSample) -> Unit) = synchronized(lock) {
+            if (disposed.get()) { result(RtcSample()); return@synchronized }
             native.getStats { report ->
                 val all = report.statsMap
-                val transport = all.values.firstOrNull { it.type == "transport" && it.members["selectedCandidatePairId"] is String }
-                val pair = transport?.members?.get("selectedCandidatePairId")?.let { all[it] }
-                val local = pair?.members?.get("localCandidateId")?.let { all[it] }?.members?.get("candidateType")
-                val remote = pair?.members?.get("remoteCandidateId")?.let { all[it] }?.members?.get("candidateType")
-                val valid = setOf("host", "srflx", "prflx", "relay")
-                val route = if (local !in valid || remote !in valid) "unknown" else if (local == "relay" || remote == "relay") "relay" else "direct"
-                dispatch { result(route) }
+                val sample = diagnostic(RtcSample()) { selectedRtcSample(all.values.asSequence().filter { it.type == "transport" }.take(2).map { it.id }.toList()) { id, key ->
+                    all[id]?.let { if (key == "type") it.type else it.members[key] }
+                } }
+                if (!disposed.get()) diagnostic(Unit) { result(sample) } // Consumer only queues bounded typed work; no native disposal on this stack.
             }
         }
 

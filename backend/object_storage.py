@@ -9,8 +9,10 @@ import os
 from pathlib import Path, PurePosixPath
 import tempfile
 import time
+import uuid
 from typing import BinaryIO
 from urllib.parse import parse_qs, urlsplit
+from .diagnostics import CURRENT, elapsed, observed, safe, span
 
 
 CHUNK_SIZE = 512 * 1024
@@ -41,19 +43,40 @@ def sha_file(path: Path) -> str:
 
 
 class ObjectReader:
-    def __init__(self, body: BinaryIO, size: int):
+    def __init__(self, body: BinaryIO, size: int, *, trace_ref=None):
         self.body = body
         self.size = size
+        self.trace_ref = trace_ref
 
     def read(self, size=CHUNK_SIZE):
-        return self.body.read(size)
+        ref = self.trace_ref
+        if ref is None or not safe(ref.hub.slot, ref, 1):
+            return self.body.read(size)
+        started = safe(ref.hub.monotonic)
+        if started is None:
+            safe(ref.hub.slot, ref, -1)
+            return self.body.read(size)
+        span_id = uuid.uuid4().hex
+        safe(ref.hub.record, ref, "s3.read", "started", span_id=span_id, started=started)
+        try:
+            raw = self.body.read(size)
+        except BaseException:
+            safe(ref.hub.record, ref, "s3.read", "failed", span_id=span_id, started=started,
+                 duration_ms=elapsed(ref.hub, started), error_code="operation_failed")
+            raise
+        else:
+            safe(ref.hub.record, ref, "s3.read", "completed", span_id=span_id, started=started,
+                 duration_ms=elapsed(ref.hub, started), bytes_count=len(raw))
+            return raw
+        finally:
+            safe(ref.hub.slot, ref, -1)
 
     def close(self):
         self.body.close()
 
     def chunks(self):
         try:
-            while chunk := self.body.read(CHUNK_SIZE):
+            while chunk := self.read(CHUNK_SIZE):
                 yield chunk
         finally:
             self.close()
@@ -234,7 +257,8 @@ class S3ObjectStore(ObjectStore):
     def _matches(self, key, size, digest, content_type=None):
         from botocore.exceptions import BotoCoreError, ClientError
         try:
-            metadata = self.client.head_object(Bucket=self.bucket, Key=key, ChecksumMode="ENABLED")
+            with span("s3.head"):
+                metadata = self.client.head_object(Bucket=self.bucket, Key=key, ChecksumMode="ENABLED")
         except ClientError as error:
             if error.response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 404:
                 return False
@@ -256,12 +280,13 @@ class S3ObjectStore(ObjectStore):
         if self._matches(key, size, sha256):
             return
         try:
-            self.client.put_object(
-                Bucket=self.bucket, Key=key, Body=stream, ContentLength=size,
-                ContentType=content_type, Metadata={"sha256": sha256},
-                ChecksumSHA256=base64.b64encode(bytes.fromhex(sha256)).decode("ascii"),
-                IfNoneMatch="*", ServerSideEncryption="AES256",
-            )
+            with span("s3.put"):
+                self.client.put_object(
+                    Bucket=self.bucket, Key=key, Body=stream, ContentLength=size,
+                    ContentType=content_type, Metadata={"sha256": sha256},
+                    ChecksumSHA256=base64.b64encode(bytes.fromhex(sha256)).decode("ascii"),
+                    IfNoneMatch="*", ServerSideEncryption="AES256",
+                )
         except ClientError as error:
             if error.response.get("ResponseMetadata", {}).get("HTTPStatusCode") in (409, 412):
                 if self._matches(key, size, sha256):
@@ -270,6 +295,7 @@ class S3ObjectStore(ObjectStore):
         except (BotoCoreError, OSError) as error:
             raise StorageError("Private object upload failed") from error
 
+    @observed("s3.open")
     def open(self, key):
         from botocore.exceptions import BotoCoreError, ClientError
         try:
@@ -280,7 +306,7 @@ class S3ObjectStore(ObjectStore):
             raise StorageError("Cannot read private object") from error
         except BotoCoreError as error:
             raise StorageError("Cannot read private object") from error
-        return ObjectReader(response["Body"], response["ContentLength"])
+        return ObjectReader(response["Body"], response["ContentLength"], trace_ref=CURRENT.get())
 
 
 def configured_store(data_root: Path) -> ObjectStore:

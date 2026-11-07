@@ -4,6 +4,9 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import io.github.youxiangyu.keepsite.core.AppController
 import io.github.youxiangyu.keepsite.core.AppRepository
+import io.github.youxiangyu.keepsite.core.NetworkReport
+import io.github.youxiangyu.keepsite.core.NetworkReportFormat
+import io.github.youxiangyu.keepsite.ui.NetworkViewState
 
 class UiViewModel(application: Application) : AndroidViewModel(application) {
     val controller: AppController = AppRepository(application)
@@ -20,5 +23,8 @@ class UiViewModel(application: Application) : AndroidViewModel(application) {
     var libraryAccount: String? = null
     var libraryQuery = ""
     var libraryOldestFirst = false
+    val networkView = NetworkViewState()
+    var pendingNetworkReport: Pair<NetworkReport, NetworkReportFormat>? = null
+    var networkDocumentRequested = false
     override fun onCleared() { controller.close() }
 }
