@@ -1,6 +1,6 @@
 import { ApiError, assertSessionEpoch, errorMessage, getChanges, getSnapshotPage, openSyncEvents, sessionEpoch, type Capabilities, type ChangePage, type SnapshotPage, type SyncHint, type EventConnection } from '../api';
 import type { AppData, Ticket } from '../data';
-import type { AccountEventPort, ClientPeerMessage, EventConnectionState, PeerMessage } from '../media/peerProtocol';
+import type { AccountEventPort, ClientPeerMessage, EventConnectionState, PeerMessage, PeerSendObservation } from '../media/peerProtocol';
 import { finishPull, socketClose, socketReady, socketRetry, startPull, startSocket, startSync, stopSocket, stopSync, syncRetry, syncWatermark,
   type PullObservation, type SocketObservation, type SyncObservation } from '../network/runtime';
 
@@ -26,7 +26,7 @@ export class AccountSync implements AccountEventPort {
   private completed = 0;
   private pull: Promise<void> | null = null;
   private request: AbortController | null = null;
-  private socket: { stop: () => void; send: (message: ClientPeerMessage) => boolean; ready: boolean; retired: boolean; serverId: string; diagnosticsVersion?: 1 } | null = null;
+  private socket: { stop: () => void; send: EventConnection['send']; ready: boolean; retired: boolean; serverId: string; diagnosticsVersion?: 1 } | null = null;
   private monitoring?: SyncObservation;
   private latestSocketObservation?: SocketObservation;
   private connectionGeneration = 0;
@@ -36,7 +36,10 @@ export class AccountSync implements AccountEventPort {
     ...(this.socket?.ready && !this.socket.retired && this.socket.diagnosticsVersion === 1 ? { diagnosticsVersion: 1 as const } : {}) });
   subscribeConnection = (listener: () => void) => { this.connectionListeners.add(listener); return () => { this.connectionListeners.delete(listener); }; };
   subscribeEvents = (listener: (message: PeerMessage) => void) => { this.eventListeners.add(listener); return () => { this.eventListeners.delete(listener); }; };
-  sendEvent = (message: ClientPeerMessage) => this.eventState().connected && !!this.socket?.send(message);
+  sendEvent = (message: ClientPeerMessage, observation?: PeerSendObservation) => {
+    const state = this.eventState();
+    return state.connected && !!this.socket?.send(message, state.diagnosticsVersion === 1 ? observation : { onBytes: observation?.onBytes });
+  };
   private timer: ReturnType<typeof setTimeout> | undefined;
   private watchdog: ReturnType<typeof setTimeout> | undefined;
   private retryDelay = 1000;

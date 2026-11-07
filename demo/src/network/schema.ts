@@ -1,5 +1,5 @@
 /** Only metadata in this module is eligible for diagnostic state or export. */
-export const protocols = Object.freeze(['http', 'ws', 'sync', 'p2p', 'cache', 's3', 'sql', 'redis', 'worker'] as const);
+export const protocols = Object.freeze(['http', 'ws', 'sync', 'p2p', 'cache', 's3', 'sql', 'redis', 'worker', 'media'] as const);
 export const events = Object.freeze(['http.request', 'ws.connection', 'ws.message', 'ws.retry', 'sync.snapshot', 'sync.delta',
   'peer.registration', 'peer.discovery', 'peer.signal', 'peer.connection', 'peer.channel',
   'media.read', 'media.attempt', 'media.verify', 'media.fallback'] as const);
@@ -42,7 +42,7 @@ const peer = { state: ['unknown', 'disabled', 'unavailable', 'idle', 'registerin
   dtlsState: ['new', 'connecting', 'connected', 'closed', 'failed'], channelState: ['connecting', 'open', 'closing', 'closed'],
   localType: ['host', 'srflx', 'prflx', 'relay'], remoteType: ['host', 'srflx', 'prflx', 'relay'], route: routes,
   roundTripMs: 'number', channelBytesSent: 'integer', channelBytesReceived: 'integer', errorCode: errors } as const;
-const transfer = { state: statuses, route: routes, direction: ['send', 'receive'], bytes: 'integer', controlBytes: 'integer', discardedBytes: 'integer',
+const transfer = { state: statuses, route: routes, direction: ['send', 'receive'], bytes: 'integer', expectedBytes: 'integer', verifiedBytes: 'integer', controlBytes: 'integer', discardedBytes: 'integer',
   durationMs: 'number', speedBytesPerSecond: 'number', verified: 'boolean', errorCode: errors } as const;
 const specifications = { api, websocket, sync, peer, transfer } satisfies Record<string, Record<string, Rule>>;
 export type Card = keyof typeof specifications;
@@ -71,7 +71,7 @@ export function emptyCards(): Record<Card, Record<string, Primitive>> {
 }
 export interface Metadata {
   protocol: Protocol; event: typeof events[number]; status: Status; template?: typeof templates[number];
-  bytes?: number; controlBytes?: number; discardedBytes?: number; durationMs?: number; attempt?: number; httpStatus?: number;
+  bytes?: number; expectedBytes?: number; verifiedBytes?: number; controlBytes?: number; discardedBytes?: number; durationMs?: number; attempt?: number; httpStatus?: number;
   route?: typeof routes[number]; verified?: boolean; errorCode?: typeof errors[number];
 }
 export function sanitizeMetadata(input: unknown): Metadata | null {
@@ -83,14 +83,14 @@ export function sanitizeMetadata(input: unknown): Metadata | null {
   if (member(route, routes)) result.route = route;
   if (member(errorCode, errors)) result.errorCode = errorCode;
   if (typeof verified === 'boolean') result.verified = verified;
-  for (const key of ['bytes', 'controlBytes', 'discardedBytes', 'attempt', 'httpStatus'] as const) {
+  for (const key of ['bytes', 'expectedBytes', 'verifiedBytes', 'controlBytes', 'discardedBytes', 'attempt', 'httpStatus'] as const) {
     const value = own(input, key); if (number(value, true)) result[key] = value;
   }
   const duration = own(input, 'durationMs'); if (number(duration)) result.durationMs = duration;
   return result;
 }
 export interface DiagnosticEvent extends Metadata {
-  sequence: number; timestamp: number | null; offsetMs: number | null; origin: 'client'; operationId?: string; deviceId?: string; traceId?: string;
+  sequence: number; timestamp: number | null; offsetMs: number | null; origin: 'client'; operationId?: string; parentOperationId?: string; deviceId?: string; traceId?: string;
 }
 export function sanitizeEvent(input: unknown): DiagnosticEvent | null {
   const data = sanitizeMetadata(input), sequence = own(input, 'sequence');
@@ -99,6 +99,8 @@ export function sanitizeEvent(input: unknown): DiagnosticEvent | null {
   const result: DiagnosticEvent = { ...data, sequence, origin: 'client', timestamp: number(timestamp) ? timestamp : null, offsetMs: number(offset) ? offset : null };
   const operation = own(input, 'operationId'), device = own(input, 'deviceId'), trace = own(input, 'traceId');
   if (typeof operation === 'string' && /^op-[1-9][0-9]{0,14}$/.test(operation)) result.operationId = operation;
+  const parent = own(input, 'parentOperationId');
+  if (typeof parent === 'string' && /^op-[1-9][0-9]{0,14}$/.test(parent)) result.parentOperationId = parent;
   if (typeof device === 'string' && /^device-[1-9][0-9]{0,14}$/.test(device)) result.deviceId = device;
   if (hexId(trace)) result.traceId = trace;
   return result;

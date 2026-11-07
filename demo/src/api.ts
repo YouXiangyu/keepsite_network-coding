@@ -1,8 +1,9 @@
 import { validateData, validMedia, validTicket, type Ticket, type MediaRef } from './data';
-import { bytesOf, validPeerEnvelope, type ClientPeerMessage, type PeerMessage } from './media/peerProtocol';
+import { bytesOf, validPeerEnvelope, type ClientPeerMessage, type PeerMessage, type PeerSendObservation } from './media/peerProtocol';
 import { accountMonitoring, finishHttp, httpHeaders, requestDiagnosticHeaders, requestTemplate, socketClose, socketError, socketMessage, socketOpen,
-  startHttp, startSocket, type SocketObservation } from './network/runtime';
+  startHttp, startSocket, networkMonitor, observe as observeNetwork, type SocketObservation } from './network/runtime';
 import { identifier as diagnosticIdentifier, readDiagnosticBody } from './network/serverTrace';
+import type { OperationHandle } from './network/monitor';
 
 export const API_BASE = '';
 export interface User { id: string; email: string; name: string }
@@ -133,15 +134,15 @@ function requireSignedIn(session: AuthSession): SignedInSession {
   return session as SignedInSession;
 }
 
-interface RequestOptions extends RequestInit { authenticated?: boolean; signedMedia?: boolean; diagnosticCapture?: string }
+interface RequestOptions extends RequestInit { authenticated?: boolean; signedMedia?: boolean; diagnosticCapture?: string; diagnosticParent?: OperationHandle }
 async function request<T>(path: string, options: RequestOptions, consume: (response: Response, signal: AbortSignal) => Promise<T>): Promise<T> {
-  const { authenticated = false, signedMedia = false, diagnosticCapture, ...init } = options;
+  const { authenticated = false, signedMedia = false, diagnosticCapture, diagnosticParent, ...init } = options;
   if (signedMedia ? !validS3Url(path) : !path.startsWith('/api/') || path.includes('://')) throw new ApiError('请求地址无效。');
   if (authenticated && !activeSession) throw new ApiError('请先登录。', 401);
   const started = epoch;
   const headers = new Headers(init.headers);
   const diagnostics = path.split('?')[0] === '/api/diagnostics/events';
-  const observation = activeSession && !signedMedia && !diagnostics ? startHttp(requestTemplate(path)) : undefined;
+  const observation = activeSession && !signedMedia && !diagnostics ? startHttp(requestTemplate(path), diagnosticParent) : undefined;
   const oauth = /^\/api\/auth\/(?:google|account\/google)(?:\/|$)/.test(path.split('?')[0]);
   requestDiagnosticHeaders(headers, observation, authenticated && !!activeSession && !signedMedia && !oauth && !diagnostics);
   if (diagnostics) {
@@ -353,7 +354,7 @@ export async function mutate(path: string, method = 'POST', body?: unknown): Pro
   if (!result || typeof result.serverId !== 'string' || !result.serverId || result.operationId !== expected || !integer(result.committedCursor)) throw new ApiError('写入回执不完整，结果尚未确认。');
   return result;
 }
-export interface EventConnection { stop(): void; send(message: ClientPeerMessage): boolean }
+export interface EventConnection { stop(): void; send(message: ClientPeerMessage, observation?: PeerSendObservation): boolean }
 export function openSyncEvents(onMessage: (message: SyncHint | PeerMessage) => void, onClose: () => void, observation?: SocketObservation): EventConnection {
   const scope = epoch, user = activeSession?.user.id;
   if (!user) throw new ApiError('请先登录。', 401);
@@ -383,11 +384,26 @@ export function openSyncEvents(onMessage: (message: SyncHint | PeerMessage) => v
   socket.addEventListener('message', message); socket.addEventListener('close', end); socket.addEventListener('open', open); socket.addEventListener('error', error);
   const stop = () => { if (closed) return; closed = true; socket.removeEventListener('message', message); socket.removeEventListener('close', end); socket.removeEventListener('open', open); socket.removeEventListener('error', error); socketClose(connection); socket.close(); unsubscribe(); };
   const unsubscribe = onSessionChanged(stop);
-  return { stop, send: message => {
+  return { stop, send: (message, observation) => {
     if (!current() || socket.readyState !== WebSocket.OPEN) return false;
-    const body = JSON.stringify(message);
-    if (bytesOf(body) > (message.type === 'peer.signal' && message.kind !== 'ice' ? 65536 : 4096) || socket.bufferedAmount + bytesOf(body) > 256 * 1024) return false;
-    try { socket.send(body); return true; } catch { return false; }
+    const base: Record<string, unknown> = Object.create(null);
+    for (const key of Object.keys(message)) if (key !== 'diagnostics') base[key] = message[key];
+    let body = JSON.stringify(base), length = bytesOf(body);
+    const limit = message.type === 'peer.signal' && message.kind !== 'ice' ? 65536 : 4096;
+    if (length > limit || socket.bufferedAmount + length > 256 * 1024) return false;
+    const context = observeNetwork(() => {
+      const state = networkMonitor.snapshot().cards.websocket;
+      return connection && networkMonitor.valid(connection.scope) && state.state === 'ready' && state.diagnosticsVersion === 1
+        && observation?.operation ? networkMonitor.traceContext(observation.operation) : null;
+    });
+    if (context && diagnosticIdentifier(context.captureId) && diagnosticIdentifier(context.traceId)) {
+      observeNetwork(() => {
+        const candidate = JSON.stringify({ ...base, diagnostics: context }), size = bytesOf(candidate);
+        if (size <= limit && socket.bufferedAmount + size <= 256 * 1024) { body = candidate; length = size; }
+      });
+    }
+    try { socket.send(body); } catch { return false; }
+    observeNetwork(() => observation?.onBytes?.(length)); return true;
   } };
 }
 export async function uploadMedia(file: File, uploadId: string): Promise<MediaAsset & { uploadId: string }> {
@@ -431,9 +447,9 @@ export function validS3Url(value: string) {
   } catch { return false; }
 }
 interface DownloadAuthorization { url: string; expiresAt: number; transport: 's3' | 'server'; sha256: string; size: number; mimeType: string }
-export async function authorizeMedia(media: MediaRef, signal: AbortSignal): Promise<DownloadAuthorization> {
+export async function authorizeMedia(media: MediaRef, signal: AbortSignal, diagnosticParent?: OperationHandle): Promise<DownloadAuthorization> {
   const scope = epoch;
-  const result = await jsonRequest<DownloadAuthorization>(`/api/media/${media.assetId}/download`, { authenticated: true, signal });
+  const result = await jsonRequest<DownloadAuthorization>(`/api/media/${media.assetId}/download`, { authenticated: true, signal, diagnosticParent });
   assertSessionEpoch(scope);
   if (!result || !Number.isSafeInteger(result.expiresAt) || result.sha256 !== media.sha256 || result.size !== media.size || result.mimeType !== media.mimeType
     || (result.transport === 'server' ? result.url !== `/api/media/${media.sha256}` : result.transport !== 's3' || !validS3Url(result.url))) {
@@ -464,20 +480,20 @@ async function boundedImage(response: Response, signal: AbortSignal, media: Medi
   } finally { signal.removeEventListener('abort', abort); void reader.cancel().catch(() => {}); }
 }
 export interface MediaDownloadObservation { id: string; transport: 's3' | 'server'; event: 'start' | 'bytes' | 'failed'; bytes?: number }
-export async function downloadMedia(media: MediaRef, signal: AbortSignal, observe?: (event: MediaDownloadObservation) => void): Promise<{ blob: Blob; transport: 's3' | 'server'; downloadId: string }> {
+export async function downloadMedia(media: MediaRef, signal: AbortSignal, observe?: (event: MediaDownloadObservation) => void, diagnosticParent?: OperationHandle): Promise<{ blob: Blob; transport: 's3' | 'server'; downloadId: string }> {
   const scope = epoch;
   const read = async (url: string, transport: 's3' | 'server') => {
     const id = crypto.randomUUID(); observe?.({ id, transport, event: 'start' });
     try {
-      const blob = await request(url, { authenticated: true, signedMedia: transport === 's3', signal }, (response, requestSignal) => boundedImage(response, requestSignal, media, bytes => observe?.({ id, transport, event: 'bytes', bytes })));
+      const blob = await request(url, { authenticated: true, signedMedia: transport === 's3', signal, diagnosticParent }, (response, requestSignal) => boundedImage(response, requestSignal, media, bytes => observe?.({ id, transport, event: 'bytes', bytes })));
       assertSessionEpoch(scope); return { blob, transport, downloadId: id };
     } catch (error) { observe?.({ id, transport, event: 'failed' }); throw error; }
   };
-  let authorization = await authorizeMedia(media, signal);
+  let authorization = await authorizeMedia(media, signal, diagnosticParent);
   for (let attempt = 0; attempt < 2; attempt++) {
     assertSessionEpoch(scope);
     if (authorization.expiresAt <= Date.now()) {
-      if (attempt === 0) { authorization = await authorizeMedia(media, signal); continue; }
+      if (attempt === 0) { authorization = await authorizeMedia(media, signal, diagnosticParent); continue; }
       break;
     }
     try {
@@ -486,7 +502,7 @@ export async function downloadMedia(media: MediaRef, signal: AbortSignal, observ
       assertSessionEpoch(scope);
       if (signal.aborted || error instanceof DOMException && error.name === 'AbortError') throw error;
       if (authorization.transport === 'server') throw error;
-      if (attempt === 0 && error instanceof ApiError && error.status === 403) { authorization = await authorizeMedia(media, signal); continue; }
+      if (attempt === 0 && error instanceof ApiError && error.status === 403) { authorization = await authorizeMedia(media, signal, diagnosticParent); continue; }
       break;
     }
   }

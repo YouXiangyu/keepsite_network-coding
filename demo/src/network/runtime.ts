@@ -30,10 +30,10 @@ export interface HttpObservation {
   scope: MonitorScope; operation?: OperationHandle; template: NonNullable<Metadata['template']>;
   started: number | null; status: number | null; ended: boolean;
 }
-export function startHttp(template: HttpObservation['template']): HttpObservation | undefined {
+export function startHttp(template: HttpObservation['template'], parent?: OperationHandle): HttpObservation | undefined {
   return observe(() => {
     const scope = networkMonitor.scope('http'); if (!scope) return;
-    const operation = networkMonitor.beginOperation(scope, 'request');
+    const operation = networkMonitor.beginOperation(scope, 'request', parent);
     const observation: HttpObservation = { scope, operation, template, started: mono(), status: null, ended: false };
     activeHttp++; observe(() => networkMonitor.update(scope, 'api', { active: activeHttp, state: 'checking' }));
     if (operation) observe(() => networkMonitor.record(scope, { protocol: 'http', event: 'http.request', status: 'started', template }, operation));

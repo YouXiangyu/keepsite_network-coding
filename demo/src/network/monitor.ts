@@ -14,7 +14,7 @@ export interface MonitorScope { readonly sessionId: string; readonly channel: Ch
 export interface OperationHandle { readonly id: string }
 export interface DeviceHandle { readonly id: string }
 export interface ExportLease { readonly sessionId: string; readonly history: number; readonly captureId: string | null }
-interface OperationEntry { scope: MonitorScope; history: number; started: number | null; traceId: string | null; captureId: string | null; kind: Operation }
+interface OperationEntry { scope: MonitorScope; history: number; started: number | null; traceId: string | null; captureId: string | null; kind: Operation; parentId?: string }
 // monotonic() already uses the origin of clockId; instances sharing that ID must share its origin.
 interface Dependencies { monotonic(): number; wall(): number; id(): string; clockId: string | null }
 export type MonitorEvent = DiagnosticEvent | ServerEvent;
@@ -37,6 +37,7 @@ export class NetworkMonitor {
   private nextOperation = 0;
   private nextDevice = 0;
   private cards = emptyCards();
+  private transferOwner?: MonitorScope;
   private records: { event: MonitorEvent; bytes: number }[] = [];
   private serverState: Readonly<ServerState> = Object.freeze({ state: 'idle' });
   private serverClocks = new Map<string, number>();
@@ -99,6 +100,7 @@ export class NetworkMonitor {
   stopAccount() {
     this.sessionId = null; this.captureId = null; this.detailed = false; this.paused = false; this.history++;
     this.cards = emptyCards(); this.records = []; this.retainedBytes = 0; this.activeOperations.clear(); this.devices.clear();
+    this.transferOwner = undefined;
     this.recorded = this.dropped = this.rejected = this.sequence = this.nextOperation = this.nextDevice = 0;
     this.captureCostMs = 0;
     this.serverState = Object.freeze({ state: 'idle' }); this.serverClocks.clear();
@@ -119,6 +121,7 @@ export class NetworkMonitor {
     for (const [handle, scope] of this.devices) if (scope.channel === channel) this.devices.delete(handle);
     const card = ({ http: 'api', ws: 'websocket', sync: 'sync', peer: 'peer' } as Partial<Record<Channel, Card>>)[channel];
     if (card) this.cards[card] = emptyCards()[card];
+    if (this.transferOwner?.channel === channel) { this.cards.transfer = {}; this.transferOwner = undefined; }
     if (channel === 'server') this.serverState = sanitizeServerState({ state: 'idle', source: this.serverState.source });
     this.changed(); this.invalidated(); return this.scope(channel);
   }
@@ -142,14 +145,17 @@ export class NetworkMonitor {
   clearHistory() { if (this.sessionId) this.rotateHistory(true); }
   update(scope: MonitorScope | undefined, card: Card, values: unknown) {
     if (!this.valid(scope) || !allowedCard(scope.channel, card)) return false;
-    return this.measured(() => { Object.assign(this.cards[card], sanitizeCard(card, values)); return true; });
+    return this.measured(() => { Object.assign(this.cards[card], sanitizeCard(card, values)); if (card === 'transfer') this.transferOwner = scope; return true; });
   }
-  beginOperation(scope: MonitorScope | undefined, kind: Operation): OperationHandle | undefined {
+  beginOperation(scope: MonitorScope | undefined, kind: Operation, parent?: OperationHandle): OperationHandle | undefined {
     if (!this.valid(scope) || !member(kind, operations)) return undefined;
+    const parentEntry = parent && this.activeOperations.get(parent);
+    if (parent && (!parentEntry || !this.valid(parentEntry.scope) || parentEntry.history !== this.history)) return undefined;
     if (this.activeOperations.size >= LIMITS.active) { this.dropped++; this.changed(); return undefined; }
     const handle = Object.freeze({ id: 'op-' + ++this.nextOperation });
     this.activeOperations.set(handle, { scope, kind, history: this.history, started: this.clock('monotonic'),
-      captureId: this.captureId, traceId: this.detailed && !this.paused ? this.id() : null });
+      captureId: this.captureId, traceId: parentEntry ? parentEntry.traceId : this.detailed && !this.paused ? this.id() : null,
+      ...(parent ? { parentId: parent.id } : {}) });
     this.changed(); return handle;
   }
   device(scope: MonitorScope | undefined): DeviceHandle | undefined {
@@ -176,6 +182,7 @@ export class NetworkMonitor {
       const event: DiagnosticEvent = { ...metadata, sequence: ++this.sequence, timestamp, origin: 'client',
         offsetMs: current };
       if (operation && entry) { event.operationId = operation.id; if (entry.traceId) event.traceId = entry.traceId; }
+      if (entry?.parentId) event.parentOperationId = entry.parentId;
       const deviceScope = device && this.devices.get(device);
       if (device && this.valid(deviceScope)) event.deviceId = device.id;
       const safe = sanitizeEvent(event)!;

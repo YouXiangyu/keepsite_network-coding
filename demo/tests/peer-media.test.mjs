@@ -6,7 +6,8 @@ const hook = registerHooks({ resolve(specifier, context, nextResolve) {
   if (context.parentURL?.includes('/src/') && specifier.startsWith('.') && !specifier.endsWith('.ts')) return { url: new URL(specifier + '.ts', context.parentURL).href, shortCircuit: true };
   return nextResolve(specifier, context);
 } });
-const api = await import('../src/api.ts'); const { PeerMedia } = await import('../src/media/peerMedia.ts'); hook.deregister();
+const api = await import('../src/api.ts'); const { PeerMedia } = await import('../src/media/peerMedia.ts');
+const { networkMonitor: monitor } = await import('../src/network/runtime.ts'); const mediaRuntime = await import('../src/network/mediaRuntime.ts'); hook.deregister();
 const originalRTC = globalThis.RTCPeerConnection; const peers = [];
 afterEach(() => { for (const peer of peers.splice(0)) peer.stop(); api.installSession(null); globalThis.RTCPeerConnection = originalRTC; });
 const settle = async () => { for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve)); };
@@ -16,7 +17,8 @@ function setup(overrides = {}) {
   const state = { connected: true, serverId: 'server', generation: 1 };
   let revision = 0, count = 0;
   const emit = message => { for (const listener of eventListeners) listener({ v: 1, serverId: 'server', userId: 'a', ...message }); };
-  const port = { eventState: () => state, subscribeConnection: fn => { connectionListeners.add(fn); return () => connectionListeners.delete(fn); }, subscribeEvents: fn => { eventListeners.add(fn); return () => eventListeners.delete(fn); }, sendEvent: message => {
+  const port = { eventState: () => state, subscribeConnection: fn => { connectionListeners.add(fn); return () => connectionListeners.delete(fn); }, subscribeEvents: fn => { eventListeners.add(fn); return () => eventListeners.delete(fn); }, sendEvent: (message, observation) => {
+    overrides.observeSend?.(message, observation);
     messages.push(message); queueMicrotask(() => {
       if (overrides.respond?.(message, emit) === false) return;
       let reply;
@@ -34,6 +36,31 @@ function setup(overrides = {}) {
   const peer = new PeerMedia(port, cache); peers.push(peer); peer.setSupported(true); peer.start();
   return { peer, messages, emit, changeConnection: patch => { Object.assign(state, patch); for (const listener of connectionListeners) listener(); }, inventoryChanged: () => { for (const listener of inventoryListeners) listener(); } };
 }
+
+test('two actual peer discovery flows keep their media parents and report only observed final control bytes', async () => {
+  const sent = [];
+  const h = setup({ observeSend(message, observation) {
+    const context = observation?.operation && monitor.traceContext(observation.operation); if (message.type === 'peer.find') sent.push(context?.traceId);
+    observation?.onBytes?.(new TextEncoder().encode(JSON.stringify(message)).byteLength);
+  } });
+  monitor.setDetailed(true); await settle();
+  const scope = mediaRuntime.mediaScope(), a = mediaRuntime.startMedia(scope, png.length, new AbortController().signal), b = mediaRuntime.startMedia(scope, png.length, new AbortController().signal);
+  const expected = [monitor.traceContext(a.operation).traceId, monitor.traceContext(b.operation).traceId];
+  await Promise.all([h.peer.tryDownload(media(), new AbortController().signal, a), h.peer.tryDownload(media(), new AbortController().signal, b)]);
+  assert.deepEqual(sent.sort(), expected.sort()); assert.notEqual(sent[0], sent[1]);
+  const discovery = monitor.snapshot().events.filter(event => event.event === 'peer.discovery' && event.status === 'completed'); assert.equal(discovery.length, 2); assert.ok(discovery.every(event => event.controlBytes > 0 && event.parentOperationId));
+  mediaRuntime.finishMedia(a, 'failed', 'missing_peer'); mediaRuntime.finishMedia(b, 'failed', 'missing_peer');
+  assert.equal(monitor.snapshot().metrics.activeOperations, 0); assert.doesNotMatch(JSON.stringify(monitor.exportSnapshot(monitor.exportLease())), /browser|[a-f0-9]{64}/);
+});
+
+test('repeated peer observer faults preserve discovery results and release every allocated operation', async () => {
+  const h = setup(); monitor.setDetailed(true); await settle();
+  for (const method of ['update', 'record']) {
+    const original = monitor[method]; monitor[method] = () => { throw new Error('observer only'); };
+    try { for (let i = 0; i < 40; i++) { assert.equal(await h.peer.tryDownload(media(), new AbortController().signal), null); assert.equal(monitor.snapshot().metrics.activeOperations, 0); } }
+    finally { monitor[method] = original; }
+  }
+});
 
 test('Redis-disabled registration immediately keeps media on the cloud path', async () => {
   const h = setup({ respond(message, emit) { if (message.type === 'device.register') { emit({ type: 'device.registered', requestId: message.requestId, peerId: null, enabled: false, reason: 'Redis unavailable', heartbeatMs: 15000, leaseMs: 45000, inventoryRevision: 0, iceServers: [], turnEnabled: false }); return false; } } });
@@ -203,6 +230,7 @@ for (const outcome of ['source-complete', 'source-early', 'cancel', 'deadline', 
       if (message.type === 'peer.open') { emit({ type: 'peer.pending', requestId: message.requestId, transferId: 'delayed-transfer' }); setImmediate(() => emit({ type: 'peer.authorized', transferId: 'delayed-transfer', media: media(), requesterPeerId: 'peer', sourcePeerId: 'source', offererPeerId: 'peer', leaseMs: 10000 })); return false; }
       if (message.type === 'peer.signal') { emit({ type: 'peer.signalled', requestId: message.requestId, transferId: 'delayed-transfer' }); setImmediate(() => { channel.readyState = 'open'; channel.dispatchEvent(new Event('open')); }); return false; }
     } });
+    monitor.setDetailed(true);
     class Channel extends EventTarget {
       readyState = 'connecting'; bufferedAmount = 0;
       send(raw) {
@@ -229,6 +257,7 @@ for (const outcome of ['source-complete', 'source-early', 'cancel', 'deadline', 
     const pending = h.peer.tryDownload(media(), controller.signal).then(result => { settled = true; return result; });
     await verifiedSent; await settle();
     assert.equal(settled, false); assert.equal(pc.closed, false);
+    assert.equal(monitor.snapshot().events.some(event => event.event === 'media.read' && event.status === 'completed'), false);
     assert.equal(h.messages.some(message => message.type === 'peer.cancel' && message.reason === 'complete'), false);
     if (outcome === 'source-complete' || outcome === 'source-early') {
       channel.bufferedAmount = 0; await settle(); assert.equal(settled, false, 'Local drain alone is not remote consumption');
@@ -247,5 +276,103 @@ for (const outcome of ['source-complete', 'source-early', 'cancel', 'deadline', 
     }
     assert.equal(pc.closed, true); assert.equal(h.peer.snapshot().receiving, 0);
     assert.equal(h.peer.transfers.size, 0);
+    const completed = monitor.snapshot().events.filter(event => event.event === 'media.read' && event.status === 'completed');
+    assert.equal(completed.length, outcome === 'source-complete' || outcome === 'source-early' ? 1 : 0);
+    if (completed.length) { assert.equal(completed[0].verified, true); assert.equal(completed[0].bytes, png.length); assert.equal(completed[0].verifiedBytes, png.length); }
+    assert.equal(monitor.snapshot().metrics.activeOperations, 0);
   });
 }
+
+test('existing transfer ticks cannot overlap stats and an old PC cannot publish into the replacement peer scope', async context => {
+  context.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] }); let clock = 0, calls = 0, pc, releaseStats;
+  context.mock.method(performance, 'now', () => clock);
+  const h = setup({ respond(message, emit) {
+    if (message.type === 'peer.find') { emit({ type: 'peer.sources', requestId: message.requestId, assetId: message.assetId, peers: [{ peerId: 'source', name: 'private source' }] }); return false; }
+    if (message.type === 'peer.open') { emit({ type: 'peer.pending', requestId: message.requestId, transferId: 'slow-stats' }); setImmediate(() => emit({ type: 'peer.authorized', transferId: 'slow-stats', media: media(), requesterPeerId: 'peer', sourcePeerId: 'source', offererPeerId: 'peer', leaseMs: 10000 })); return false; }
+    if (message.type === 'peer.signal') { emit({ type: 'peer.signalled', requestId: message.requestId, transferId: 'slow-stats' }); return false; }
+  } });
+  monitor.setDetailed(true);
+  class Channel extends EventTarget { readyState = 'connecting'; id = 7; bufferedAmount = 0; send() {} }
+  globalThis.RTCPeerConnection = class extends EventTarget {
+    connectionState = 'connected'; iceConnectionState = 'connected'; sctp = { maxMessageSize: 16384 }; closed = false; stateListeners = 0;
+    constructor() { super(); pc = this; }
+    addEventListener(type, listener, options) { if (type === 'iceconnectionstatechange') this.stateListeners++; super.addEventListener(type, listener, options); }
+    removeEventListener(type, listener, options) { if (type === 'iceconnectionstatechange') this.stateListeners--; super.removeEventListener(type, listener, options); }
+    createDataChannel() { return new Channel(); }
+    async createOffer() { return { type: 'offer', sdp: 'isolated offer' }; }
+    async setLocalDescription() { this.onconnectionstatechange(); }
+    getStats() { calls++; return new Promise(resolve => { releaseStats = resolve; }); }
+    close() { this.closed = true; this.connectionState = this.iceConnectionState = 'closed'; }
+  };
+  await settle(); const pending = h.peer.tryDownload(media(), new AbortController().signal); await settle(); assert.equal(calls, 1);
+  clock = 1000; context.mock.timers.tick(1000); await settle(); assert.equal(calls, 1);
+  clock = 1100; context.mock.timers.tick(100); await settle(); assert.equal(calls, 2);
+  const alias = h.peer.snapshot().active[0].alias; assert.equal(h.peer.snapshot().active[0].pcState, 'connected'); assert.equal(h.peer.snapshot().active[0].channelState, 'connecting');
+  monitor.clearHistory(); monitor.setDetailed(false);
+  releaseStats(new Map([
+    ['transport', { type: 'transport', selectedCandidatePairId: 'pair', dtlsState: 'connected' }], ['pair', { type: 'candidate-pair', state: 'succeeded', localCandidateId: 'local', remoteCandidateId: 'remote', currentRoundTripTime: 0.005 }],
+    ['local', { type: 'local-candidate', candidateType: 'host', address: '192.0.2.1' }], ['remote', { type: 'remote-candidate', candidateType: 'srflx' }],
+    ['dc', { type: 'data-channel', dataChannelIdentifier: 7, bytesSent: 0, bytesReceived: 0 }],
+  ])); await settle(); clock = 1200; context.mock.timers.tick(100); await settle();
+  const active = h.peer.snapshot().active; assert.equal(active.length, 1); assert.equal(active[0].alias, alias); assert.equal(active[0].roundTripMs, 5); assert.equal(active[0].dtlsState, 'connected');
+  assert.equal(active[0].channelBytesSent, 0); assert.equal(monitor.snapshot().events.length, 0); assert.equal(Object.isFrozen(active[0]), true);
+  assert.doesNotMatch(JSON.stringify(active), /192\.0\.2|slow-stats|private source|[a-f0-9]{64}/);
+  clock = 2200; context.mock.timers.tick(1000); await settle(); assert.equal(calls, 3);
+  const late = releaseStats; h.changeConnection({ connected: false, generation: 2 }); assert.equal(await pending, null);
+  assert.equal(pc.closed, true); assert.equal(pc.stateListeners, 0); assert.equal(h.peer.snapshot().active.length, 0);
+  monitor.update(monitor.scope('peer'), 'peer', { route: 'p2p_direct', localType: 'host', remoteType: 'host' });
+  late(new Map([
+    ['transport', { type: 'transport', selectedCandidatePairId: 'pair' }], ['pair', { type: 'candidate-pair', state: 'succeeded', localCandidateId: 'local', remoteCandidateId: 'remote' }],
+    ['local', { type: 'local-candidate', candidateType: 'relay', address: '192.0.2.1' }], ['remote', { type: 'remote-candidate', candidateType: 'relay' }],
+  ])); await settle();
+  assert.equal(monitor.snapshot().cards.peer.route, 'p2p_direct'); assert.equal(monitor.snapshot().cards.peer.localType, 'host'); assert.equal(monitor.snapshot().metrics.activeOperations, 0);
+});
+
+test('a verified resume across selected direct and relay paths reports mixed logical delivery without counting its prefix twice', async () => {
+  let opened = 0; const channels = new Map(); const offsets = [];
+  const h = setup({ respond(message, emit) {
+    if (message.type === 'peer.find') { emit({ type: 'peer.sources', requestId: message.requestId, assetId: message.assetId, peers: [{ peerId: 'source', name: 'private source' }] }); return false; }
+    if (message.type === 'peer.open') {
+      const id = 'resume-' + ++opened; emit({ type: 'peer.pending', requestId: message.requestId, transferId: id });
+      setImmediate(() => emit({ type: 'peer.authorized', transferId: id, media: media(), requesterPeerId: 'peer', sourcePeerId: 'source', offererPeerId: 'peer', leaseMs: 10000 })); return false;
+    }
+    if (message.type === 'peer.signal') { emit({ type: 'peer.signalled', requestId: message.requestId, transferId: message.transferId }); setImmediate(() => { const channel = channels.get(message.transferId); channel.readyState = 'open'; channel.dispatchEvent(new Event('open')); }); return false; }
+  } });
+  monitor.setDetailed(true);
+  class Channel extends EventTarget {
+    readyState = 'connecting'; bufferedAmount = 0; id = 7;
+    constructor(label) { super(); this.label = label; this.transfer = label.slice('keepsite-'.length); channels.set(this.transfer, this); }
+    close() { if (this.readyState !== 'closed') { this.readyState = 'closed'; this.dispatchEvent(new Event('close')); } }
+    send(raw) {
+      const message = JSON.parse(raw);
+      if (message.type === 'verified') { queueMicrotask(() => h.emit({ type: 'peer.cancelled', transferId: this.transfer, reason: 'complete' })); return; }
+      if (message.type !== 'get') return; offsets.push(message.offset);
+      queueMicrotask(() => {
+        const content = this.transfer === 'resume-1' ? png.subarray(0, 10) : png.subarray(message.offset);
+        const frame = new ArrayBuffer(content.length + 8); new DataView(frame).setUint32(0, message.offset); new DataView(frame).setUint32(4, content.length); new Uint8Array(frame, 8).set(content);
+        this.dispatchEvent(new MessageEvent('message', { data: frame }));
+        if (this.transfer === 'resume-1') this.close();
+        else this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ v: 1, type: 'end', size: png.length }) }));
+      });
+    }
+  }
+  globalThis.RTCPeerConnection = class {
+    connectionState = 'connected'; iceConnectionState = 'connected'; sctp = { maxMessageSize: 16384 };
+    constructor() { this.which = opened; }
+    createDataChannel(label) { this.channel = new Channel(label); return this.channel; }
+    async createOffer() { return { type: 'offer', sdp: 'isolated offer' }; }
+    async setLocalDescription() { this.onconnectionstatechange(); }
+    async getStats() { return new Map([
+      ['transport', { type: 'transport', selectedCandidatePairId: 'pair', dtlsState: 'connected' }], ['pair', { type: 'candidate-pair', state: 'succeeded', localCandidateId: 'local', remoteCandidateId: 'remote' }],
+      ['local', { type: 'local-candidate', candidateType: 'host' }], ['remote', { type: 'remote-candidate', candidateType: this.which === 1 ? 'srflx' : 'relay' }],
+    ]); }
+    close() { this.connectionState = this.iceConnectionState = 'closed'; this.channel?.close(); }
+  };
+  await settle(); assert.equal((await h.peer.tryDownload(media(), new AbortController().signal))?.transport, 'peer');
+  assert.deepEqual(offsets, [0, 10]); assert.equal(opened, 2);
+  const parent = monitor.snapshot().events.find(event => event.event === 'media.read' && event.status === 'completed');
+  assert.equal(parent.route, 'p2p_mixed'); assert.equal(parent.bytes, png.length); assert.equal(parent.verifiedBytes, png.length);
+  const attempts = monitor.snapshot().events.filter(event => event.event === 'media.attempt' && event.status !== 'started');
+  assert.deepEqual(attempts.map(event => [event.route, event.status, event.bytes]), [['p2p_direct', 'failed', 10], ['p2p_relay', 'completed', png.length - 10]]);
+  assert.equal(monitor.snapshot().metrics.activeOperations, 0);
+});
