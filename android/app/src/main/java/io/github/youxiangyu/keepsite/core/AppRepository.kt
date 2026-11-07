@@ -28,7 +28,9 @@ class AppRepository(context: Context) : AppController {
     private val listeners = CopyOnWriteArrayList<(AppState) -> Unit>()
     private val mediaJobs = CopyOnWriteArrayList<MediaJob>()
     private val secrets = SecretStore(context)
-    private val api = HttpApi(BuildConfig.API_BASE_URL, secrets)
+    private val diagnostics = NetworkDiagnostics()
+    @Volatile private var diagnosticAccount: NetworkMonitor.Account? = null
+    private val api = HttpApi(BuildConfig.API_BASE_URL, secrets, diagnostics)
     private val lock = Any()
     private val actionScope = ThreadLocal<Long>()
     @Volatile private var state = AppState()
@@ -43,6 +45,8 @@ class AppRepository(context: Context) : AppController {
     private var accountId: String? = null
     private var draft: Draft? = null
     private val syncing = AtomicBoolean()
+    private val serverTraceScheduled = AtomicBoolean()
+    private val pendingServerTrace = java.util.concurrent.atomic.AtomicReference<NetworkDiagnostics.ServerAction?>()
     private val pending = HashMap<String, Pair<String, JSONObject>>()
 
     private data class Draft(
@@ -65,6 +69,29 @@ class AppRepository(context: Context) : AppController {
         main.post { if (!closed && state === latest) listeners.forEach { it(latest) } }
     }
     override fun snapshot() = state
+    internal fun networkSnapshot() = diagnostics.snapshot()
+    internal fun refreshServerTrace(clearing: Boolean = false) {
+        if (closed || !foreground || api.session?.authenticated != true) return
+        val action = diagnostics.prepareServerAction(api.epoch(), clearing) ?: return
+        pendingServerTrace.set(action)
+        scheduleServerTrace()
+    }
+    private fun scheduleServerTrace() {
+        if (closed || pendingServerTrace.get() == null || !serverTraceScheduled.compareAndSet(false, true)) return
+        try {
+            worker.execute {
+                val action = pendingServerTrace.getAndSet(null)
+                try {
+                    if (action != null && action.current()) api.withScope(action.epoch) { api.diagnostics(action) }
+                } catch (_: CancellationException) { }
+                catch (failure: ApiFailure) { if (action != null && failure.status == 401) expire(action.epoch) }
+                catch (_: Exception) { action?.finished(MonitorError.UNKNOWN) }
+                finally { serverTraceScheduled.set(false); scheduleServerTrace() }
+            }
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            serverTraceScheduled.set(false); pendingServerTrace.getAndSet(null)?.finished(MonitorError.CANCELLED)
+        }
+    }
     override fun subscribe(listener: (AppState) -> Unit): Closeable {
         listeners.add(listener); main.post { if (!closed && listener in listeners) listener(state) }
         return Closeable { listeners.remove(listener) }
@@ -106,9 +133,10 @@ class AppRepository(context: Context) : AppController {
             if (closed || this.foreground == foreground) return
             this.foreground = foreground
             if (!foreground) {
+                diagnostics.suspend(diagnosticAccount)
                 api.cancelRequests(); stopNetwork(); mediaJobs.forEach(MediaJob::close)
                 publish { it.copy(connected = false, busy = "", peer = it.peer.copy(registered = false, sending = 0, receiving = 0)) }
-            }
+            } else diagnosticAccount?.let { diagnostics.resume(it, api.epoch()) }
         }
         if (foreground) refresh()
     }
@@ -116,6 +144,8 @@ class AppRepository(context: Context) : AppController {
         peer?.close(); peer = null; events?.close(); events = null
     }
     private fun stopAccount() {
+        pendingServerTrace.set(null)
+        diagnostics.closeAccount(diagnosticAccount); diagnosticAccount = null
         stopNetwork(); mediaJobs.forEach(MediaJob::close)
         cacheSubscription?.close(); cacheSubscription = null; cache?.close(); cache = null
         sync = null; accountId = null; draft = null; pending.clear()
@@ -137,7 +167,7 @@ class AppRepository(context: Context) : AppController {
         guard(it); install(session, it)
         if (session.authenticated && foreground) synchronize(it)
     }
-    private fun install(session: Session, expected: Long) {
+    private fun install(session: Session, expected: Long, freshSession: Boolean = false) {
         synchronized(lock) {
             guard(expected)
             if (session.userId != accountId) {
@@ -145,6 +175,7 @@ class AppRepository(context: Context) : AppController {
                 publish { AppState(session = session, busy = it.busy, peer = PeerView(enabled = peerWanted)) }
                 accountId = session.userId
                 if (session.userId != null) {
+                    diagnosticAccount = diagnostics.openAccount(expected)
                     val directory = File(context.cacheDir, "media-v1/${sha256(session.userId.toByteArray())}")
                     val created = FileCache(directory)
                     cache = created
@@ -152,6 +183,9 @@ class AppRepository(context: Context) : AppController {
                     sync = SyncEngine(session.userId) { path -> api.json(path) }
                     restoreDraft()
                 }
+            } else if (freshSession && session.userId != null) {
+                stopNetwork(); diagnostics.closeAccount(diagnosticAccount)
+                diagnosticAccount = diagnostics.openAccount(expected)
             }
             api.session = session
             publish { it.copy(session = session, error = "") }
@@ -170,7 +204,7 @@ class AppRepository(context: Context) : AppController {
             publish(expected, predicate = { owner.get() != null && events === owner.get() }) { it.copy(connected = connected) }
         }, authCheck = {
             owner.get()?.let { refresh(expected, it) }
-        })
+        }, diagnostics = diagnostics, diagnosticAccount = diagnosticAccount)
         owner.set(port)
         events = port
         if (peerWanted) peer = createPeer(userId, port, local, expected)
@@ -184,7 +218,8 @@ class AppRepository(context: Context) : AppController {
     private fun synchronize(expected: Long, receipt: Receipt? = null) {
         guard(expected)
         val engine = sync ?: throw ApiFailure(401, message = "请先登录。")
-        val value = engine.sync(receipt)
+        val observation = diagnostics.sync(diagnosticAccount, expected)
+        val value = api.withObservation(observation?.operation) { engine.sync(receipt, observation) }
         guard(expected)
         cache?.setRefs(value.tickets.flatMap { listOfNotNull(it.original, it.poster) })
         guard(expected)
@@ -199,7 +234,7 @@ class AppRepository(context: Context) : AppController {
     override fun login(email: String, password: String) = run("正在登录") { expected ->
         val session = Wire.session(api.json("/api/auth/login", "POST", JSONObject().put("email", email).put("password", password), false))
         if (!session.authenticated) Wire.invalid()
-        guard(expected); install(session, expected); if (foreground) synchronize(expected)
+        guard(expected); install(session, expected, freshSession = true); if (foreground) synchronize(expected)
     }
     override fun register(email: String, password: String) = authAction("正在注册", "/api/auth/register",
         JSONObject().put("email", email).put("password", password), "请查收验证邮件，并输入验证码。")
@@ -266,7 +301,7 @@ class AppRepository(context: Context) : AppController {
         }
         val session = Wire.session(result)
         if (!session.authenticated) Wire.invalid()
-        install(session, expected); if (foreground) synchronize(expected)
+        install(session, expected, freshSession = true); if (foreground) synchronize(expected)
     }
     private fun randomProof(): String = Base64.encodeToString(ByteArray(32).also(SecureRandom()::nextBytes), Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
     override fun logout() {

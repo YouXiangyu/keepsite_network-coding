@@ -16,6 +16,7 @@ import java.util.concurrent.TimeUnit
 class SyncEvents(
     private val api: HttpApi, private val userId: String, private val hint: (String, Long) -> Unit,
     private val changed: (Boolean) -> Unit, private val authCheck: () -> Unit,
+    private val diagnostics: NetworkDiagnostics? = null, private val diagnosticAccount: NetworkMonitor.Account? = null,
 ) : EventPort, Closeable {
     private val executor = Executors.newSingleThreadScheduledExecutor()
     private val connections = CopyOnWriteArrayList<() -> Unit>()
@@ -29,6 +30,7 @@ class SyncEvents(
     private var retryMs = 1000L
     private var watchdog: ScheduledFuture<*>? = null
     private var retry: ScheduledFuture<*>? = null
+    private var observation: SocketObservation? = null
 
     init { executor.execute(::connect) }
     override fun state() = view
@@ -37,6 +39,7 @@ class SyncEvents(
     private fun valid() = !ended && epoch == api.epoch()
     private fun publish() {
         view = view.copy(connected = valid() && ready && view.serverId == alignedServer && alignedServer.isNotEmpty())
+        observation?.aligned(view.connected)
         connections.forEach { it() }; changed(view.connected)
     }
     fun align(serverId: String) { dispatch { alignedServer = serverId; publish() } }
@@ -53,8 +56,12 @@ class SyncEvents(
     }
     private fun connect() {
         if (!valid() || socket != null) return
-        ready = false; view = EventState(false, "", view.generation + 1); publish()
+        ready = false; observation = diagnostics?.socket(diagnosticAccount, epoch)
+        view = EventState(false, "", view.generation + 1); publish()
         val listener = object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) = dispatch {
+                if (socket === webSocket) observation?.opened()
+            }
             override fun onMessage(webSocket: WebSocket, text: String) = dispatch {
                 if (socket !== webSocket) return@dispatch
                 try {
@@ -71,39 +78,45 @@ class SyncEvents(
                             hint(server, cursor); disconnect(webSocket); return@dispatch
                         }
                         val initial = !ready
-                        ready = true; retryMs = 1000; view = view.copy(serverId = server)
+                        val capabilities = SocketCapabilities.read(value)
+                        ready = true; retryMs = 1000; view = view.copy(serverId = server,
+                            heartbeatMs = capabilities.heartbeatMs, diagnosticsVersion = capabilities.diagnosticsVersion)
+                        observation?.received(type, bytes, capabilities, server, cursor)
                         watchdog?.cancel(false)
-                        watchdog = executor.schedule({ disconnect(webSocket) }, 45, TimeUnit.SECONDS)
+                        watchdog = executor.schedule({ disconnect(webSocket, error = MonitorError.TIMEOUT) }, 45, TimeUnit.SECONDS)
                         publish()
                         // Every initial handshake also repairs a lost notification.
                         hint(server, if (initial) maxOf(0L, cursor) else cursor)
                     } else {
                         val maximum = if (type == "peer.signal" && value.optString("kind") != "ice") 65536 else 4096
                         if (bytes > maximum || !ready || server != view.serverId) throw IllegalArgumentException()
+                        observation?.received(type, bytes)
                         if (view.connected) messages.forEach { it(value) }
                     }
-                } catch (_: Exception) { disconnect(webSocket) }
+                } catch (_: Exception) { disconnect(webSocket, error = MonitorError.PROTOCOL) }
             }
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) = dispatch { disconnect(webSocket) }
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) = dispatch {
                 if (code == 1008) authCheck()
-                disconnect(webSocket)
+                disconnect(webSocket, code)
             }
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = dispatch { disconnect(webSocket) }
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = dispatch { disconnect(webSocket, code) }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = dispatch {
                 if (response?.code in setOf(401, 403)) authCheck()
-                response?.close(); disconnect(webSocket)
+                val error = when (response?.code) { 401 -> MonitorError.AUTH_REQUIRED; 403 -> MonitorError.AUTH_DENIED; else -> MonitorError.NETWORK }
+                response?.close(); disconnect(webSocket, error = error)
             }
         }
         socket = api.events(listener, epoch)
         val current = socket
         watchdog?.cancel(false)
-        watchdog = executor.schedule({ if (!ready && current != null) disconnect(current) }, 8, TimeUnit.SECONDS)
+        watchdog = executor.schedule({ if (!ready && current != null) disconnect(current, error = MonitorError.TIMEOUT) }, 8, TimeUnit.SECONDS)
     }
-    private fun disconnect(current: WebSocket) {
+    private fun disconnect(current: WebSocket, code: Int? = null, error: MonitorError = MonitorError.NONE) {
         if (socket !== current) return
         socket = null; current.cancel(); ready = false; watchdog?.cancel(false)
-        view = view.copy(connected = false, generation = view.generation + 1); publish()
+        observation?.closed(code, if (valid()) retryMs else null, error); observation = null
+        view = view.copy(connected = false, generation = view.generation + 1, heartbeatMs = null, diagnosticsVersion = null); publish()
         if (valid() && retry?.isDone != false) {
             retry = executor.schedule({ retry = null; connect() }, retryMs, TimeUnit.MILLISECONDS)
             retryMs = minOf(30_000, retryMs * 2)
@@ -111,7 +124,8 @@ class SyncEvents(
     }
     override fun close() {
         ended = true; socket?.cancel(); socket = null; watchdog?.cancel(false); retry?.cancel(false)
-        view = view.copy(connected = false, generation = view.generation + 1)
+        observation?.closed(); observation = null
+        view = view.copy(connected = false, generation = view.generation + 1, heartbeatMs = null, diagnosticsVersion = null)
         connections.forEach { it() }; changed(false)
         connections.clear(); messages.clear(); executor.shutdownNow()
     }

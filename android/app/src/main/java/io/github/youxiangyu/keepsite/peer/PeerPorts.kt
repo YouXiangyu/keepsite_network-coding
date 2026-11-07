@@ -4,7 +4,8 @@ import io.github.youxiangyu.keepsite.core.MediaRef
 import org.json.JSONObject
 import java.io.Closeable
 
-data class EventState(val connected: Boolean, val serverId: String, val generation: Long)
+data class EventState(val connected: Boolean, val serverId: String, val generation: Long,
+                      val heartbeatMs: Long? = null, val diagnosticsVersion: Int? = null)
 
 /** Messages have already passed the session/user/server envelope guard. */
 interface EventPort {

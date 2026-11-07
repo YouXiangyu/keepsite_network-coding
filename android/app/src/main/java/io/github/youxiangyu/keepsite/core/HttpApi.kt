@@ -21,10 +21,11 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
-class HttpApi(val origin: String, private val secrets: SecretStore) : Closeable {
+class HttpApi(val origin: String, private val secrets: SecretStore, private val diagnostics: NetworkDiagnostics? = null) : Closeable {
     private val base = origin.toHttpUrl()
     private val serial = AtomicLong()
     private val requestScope = ThreadLocal<Long>()
+    private val diagnosticParent = ThreadLocal<NetworkMonitor.Operation?>()
     @Volatile private var closed = false
     private val cookieLock = Any()
     private var cookie: Cookie? = null
@@ -57,6 +58,10 @@ class HttpApi(val origin: String, private val secrets: SecretStore) : Closeable 
         finally { if (previous == null) requestScope.remove() else requestScope.set(previous) }
     }
     private fun requestEpoch() = (requestScope.get() ?: epoch()).also(::check)
+    internal fun <T> withObservation(parent: NetworkMonitor.Operation?, block: () -> T): T {
+        val previous = diagnosticParent.get(); diagnosticParent.set(parent)
+        try { return block() } finally { if (previous == null) diagnosticParent.remove() else diagnosticParent.set(previous) }
+    }
     fun cancelRequests() { serial.incrementAndGet(); client.dispatcher.cancelAll() }
     fun clearSession() {
         cancelRequests()
@@ -94,7 +99,8 @@ class HttpApi(val origin: String, private val secrets: SecretStore) : Closeable 
             }
         }
     }
-    private fun bounded(response: Response, limit: Long, expected: Long, clientMedia: Boolean = false): ByteArray {
+    private fun bounded(response: Response, limit: Long, expected: Long, clientMedia: Boolean = false,
+                        observation: NetworkDiagnostics.HttpObservation? = null): ByteArray {
         val body = response.body ?: throw ApiFailure(message = "服务响应正文缺失。")
         if (body.contentLength() > limit) throw ApiFailure(message = "服务响应超过大小限制。")
         return body.byteStream().use { stream ->
@@ -104,17 +110,18 @@ class HttpApi(val origin: String, private val secrets: SecretStore) : Closeable 
                 check(expected)
                 val count = stream.read(block)
                 if (count == -1) break
+                observation?.read(count)
                 if (output.size().toLong() + count > limit) throw ApiFailure(message = if (clientMedia) "图片大小与记录不一致。" else "服务响应超过大小限制。")
                 output.write(block, 0, count)
             }
             check(expected); output.toByteArray()
         }
     }
-    private fun failure(response: Response, expected: Long): ApiFailure {
+    private fun failure(response: Response, expected: Long, observation: NetworkDiagnostics.HttpObservation? = null): ApiFailure {
         var message = "请求未成功（${response.code}），请重试。"
         var code = ""
         try {
-            val body = JSONObject(bounded(response, 65536, expected).toString(Charsets.UTF_8))
+            val body = JSONObject(bounded(response, 65536, expected, observation = observation).toString(Charsets.UTF_8))
             when (val detail = body.opt("detail")) {
                 is String -> message = detail.take(500)
                 is JSONObject -> { message = detail.optString("message", message).take(500); code = detail.optString("code").take(100) }
@@ -127,31 +134,43 @@ class HttpApi(val origin: String, private val secrets: SecretStore) : Closeable 
         val requestBody = body?.toString()?.toRequestBody("application/json; charset=utf-8".toMediaType())
         return executeJson(path, method, requestBody, authenticated)
     }
+    /** Called only for an explicit diagnostic refresh/clear, with an already captured action ticket. */
+    internal fun diagnostics(action: NetworkDiagnostics.ServerAction): Boolean {
+        if (diagnostics?.serverActionCurrent(action) != true) return false
+        val result = ServerDiagnosticsHttp.execute(base, client, action, { session?.authenticated == true }, { session?.csrfToken }, ::builder, ::check)
+        if (action.result == MonitorError.AUTH_REQUIRED) throw ApiFailure(401, message = "登录状态已失效，请重新登录。")
+        return result
+    }
     private fun executeJson(path: String, method: String, body: RequestBody?, authenticated: Boolean): JSONObject {
         val expected = requestEpoch()
         if (authenticated && session?.authenticated != true) throw ApiFailure(401, message = "请先登录。")
         val request = builder(path, expected).method(method, body).also {
             if (method != "GET") session?.csrfToken?.takeIf(String::isNotEmpty)?.let { token -> it.header("X-CSRF-Token", token) }
         }.build()
-        try {
-            val transport = when {
-                method == "GET" -> readClient
-                path == "/api/media" -> client.newBuilder().callTimeout(120, TimeUnit.SECONDS).build()
-                else -> client
-            }
-            return transport.newCall(request).execute().use { response ->
-                check(expected); saveCookies(response, expected)
-                if (!response.isSuccessful) throw failure(response, expected)
-                val raw = bounded(response, 1024 * 1024, expected)
-                val decoder = Charsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
-                val result = JSONObject(decoder.decode(java.nio.ByteBuffer.wrap(raw)).toString())
-                check(expected); result
-            }
-        } catch (error: IOException) {
-            check(expected)
-            throw ApiFailure(message = if (method == "GET") "暂时无法读取服务数据，请重试。"
-                else "暂时无法连接服务，提交结果尚未确认，请核对后重试。")
-        } catch (_: org.json.JSONException) { throw ApiFailure(message = "服务响应格式异常，请重试。") }
+        fun perform(actual: Request, observation: NetworkDiagnostics.HttpObservation?): JSONObject {
+            try {
+                val transport = when {
+                    method == "GET" -> readClient
+                    path == "/api/media" -> client.newBuilder().callTimeout(120, TimeUnit.SECONDS).build()
+                    else -> client
+                }
+                return transport.newCall(actual).execute().use { response ->
+                    check(expected); saveCookies(response, expected)
+                    observation?.response(response.code)
+                    if (!response.isSuccessful) throw failure(response, expected, observation)
+                    val raw = bounded(response, 1024 * 1024, expected, observation = observation)
+                    val decoder = Charsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    val result = JSONObject(decoder.decode(java.nio.ByteBuffer.wrap(raw)).toString())
+                    check(expected); result
+                }
+            } catch (error: IOException) {
+                observation?.failedAs(diagnosticIoError(error))
+                check(expected)
+                throw ApiFailure(message = if (method == "GET") "暂时无法读取服务数据，请重试。"
+                    else "暂时无法连接服务，提交结果尚未确认，请核对后重试。")
+            } catch (_: org.json.JSONException) { throw ApiFailure(message = "服务响应格式异常，请重试。") }
+        }
+        return diagnostics?.http(expected, base, request, authenticated && session?.authenticated == true, diagnosticParent.get(), ::perform) ?: perform(request, null)
     }
     fun upload(file: File, mime: String, uploadId: String): MediaRef {
         val body = MultipartBody.Builder().setType(MultipartBody.FORM).addFormDataPart("uploadId", uploadId)
