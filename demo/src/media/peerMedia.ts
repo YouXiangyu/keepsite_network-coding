@@ -39,6 +39,7 @@ interface Transfer {
   removeStateObservers?: () => void;
   alias: string; sample?: ConnectionSample; observedPcState?: RTCPeerConnectionState; observedIceState?: RTCIceConnectionState; observedChannelState?: RTCDataChannelState;
   observationScope?: MonitorScope;
+  measurementStarted: number | null; progressBytes?: number; peerName?: string;
 }
 export class PeerMedia implements PeerMediaPort {
   private port: AccountEventPort;
@@ -76,14 +77,26 @@ export class PeerMedia implements PeerMediaPort {
   constructor(port: AccountEventPort, cache: PeerCachePort) { this.port = port; this.cache = cache; }
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   snapshot = () => this.state;
+  /** Existing authorized names are UI-only; reports project PeerView separately. */
+  deviceLabels = () => {
+    const identities = new Map(this.state.peers.map(peer => [peer.peerId, peer.name]));
+    for (const transfer of this.transfers.values()) if (transfer.peerName && !identities.has(transfer.peerId)) identities.set(transfer.peerId, transfer.peerName);
+    return [...identities].map(([id, name]) => ({ name, alias: this.diagnosticDevices.get(id)?.id ?? null,
+      self: id === this.state.peerId, channels: [...this.transfers.values()].filter(transfer => transfer.peerId === id).map(transfer => transfer.alias) }));
+  };
   private publish(update: Partial<PeerView> = {}) {
-    const active = [...this.transfers.values()].slice(0, 2).map(transfer => activePeerProjection({
+    const active = [...this.transfers.values()].slice(0, 2).map(transfer => {
+      const end = observe(() => now()), duration = number(end) && transfer.measurementStarted !== null && end >= transfer.measurementStarted ? end - transfer.measurementStarted : null;
+      return activePeerProjection({
       alias: transfer.alias, deviceAlias: transfer.diagnostics?.device?.id, direction: transfer.role, expectedBytes: transfer.media.size,
       payloadBytes: transfer.record.bytes, controlBytes: transfer.record.controlBytes, discardedBytes: transfer.record.discardedBytes,
       localVerifiedBytes: transfer.verified ? transfer.verifiedBytes : null, sourceConfirmed: transfer.sourceCompleted === true,
+      progressBytes: transfer.progressBytes, resumeOffset: transfer.record.resumeOffset,
+      durationMs: duration, payloadBytesPerSecond: duration !== null && duration > 0 ? transfer.record.bytes * 1000 / duration : null,
+      bufferedAmount: observe(() => transfer.channel?.bufferedAmount),
       pcState: transfer.observedPcState, iceState: transfer.observedIceState, channelState: transfer.observedChannelState,
       ...transfer.sample, route: transfer.record.route ?? 'unknown',
-    })).filter((value): value is NonNullable<typeof value> => value !== null);
+    }); }).filter((value): value is NonNullable<typeof value> => value !== null);
     this.state = { ...this.state, ...update, active: Object.freeze(active), totals: { ...this.state.totals } };
     peerState(this.observationScope, { configured: this.supported, registered: this.state.enabled && !!this.state.peerId,
       peers: this.state.peers.length, receiving: this.state.receiving, sending: this.state.sending });
@@ -285,7 +298,8 @@ export class PeerMedia implements PeerMediaPort {
     const record: TransferRecord = { id, direction: role, path: 'peer', status: 'active', bytes: 0, controlBytes: 0, discardedBytes: 0, milliseconds: 0, reason: '' };
     const transfer: Transfer = { id, media, role, peerId, controller: new AbortController(), leaseUntil: now() + 5000, deadline, progressAt: now(),
       authorized, grantResolve, grantReject, candidates: [], localCandidates: [], localDescriptionQueued: false, iceCount: 0, remoteIceCount: 0, signalBytes: 0, signals: Promise.resolve(), outgoing: Promise.resolve(), renewAt: Infinity, renewing: false, closed: false, noRetry: false, retryable: false, routeAt: 0, verified: false, started, record, diagnostics, alias: 'channel-' + ++this.channelSequence,
-      observationScope: diagnostics?.scope ?? this.observationScope };
+      observationScope: diagnostics?.scope ?? this.observationScope, measurementStarted: observe(() => now()) ?? null,
+      peerName: this.state.peers.find(peer => peer.peerId === peerId)?.name };
     if (diagnostics) diagnostics.device = this.diagnosticDevice(peerId, transfer.observationScope);
     const diagnosticScope = transfer.observationScope;
     const abort = () => this.closeTransfer(transfer, '传输已取消'); signal.addEventListener('abort', abort, { once: true });
@@ -315,7 +329,11 @@ export class PeerMedia implements PeerMediaPort {
       || transfer.role === 'send' && !this.cache.canShare(transfer.media.assetId)) throw abortError();
   }
   private options(transfer: Transfer): ChannelOptions {
-    return { signal: transfer.controller.signal, guard: () => this.guardTransfer(transfer), progress: () => { transfer.progressAt = now(); }, observe: (payload, control, discarded) => {
+    return { signal: transfer.controller.signal, guard: () => this.guardTransfer(transfer), progress: () => { transfer.progressAt = now(); }, position: (offset, resumedFrom) => { observe(() => {
+      if (transfer.closed || !number(offset, true) || offset > transfer.media.size) return;
+      transfer.progressBytes = offset; if (number(resumedFrom, true) && resumedFrom <= transfer.media.size) transfer.record.resumeOffset = resumedFrom;
+      this.paint();
+    }); }, observe: (payload, control, discarded) => {
       if (payload > 0 && transfer.record.firstByteMs === undefined) transfer.record.firstByteMs = now() - transfer.started;
       transfer.record.bytes += payload; transfer.record.controlBytes += control; transfer.record.discardedBytes += discarded;
       attemptBytes(transfer.diagnostics, payload, control, discarded);
@@ -533,6 +551,7 @@ export class PeerMedia implements PeerMediaPort {
           finally { this.openings--; }
           if (!safeId(opened.transferId)) throw new Error('设备传输编号无效。');
           transfer = this.createTransfer(opened.transferId, media, 'receive', source.peerId, deadline, controller.signal, deadline - 12000, diagnosticAttempt); lastTransfer = transfer;
+          transfer.peerName = source.name;
           transfer.record.discoveryMs = now() - discoveryAt; transfer.record.resumeOffset = prefix.offset;
           const early = this.early.get(transfer.id); if (early) {
             this.early.delete(transfer.id);

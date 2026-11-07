@@ -12,6 +12,10 @@ export interface ChannelOptions {
   guard(): void;
   progress(): void;
   observe(payload: number, control: number, discarded: number): void;
+  position?(offset: number, resumedFrom?: number): void;
+}
+function position(options: ChannelOptions, offset: number, resumedFrom?: number) {
+  try { options.position?.(offset, resumedFrom); } catch { /* Observation cannot change frame acceptance or acknowledgement. */ }
 }
 const cancelled = () => new DOMException('设备传输已取消。', 'AbortError');
 function check(options: ChannelOptions) { if (options.signal.aborted) throw cancelled(); options.guard(); }
@@ -72,7 +76,7 @@ export function receiveFile(channel: RTCDataChannel, media: PeerAsset, maxSize: 
     const abort = () => fail(cancelled());
     const open = () => {
       if (opened) return; opened = true;
-      try { check(options); control(channel, { v: 1, type: 'get', assetId: media.assetId, offset: prefix.offset }, options); } catch (error) { fail(error); }
+      try { check(options); position(options, prefix.offset, prefix.offset); control(channel, { v: 1, type: 'get', assetId: media.assetId, offset: prefix.offset }, options); } catch (error) { fail(error); }
     };
     const message = (event: MessageEvent) => {
       try {
@@ -83,7 +87,7 @@ export function receiveFile(channel: RTCDataChannel, media: PeerAsset, maxSize: 
           let chunk: ArrayBuffer;
           try { chunk = decodeChunk(event.data, prefix.offset, media.size, limit); }
           catch (error) { options.observe(0, 0, Math.max(0, event.data.byteLength - FRAME_HEADER)); throw error; }
-          prefix.chunks.push(chunk); prefix.offset += chunk.byteLength; options.progress();
+          prefix.chunks.push(chunk); prefix.offset += chunk.byteLength; options.progress(); position(options, prefix.offset);
           control(channel, { v: 1, type: 'ack', offset: prefix.offset }, options);
           return;
         }
@@ -129,10 +133,10 @@ export function sendFile(channel: RTCDataChannel, media: PeerAsset, blob: Blob, 
       try {
         check(options); const value = parseControl(event.data, options);
         if (value.type === 'get' && !sending && value.assetId === media.assetId && Number.isSafeInteger(value.offset) && Number(value.offset) >= 0 && Number(value.offset) <= media.size) {
-          sending = true; void send(Number(value.offset)).catch(fail); return;
+          sending = true; position(options, Number(value.offset), Number(value.offset)); void send(Number(value.offset)).catch(fail); return;
         }
         if (value.type === 'ack' && sending && Number.isSafeInteger(value.offset) && Number(value.offset) > acknowledged && Number(value.offset) <= sent) {
-          acknowledged = Number(value.offset); options.progress(); return;
+          acknowledged = Number(value.offset); options.progress(); position(options, acknowledged); return;
         }
         if (value.type === 'verified' && ended && acknowledged === media.size && value.size === media.size) {
           options.progress(); settled = true; cleanup(); resolve(); return;

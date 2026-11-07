@@ -29,6 +29,7 @@ export type PeerRoute = 'direct' | 'relay' | 'unknown' | 'mixed';
 export interface ActivePeerTransfer {
   alias: string; deviceAlias: string | null; direction: 'receive' | 'send'; expectedBytes: number | null;
   payloadBytes: number | null; controlBytes: number | null; discardedBytes: number | null; localVerifiedBytes: number | null; sourceConfirmed: boolean;
+  progressBytes: number | null; resumeOffset: number | null; durationMs: number | null; payloadBytesPerSecond: number | null; bufferedAmount: number | null;
   pcState: RTCPeerConnectionState | null; iceState: RTCIceConnectionState | null; dtlsState: RTCDtlsTransportState | null; channelState: RTCDataChannelState | null;
   localType: 'host' | 'srflx' | 'prflx' | 'relay' | null; remoteType: 'host' | 'srflx' | 'prflx' | 'relay' | null;
   route: PeerRoute; roundTripMs: number | null; channelBytesSent: number | null; channelBytesReceived: number | null;

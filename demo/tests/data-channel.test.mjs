@@ -45,6 +45,19 @@ test('a retained contiguous prefix resumes once without resending that prefix', 
   assert.equal(source.frames.filter(frame => frame instanceof ArrayBuffer).reduce((sum, frame) => sum + frame.byteLength - 8, 0), bytes.length - prefixSize);
 });
 
+test('progress projection reports validated contiguous frames, requested prefix and valid ACKs while observer faults preserve delivery', async () => {
+  const [source, target] = pair(), data = new Uint8Array(48000).fill(9), media = asset(data.length), prefixSize = 16376;
+  const sent = [], received = [], sender = { ...options(), position(offset, prefix) { sent.push([offset, prefix]); throw Error('observation only'); } }, receiver = { ...options(), position(offset, prefix) { received.push([offset, prefix]); } };
+  const sending = sendFile(source, media, new Blob([data]), () => FRAME_LIMIT, sender);
+  const receiving = receiveFile(target, media, FRAME_LIMIT, { chunks: [data.slice(0, prefixSize).buffer], offset: prefixSize }, async blob => assert.equal(blob.size, data.length), receiver);
+  await Promise.all([sending, receiving]);
+  assert.deepEqual(sent[0], [prefixSize, prefixSize]); assert.deepEqual(received[0], [prefixSize, prefixSize]);
+  assert.equal(sent.at(-1)[0], media.size); assert.equal(received.at(-1)[0], media.size); assert.ok(sent.every(([offset]) => offset >= prefixSize && offset <= media.size));
+  const invalid = new Channel(), positions = [];
+  const failed = receiveFile(invalid, asset(10), FRAME_LIMIT, { chunks: [], offset: 0 }, async () => assert.fail(), { ...options(), position(offset) { positions.push(offset); } });
+  invalid.dispatchEvent(new MessageEvent('message', { data: encodeChunk(3, new Uint8Array([1, 2]).buffer) })); await assert.rejects(failed, /位置或长度/); assert.deepEqual(positions, [0]);
+});
+
 test('backpressure subscribes before rechecking and cancellation releases a blocked sender', async () => {
   const channel = new Channel(); channel.bufferedAmount = BUFFER_HIGH + 1;
   const original = channel.addEventListener.bind(channel);

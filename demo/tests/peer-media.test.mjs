@@ -62,6 +62,26 @@ test('repeated peer observer faults preserve discovery results and release every
   }
 });
 
+test('active projection keeps real per-instance progress/rate/prefix/buffer while authorized device names remain UI-only', async context => {
+  context.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] }); let clock = 100;
+  context.mock.method(performance, 'now', () => clock);
+  const h = setup(); await settle();
+  h.peer.publish({ peers: [{ peerId: 'source-private', name: '授权设备名称' }] });
+  const parent = mediaRuntime.startMedia(h.peer.observationScope, png.length, new AbortController().signal);
+  const attempt = mediaRuntime.startAttempt(parent, 'p2p', 'p2p_unknown', h.peer.observationScope);
+  const transfer = h.peer.createTransfer('private-transfer', media(), 'receive', 'source-private', 12000, new AbortController().signal, 0, attempt);
+  transfer.channel = { bufferedAmount: 123, readyState: 'connecting', close() {} };
+  const options = h.peer.options(transfer); options.position(10, 10); options.observe(10, 4, 0); options.position(20);
+  clock = 300; h.peer.publish();
+  let active = h.peer.snapshot().active[0]; assert.equal(active.durationMs, 200); assert.equal(active.payloadBytesPerSecond, 50); assert.equal(active.progressBytes, 20); assert.equal(active.resumeOffset, 10); assert.equal(active.payloadBytes, 10); assert.equal(active.bufferedAmount, 123);
+  const labels = h.peer.deviceLabels(); assert.equal(labels[0].name, '授权设备名称'); assert.equal(labels[0].alias, active.deviceAlias); assert.deepEqual(labels[0].channels, [active.alias]);
+  assert.doesNotMatch(JSON.stringify(h.peer.snapshot().active), /授权设备名称|source-private|private-transfer|[a-f0-9]{64}/);
+  monitor.clearHistory(); monitor.setDetailed(false); clock = 500; h.peer.publish(); active = h.peer.snapshot().active[0]; assert.equal(active.progressBytes, 20); assert.equal(active.payloadBytesPerSecond, 25);
+  options.position(png.length + 1); assert.equal(transfer.progressBytes, 20);
+  h.peer.invalidate(); assert.equal(h.peer.transfers.size, 0); context.mock.timers.tick(100); await settle(); assert.deepEqual(h.peer.snapshot().active, []); options.position(30); assert.equal(transfer.progressBytes, 20);
+  mediaRuntime.finishMedia(parent, 'cancelled');
+});
+
 test('Redis-disabled registration immediately keeps media on the cloud path', async () => {
   const h = setup({ respond(message, emit) { if (message.type === 'device.register') { emit({ type: 'device.registered', requestId: message.requestId, peerId: null, enabled: false, reason: 'Redis unavailable', heartbeatMs: 15000, leaseMs: 45000, inventoryRevision: 0, iceServers: [], turnEnabled: false }); return false; } } });
   await settle(); assert.equal(h.peer.snapshot().enabled, false); assert.equal(await h.peer.tryDownload(media(), new AbortController().signal), null);

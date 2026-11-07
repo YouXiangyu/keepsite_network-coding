@@ -10,8 +10,18 @@ const elapsed = (start: number | null) => { const end = mono(); return start !==
 type ErrorCode = NonNullable<Metadata['errorCode']>;
 type Outcome = 'completed' | 'failed' | 'cancelled';
 let activeHttp = 0;
+let nextRequest = 0;
+let currentSocket: SocketObservation | undefined;
+const requests = new Map<HttpObservation, string>();
+export interface ActiveHttpRequest { readonly alias: string; readonly template: HttpObservation['template']; readonly startedMs: number | null; readonly phase: 'requesting' | 'headers'; readonly status: number | null }
+export function httpActivity(): Readonly<{ total: number; omitted: number; requests: readonly ActiveHttpRequest[] }> {
+  const current = [...requests].filter(([request]) => !request.ended && networkMonitor.valid(request.scope));
+  const list = current.map(([request, alias]) => Object.freeze({ alias, template: request.template, startedMs: request.started,
+    phase: request.status === null ? 'requesting' as const : 'headers' as const, status: request.status }));
+  return Object.freeze({ total: activeHttp, omitted: Math.max(0, activeHttp - list.length), requests: Object.freeze(list) });
+}
 export function accountMonitoring(active: boolean) {
-  observe(() => { activeHttp = 0; if (active) networkMonitor.startAccount(); else networkMonitor.stopAccount(); });
+  observe(() => { activeHttp = 0; nextRequest = 0; requests.clear(); currentSocket = undefined; if (active) networkMonitor.startAccount(); else networkMonitor.stopAccount(); });
 }
 export function requestTemplate(path: string): NonNullable<Metadata['template']> {
   const route = path.split('?')[0];
@@ -35,6 +45,7 @@ export function startHttp(template: HttpObservation['template'], parent?: Operat
     const scope = networkMonitor.scope('http'); if (!scope) return;
     const operation = networkMonitor.beginOperation(scope, 'request', parent);
     const observation: HttpObservation = { scope, operation, template, started: mono(), status: null, ended: false };
+    if (requests.size < 32) requests.set(observation, 'request-' + ++nextRequest);
     activeHttp++; observe(() => networkMonitor.update(scope, 'api', { active: activeHttp, state: 'checking' }));
     if (operation) observe(() => networkMonitor.record(scope, { protocol: 'http', event: 'http.request', status: 'started', template }, operation));
     return observation;
@@ -58,6 +69,7 @@ export function httpHeaders(observation: HttpObservation | undefined, status: nu
 export function finishHttp(observation: HttpObservation | undefined, status: Outcome, errorCode?: ErrorCode) {
   observe(() => {
     if (!observation || observation.ended) return; observation.ended = true;
+    requests.delete(observation);
     if (!networkMonitor.valid(observation.scope)) return;
     activeHttp = Math.max(0, activeHttp - 1);
     try {
@@ -72,13 +84,18 @@ export function finishHttp(observation: HttpObservation | undefined, status: Out
   });
 }
 export interface SocketObservation {
-  scope: MonitorScope; operation?: OperationHandle; history: ExportLease | null; openedAt: number | null; lastMessage: number | null; ended: boolean;
+  scope: MonitorScope; operation?: OperationHandle; history: ExportLease | null; openedAt: number | null; openedMono: number | null; lastMessage: number | null; ended: boolean;
+}
+export function socketActivity() {
+  const socket = currentSocket;
+  return Object.freeze({ connectedDurationMs: socket && !socket.ended && networkMonitor.valid(socket.scope) ? elapsed(socket.openedMono) : null });
 }
 export function startSocket(timeouts?: { initialTimeoutMs: number; watchdogMs: number }): SocketObservation | undefined {
   return observe(() => {
     const scope = networkMonitor.replaceConnection('ws'); if (!scope) return;
     const operation = networkMonitor.beginOperation(scope, 'peer');
-    const observation: SocketObservation = { scope, operation, history: observe(() => networkMonitor.exportLease()) ?? null, openedAt: null, lastMessage: null, ended: false };
+    const observation: SocketObservation = { scope, operation, history: observe(() => networkMonitor.exportLease()) ?? null, openedAt: null, openedMono: null, lastMessage: null, ended: false };
+    currentSocket = observation;
     observe(() => networkMonitor.update(scope, 'websocket', { state: 'connecting', heartbeatConfiguredMs: null, diagnosticsVersion: null,
       initialTimeoutMs: timeouts?.initialTimeoutMs ?? null, watchdogMs: timeouts?.watchdogMs ?? null,
       retryDelayMs: null, retryAt: null, closeCode: null, errorCode: null }));
@@ -89,7 +106,8 @@ export function startSocket(timeouts?: { initialTimeoutMs: number; watchdogMs: n
 export function socketOpen(connection: SocketObservation | undefined) {
   observe(() => {
     if (!connection || connection.ended || !networkMonitor.valid(connection.scope)) return;
-    connection.openedAt = wall();
+    if (connection.openedAt === null) connection.openedAt = wall();
+    if (connection.openedMono === null) connection.openedMono = mono();
     networkMonitor.update(connection.scope, 'websocket', { state: 'open', connectedSince: connection.openedAt });
   });
 }

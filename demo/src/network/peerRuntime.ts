@@ -49,8 +49,10 @@ export function activePeerProjection(input: unknown): Readonly<ActivePeerTransfe
   const pick = <T extends string>(key: string, values: readonly T[]) => { const value = own(input, key); return member(value, values) ? value : null; };
   const count = (key: string) => { const value = own(input, key); return number(value, true) ? value : null; };
   const rtt = own(input, 'roundTripMs');
+  const duration = own(input, 'durationMs'), rate = own(input, 'payloadBytesPerSecond');
   return Object.freeze({ alias, direction, deviceAlias: typeof device === 'string' && /^device-[1-9][0-9]{0,14}$/.test(device) ? device : null,
     expectedBytes: count('expectedBytes'), payloadBytes: count('payloadBytes'), controlBytes: count('controlBytes'), discardedBytes: count('discardedBytes'), localVerifiedBytes: count('localVerifiedBytes'), sourceConfirmed: own(input, 'sourceConfirmed') === true,
+    progressBytes: count('progressBytes'), resumeOffset: count('resumeOffset'), bufferedAmount: count('bufferedAmount'), durationMs: number(duration) ? duration : null, payloadBytesPerSecond: number(rate) ? rate : null,
     pcState: pick('pcState', ['new', 'connecting', 'connected', 'disconnected', 'failed', 'closed'] as const),
     iceState: pick('iceState', ['new', 'checking', 'connected', 'completed', 'failed', 'disconnected', 'closed'] as const),
     dtlsState: pick('dtlsState', ['new', 'connecting', 'connected', 'closed', 'failed'] as const),
