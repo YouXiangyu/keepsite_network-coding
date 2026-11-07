@@ -1,5 +1,8 @@
 import { validateData, validMedia, validTicket, type Ticket, type MediaRef } from './data';
 import { bytesOf, validPeerEnvelope, type ClientPeerMessage, type PeerMessage } from './media/peerProtocol';
+import { accountMonitoring, finishHttp, httpHeaders, requestDiagnosticHeaders, requestTemplate, socketClose, socketError, socketMessage, socketOpen,
+  startHttp, startSocket, type SocketObservation } from './network/runtime';
+import { identifier as diagnosticIdentifier, readDiagnosticBody } from './network/serverTrace';
 
 export const API_BASE = '';
 export interface User { id: string; email: string; name: string }
@@ -52,7 +55,7 @@ export type Change = { cursor: number; type: 'upsert'; ticket: Ticket } | { curs
 export interface ChangePage { serverId: string; userId: string; fromCursor: number; nextCursor: number; headCursor: number; hasMore: boolean; changes: Change[]; capabilities: Capabilities }
 export interface SyncPosition { serverId: string; committedCursor: number | null }
 export interface MutationReceipt { serverId: string; operationId: string; committedCursor: number }
-export interface SyncHint { v: 1; type: 'sync.ready' | 'sync.hint'; serverId: string; userId: string; cursor: number }
+export interface SyncHint { v: 1; type: 'sync.ready' | 'sync.hint'; serverId: string; userId: string; cursor: number; heartbeatMs?: number; diagnosticsVersion?: number }
 export interface MediaAsset {
   assetId: string;
   url: string;
@@ -90,6 +93,7 @@ export function assertSessionEpoch(expected: number) {
 
 export function cancelSessionRequests() {
   epoch += 1;
+  accountMonitoring(false);
   for (const listener of sessionListeners) listener();
   for (const controller of pending) controller.abort();
   pending.clear();
@@ -98,6 +102,7 @@ export function installSession(session: AuthSession | null) {
   cancelSessionRequests();
   activeSession = null;
   activeSession = session?.authenticated ? requireSignedIn(session) : null;
+  if (activeSession) accountMonitoring(true);
 }
 export function onSessionExpired(listener: (event: SessionEnd) => void) {
   expiredListeners.add(listener);
@@ -128,13 +133,21 @@ function requireSignedIn(session: AuthSession): SignedInSession {
   return session as SignedInSession;
 }
 
-interface RequestOptions extends RequestInit { authenticated?: boolean; signedMedia?: boolean }
+interface RequestOptions extends RequestInit { authenticated?: boolean; signedMedia?: boolean; diagnosticCapture?: string }
 async function request<T>(path: string, options: RequestOptions, consume: (response: Response, signal: AbortSignal) => Promise<T>): Promise<T> {
-  const { authenticated = false, signedMedia = false, ...init } = options;
+  const { authenticated = false, signedMedia = false, diagnosticCapture, ...init } = options;
   if (signedMedia ? !validS3Url(path) : !path.startsWith('/api/') || path.includes('://')) throw new ApiError('请求地址无效。');
   if (authenticated && !activeSession) throw new ApiError('请先登录。', 401);
   const started = epoch;
   const headers = new Headers(init.headers);
+  const diagnostics = path.split('?')[0] === '/api/diagnostics/events';
+  const observation = activeSession && !signedMedia && !diagnostics ? startHttp(requestTemplate(path)) : undefined;
+  const oauth = /^\/api\/auth\/(?:google|account\/google)(?:\/|$)/.test(path.split('?')[0]);
+  requestDiagnosticHeaders(headers, observation, authenticated && !!activeSession && !signedMedia && !oauth && !diagnostics);
+  if (diagnostics) {
+    if (!authenticated || !diagnosticIdentifier(diagnosticCapture)) throw new ApiError('诊断会话无效。');
+    headers.set('X-Keepsite-Diagnostics', diagnosticCapture);
+  }
   if (!signedMedia && init.method && init.method !== 'GET') {
     headers.set('X-Keepsite-Client', 'web');
     if (activeSession) headers.set('X-CSRF-Token', activeSession.csrfToken);
@@ -149,19 +162,22 @@ async function request<T>(path: string, options: RequestOptions, consume: (respo
   const abort = () => controller.abort();
   init.signal?.addEventListener('abort', abort, { once: true });
   if (init.signal?.aborted) abort();
-  const timeout = setTimeout(abort, path === '/api/media' ? 120000 : 30000);
+  let timedOut = false;
+  const timeout = setTimeout(() => { timedOut = true; abort(); }, path === '/api/media' ? 120000 : 30000);
   const checkActive = () => {
     if (started !== epoch || controller.signal.aborted) staleRequest();
   };
   const consumeRequest = async () => {
     checkActive();
-    const response = await fetch(path, { ...init, headers, ...(signedMedia ? { credentials: 'omit' as const, mode: 'cors' as const, referrerPolicy: 'no-referrer' as const, redirect: 'error' as const } : { credentials: 'same-origin' as const }), signal: controller.signal });
+    const response = await fetch(path, { ...init, headers, ...(signedMedia ? { credentials: 'omit' as const, mode: 'cors' as const, referrerPolicy: 'no-referrer' as const } : { credentials: 'same-origin' as const }), redirect: 'error', ...(diagnostics ? { cache: 'no-store' as const } : {}), signal: controller.signal });
     checkActive();
+    httpHeaders(observation, response.status);
     if (!response.ok) {
       if (signedMedia) throw new ApiError('云端图片读取失败。', response.status);
       let detail = `请求未成功（${response.status}），请重试。`;
       let code: string | undefined;
-      try {
+      if (diagnostics) { void response.body?.cancel().catch(() => {}); detail = '诊断暂时不可用。'; }
+      else try {
         const body = await response.json();
         if (typeof body.detail === 'string') detail = body.detail;
         else if (body.detail && typeof body.detail.message === 'string') { detail = body.detail.message; if (typeof body.detail.code === 'string') code = body.detail.code; }
@@ -181,8 +197,13 @@ async function request<T>(path: string, options: RequestOptions, consume: (respo
   };
   try {
     // The deadline includes body consumption, even if a consumer ignores abort.
-    return await Promise.race([consumeRequest(), aborted]);
+    const value = await Promise.race([consumeRequest(), aborted]);
+    finishHttp(observation, 'completed');
+    return value;
   } catch (error) {
+    const cancelled = started !== epoch || init.signal?.aborted;
+    finishHttp(observation, cancelled ? 'cancelled' : 'failed', cancelled ? 'aborted' : timedOut ? 'timeout'
+      : error instanceof ApiError && error.status ? 'http' : error instanceof SyntaxError ? 'invalid' : 'network');
     if (error instanceof ApiError) throw error;
     if (started !== epoch || init.signal?.aborted) staleRequest();
     throw new ApiError(controller.signal.aborted ? '请求超时，结果尚未确认，当前草稿仍保留，请重试。' : '暂时无法连接服务，请稍后重试。');
@@ -196,6 +217,20 @@ async function request<T>(path: string, options: RequestOptions, consume: (respo
 }
 function jsonRequest<T>(path: string, options: RequestOptions = {}) {
   return request<T>(path, options, response => response.json());
+}
+async function diagnosticRequest(captureId: string, signal: AbortSignal, method = 'GET') {
+  return request<unknown>('/api/diagnostics/events' + (method === 'GET' ? '?after=0' : ''),
+    { authenticated: true, diagnosticCapture: captureId, method, signal }, async (response, requestSignal) => {
+      try { return await readDiagnosticBody(response, requestSignal); }
+      catch (error) { if (requestSignal.aborted) throw error; throw new ApiError('诊断响应无效。', 0, 'diagnostics_invalid'); }
+    });
+}
+export function getServerTrace(captureId: string, signal: AbortSignal) { return diagnosticRequest(captureId, signal); }
+export async function deleteServerTrace(captureId: string, expectedEpoch: number, signal: AbortSignal) {
+  assertSessionEpoch(expectedEpoch);
+  const result = await diagnosticRequest(captureId, signal, 'DELETE');
+  assertSessionEpoch(expectedEpoch);
+  if (!result || typeof result !== 'object' || Object.getOwnPropertyDescriptor(result, 'cleared')?.value !== true) throw new ApiError('诊断响应无效。', 0, 'diagnostics_invalid');
 }
 function jsonBody(body: unknown): RequestInit {
   return { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
@@ -319,11 +354,13 @@ export async function mutate(path: string, method = 'POST', body?: unknown): Pro
   return result;
 }
 export interface EventConnection { stop(): void; send(message: ClientPeerMessage): boolean }
-export function openSyncEvents(onMessage: (message: SyncHint | PeerMessage) => void, onClose: () => void): EventConnection {
+export function openSyncEvents(onMessage: (message: SyncHint | PeerMessage) => void, onClose: () => void, observation?: SocketObservation): EventConnection {
   const scope = epoch, user = activeSession?.user.id;
   if (!user) throw new ApiError('请先登录。', 401);
+  const connection = observation ?? startSocket();
   const url = new URL('/api/sync/events', window.location.origin); url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-  const socket = new WebSocket(url);
+  let socket: WebSocket;
+  try { socket = new WebSocket(url); } catch (error) { socketClose(connection, null, 'network'); throw error; }
   let closed = false;
   const current = () => !closed && scope === epoch && activeSession?.user.id === user;
   const message = (event: MessageEvent) => {
@@ -336,12 +373,15 @@ export function openSyncEvents(onMessage: (message: SyncHint | PeerMessage) => v
         if (bytesOf(event.data) > 4096 || !integer((value as SyncHint).cursor)) throw new Error();
       } else if (!validPeerEnvelope(value as PeerMessage) || bytesOf(event.data) > (value.type === 'peer.signal' && (value as PeerMessage).kind !== 'ice' ? 65536 : 4096)) throw new Error();
       if (value.type !== 'sync.ready' && value.type !== 'sync.hint') Object.defineProperty(value, 'wireBytes', { value: bytesOf(event.data), enumerable: false });
+      socketMessage(connection, value.type === 'sync.ready' || value.type === 'sync.hint' ? value.type : 'peer');
       onMessage(value);
-    } catch { socket.close(); }
+    } catch { socketClose(connection, null, 'invalid'); socket.close(); }
   };
-  const end = () => { if (current()) onClose(); };
-  socket.addEventListener('message', message); socket.addEventListener('close', end);
-  const stop = () => { if (closed) return; closed = true; socket.removeEventListener('message', message); socket.removeEventListener('close', end); socket.close(); unsubscribe(); };
+  const open = () => { if (current()) socketOpen(connection); };
+  const error = () => { if (current()) socketError(connection); };
+  const end = (event: CloseEvent) => { if (current()) { socketClose(connection, event.code); onClose(); } };
+  socket.addEventListener('message', message); socket.addEventListener('close', end); socket.addEventListener('open', open); socket.addEventListener('error', error);
+  const stop = () => { if (closed) return; closed = true; socket.removeEventListener('message', message); socket.removeEventListener('close', end); socket.removeEventListener('open', open); socket.removeEventListener('error', error); socketClose(connection); socket.close(); unsubscribe(); };
   const unsubscribe = onSessionChanged(stop);
   return { stop, send: message => {
     if (!current() || socket.readyState !== WebSocket.OPEN) return false;

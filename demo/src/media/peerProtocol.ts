@@ -15,7 +15,7 @@ export interface PeerMessage {
   media?: PeerAsset; fromPeerId?: string; kind?: SignalKind; payload?: SignalPayload; code?: string; message?: string;
 }
 export interface ClientPeerMessage { v: 1; type: string; requestId: string; [key: string]: unknown }
-export interface EventConnectionState { connected: boolean; serverId: string; generation: number }
+export interface EventConnectionState { connected: boolean; serverId: string; generation: number; diagnosticsVersion?: 1 }
 export interface AccountEventPort {
   eventState(): EventConnectionState;
   subscribeConnection(listener: () => void): () => void;

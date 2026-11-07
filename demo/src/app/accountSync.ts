@@ -1,15 +1,18 @@
 import { ApiError, assertSessionEpoch, errorMessage, getChanges, getSnapshotPage, openSyncEvents, sessionEpoch, type Capabilities, type ChangePage, type SnapshotPage, type SyncHint, type EventConnection } from '../api';
 import type { AppData, Ticket } from '../data';
 import type { AccountEventPort, ClientPeerMessage, EventConnectionState, PeerMessage } from '../media/peerProtocol';
+import { finishPull, socketClose, socketReady, socketRetry, startPull, startSocket, startSync, stopSocket, stopSync, syncRetry, syncWatermark,
+  type PullObservation, type SocketObservation, type SyncObservation } from '../network/runtime';
 
 export interface SyncView { data: AppData; ready: boolean; rebuilding: boolean; error: string; connected: boolean; cursor: number; serverId: string; capabilities?: Capabilities }
 export interface SyncTransport {
   snapshot: (token: string | null, signal: AbortSignal) => Promise<SnapshotPage>;
   changes: (serverId: string, after: number, signal: AbortSignal) => Promise<ChangePage>;
-  events: (hint: (value: SyncHint | PeerMessage) => void, close: () => void) => EventConnection;
+  events: (hint: (value: SyncHint | PeerMessage) => void, close: () => void, observation?: SocketObservation) => EventConnection;
 }
 const defaultTransport: SyncTransport = { snapshot: getSnapshotPage, changes: getChanges, events: openSyncEvents };
 const abortError = () => new DOMException('同步已取消。', 'AbortError');
+const INITIAL_READY_TIMEOUT_MS = 8000, HEARTBEAT_WATCHDOG_MS = 45000;
 
 export class AccountSync implements AccountEventPort {
   private view: SyncView = { data: { tickets: [] }, ready: false, rebuilding: false, error: '', connected: false, cursor: 0, serverId: '' };
@@ -23,11 +26,14 @@ export class AccountSync implements AccountEventPort {
   private completed = 0;
   private pull: Promise<void> | null = null;
   private request: AbortController | null = null;
-  private socket: { stop: () => void; send: (message: ClientPeerMessage) => boolean; ready: boolean; serverId: string } | null = null;
+  private socket: { stop: () => void; send: (message: ClientPeerMessage) => boolean; ready: boolean; retired: boolean; serverId: string; diagnosticsVersion?: 1 } | null = null;
+  private monitoring?: SyncObservation;
+  private latestSocketObservation?: SocketObservation;
   private connectionGeneration = 0;
   private connectionListeners = new Set<() => void>();
   private eventListeners = new Set<(message: PeerMessage) => void>();
-  eventState = (): EventConnectionState => ({ connected: !!this.socket?.ready && this.view.ready && this.socket.serverId === this.view.serverId, serverId: this.socket?.serverId ?? '', generation: this.connectionGeneration });
+  eventState = (): EventConnectionState => ({ connected: !!this.socket?.ready && !this.socket.retired && this.view.ready && this.socket.serverId === this.view.serverId, serverId: this.socket?.serverId ?? '', generation: this.connectionGeneration,
+    ...(this.socket?.ready && !this.socket.retired && this.socket.diagnosticsVersion === 1 ? { diagnosticsVersion: 1 as const } : {}) });
   subscribeConnection = (listener: () => void) => { this.connectionListeners.add(listener); return () => { this.connectionListeners.delete(listener); }; };
   subscribeEvents = (listener: (message: PeerMessage) => void) => { this.eventListeners.add(listener); return () => { this.eventListeners.delete(listener); }; };
   sendEvent = (message: ClientPeerMessage) => this.eventState().connected && !!this.socket?.send(message);
@@ -43,11 +49,14 @@ export class AccountSync implements AccountEventPort {
   private guard(generation = this.generation) { assertSessionEpoch(this.scope); if (!this.running || generation !== this.generation) throw abortError(); }
   start() {
     this.stop(); this.running = true; this.scope = sessionEpoch(); this.retryDelay = 1000;
+    this.monitoring = startSync();
     this.connect(); this.background(true);
   }
   stop() {
     this.running = false; this.generation++; this.request?.abort(); this.request = null; this.pull = null;
     this.socket?.stop(); this.socket = null; clearTimeout(this.timer); clearTimeout(this.watchdog); this.timer = undefined; this.watchdog = undefined;
+    stopSocket(this.latestSocketObservation); this.latestSocketObservation = undefined;
+    stopSync(this.monitoring); this.monitoring = undefined;
     this.desiredCursor = this.view.cursor; this.requested = this.completed = 0;
     this.connectionGeneration++; for (const listener of this.connectionListeners) listener();
   }
@@ -57,32 +66,38 @@ export class AccountSync implements AccountEventPort {
     this.publish({ error: errorMessage(error), rebuilding: false });
   }
   private background(force: boolean, target = 0) {
-    void this.catchUp(target, force).then(() => { if (this.socket?.ready) this.retryDelay = 1000; }).catch(error => { this.report(error); this.scheduleReconnect(); });
+    void this.catchUp(target, force).then(() => { if (this.socket?.ready) this.retryDelay = 1000; }).catch(error => { this.report(error); this.scheduleReconnect(this.monitoring, this.latestSocketObservation); });
   }
   refresh = () => { if (this.running) { this.background(true); if (!this.socket) this.connect(); } };
-  private scheduleReconnect() {
+  private scheduleReconnect(monitoring: SyncObservation | undefined, observation: SocketObservation | undefined) {
     if (!this.running || this.timer) return;
     const generation = this.generation;
+    syncRetry(monitoring, this.retryDelay);
+    if (!this.socket) socketRetry(observation, this.retryDelay);
     this.timer = setTimeout(() => {
       this.timer = undefined;
       try { this.guard(generation); } catch { return; }
+      syncRetry(monitoring, null);
       this.background(true); this.connect();
       this.retryDelay = Math.min(30000, this.retryDelay * 2);
     }, this.retryDelay);
   }
   private connect() {
     if (!this.running || this.socket) return;
-    const generation = this.generation, socket = { stop: () => {}, send: (_message: ClientPeerMessage) => false, ready: false, serverId: '' };
+    const generation = this.generation, monitoring = this.monitoring,
+      socket = { stop: () => {}, send: (_message: ClientPeerMessage) => false, ready: false, retired: false, serverId: '', diagnosticsVersion: undefined as 1 | undefined };
+    const observation = startSocket({ initialTimeoutMs: INITIAL_READY_TIMEOUT_MS, watchdogMs: HEARTBEAT_WATCHDOG_MS }); this.latestSocketObservation = observation;
     this.connectionGeneration++;
     this.socket = socket;
-    const close = () => {
+    const close = (reason?: 'timeout' | 'invalid') => {
       if (this.socket !== socket || generation !== this.generation || !this.running) return;
+      socketClose(observation, null, reason);
       socket.stop(); this.socket = null; clearTimeout(this.watchdog);
-      this.publish({ connected: false }); this.scheduleReconnect();
+      this.publish({ connected: false }); this.scheduleReconnect(monitoring, observation);
     };
     try {
       const connection = this.transport.events(value => {
-        if (this.socket !== socket || generation !== this.generation || !this.running) return;
+        if (this.socket !== socket || socket.retired || generation !== this.generation || !this.running) return;
         try { this.guard(generation); } catch { return; }
         if (value.type !== 'sync.ready' && value.type !== 'sync.hint') {
           if (value.serverId !== socket.serverId || value.userId !== this.userId || !this.eventState().connected) return;
@@ -90,23 +105,26 @@ export class AccountSync implements AccountEventPort {
           return;
         }
         const hint = value as SyncHint;
-        if (hint.userId !== this.userId) { close(); return; }
+        if (hint.userId !== this.userId) { close('invalid'); return; }
         const wasReady = socket.ready;
-        socket.ready = true; socket.serverId = hint.serverId; clearTimeout(this.watchdog); this.watchdog = setTimeout(close, 45000);
-        if (!wasReady) { this.retryDelay = 1000; clearTimeout(this.timer); this.timer = undefined; }
+        socket.ready = true; socket.serverId = hint.serverId; socket.diagnosticsVersion = hint.diagnosticsVersion === 1 ? 1 : undefined;
+        socketReady(observation, hint.heartbeatMs, hint.diagnosticsVersion);
+        clearTimeout(this.watchdog); this.watchdog = setTimeout(() => close('timeout'), HEARTBEAT_WATCHDOG_MS);
+        if (!wasReady) { this.retryDelay = 1000; clearTimeout(this.timer); this.timer = undefined; syncRetry(monitoring, null); }
         this.publish({ connected: true });
-        if (this.view.serverId && this.view.serverId !== hint.serverId) { close(); this.needSnapshot = true; this.desiredCursor = 0; this.request?.abort(); this.background(true); }
-        else if (!wasReady || !this.view.ready || this.needSnapshot || this.view.error || hint.cursor > this.view.cursor) this.background(!wasReady || !!this.view.error, hint.cursor);
-      }, close);
+        if (this.view.serverId && this.view.serverId !== hint.serverId) { close(); this.monitoring = startSync(); this.needSnapshot = true; this.desiredCursor = 0; this.request?.abort(); this.background(true); }
+        else { syncWatermark(monitoring, hint.cursor); if (!wasReady || !this.view.ready || this.needSnapshot || this.view.error || hint.cursor > this.view.cursor) this.background(!wasReady || !!this.view.error, hint.cursor); }
+      }, () => close(), observation);
       socket.stop = connection.stop; socket.send = connection.send;
-      if (!socket.ready) this.watchdog = setTimeout(close, 8000);
+      if (!socket.ready) this.watchdog = setTimeout(() => close('timeout'), INITIAL_READY_TIMEOUT_MS);
     } catch { close(); }
   }
   async catchUp(target = 0, force = true, expectedServer?: string): Promise<AppData> {
     this.guard();
     const generation = this.generation;
     if (expectedServer && this.view.serverId && expectedServer !== this.view.serverId) {
-      this.needSnapshot = true; this.desiredCursor = 0; this.request?.abort(); force = true;
+      if (this.socket) this.socket.retired = true;
+      this.monitoring = startSync(); this.needSnapshot = true; this.desiredCursor = 0; this.request?.abort(); force = true;
     }
     this.desiredCursor = Math.max(this.desiredCursor, target);
     const requested = force ? ++this.requested : this.requested;
@@ -115,7 +133,7 @@ export class AccountSync implements AccountEventPort {
         const task = this.drain(generation);
         this.pull = task;
         void task.finally(() => { if (this.pull === task) this.pull = null; }).catch(error => {
-          if (generation === this.generation && this.running && !(error instanceof DOMException && error.name === 'AbortError')) { this.report(error); this.scheduleReconnect(); }
+          if (generation === this.generation && this.running && !(error instanceof DOMException && error.name === 'AbortError')) { this.report(error); this.scheduleReconnect(this.monitoring, this.latestSocketObservation); }
         });
       }
       let unsubscribe = () => {};
@@ -155,12 +173,17 @@ export class AccountSync implements AccountEventPort {
       this.guard(generation);
       if (++passes > 256) throw new ApiError('同步积压较多，请稍后继续核对。');
       const serial = this.requested, controller = new AbortController(); this.request = controller;
+      let snapshotObservation: PullObservation | undefined, deltaObservation: PullObservation | undefined;
       try {
         const replacing = this.needSnapshot || !this.view.ready;
         if (replacing) this.publish({ rebuilding: true });
+        if (replacing) snapshotObservation = startPull(this.monitoring, 'snapshot');
         const baseline = replacing ? await this.fullSnapshot(controller.signal, generation)
           : { tickets: new Map(this.view.data.tickets.map(ticket => [ticket.id, ticket])), cursor: this.view.cursor, serverId: this.view.serverId, capabilities: this.view.capabilities! };
         this.guard(generation); if (controller.signal.aborted) throw abortError();
+        const snapshotCount = baseline.tickets.size;
+        deltaObservation = startPull(this.monitoring, 'delta');
+        let changeCount = 0;
         let page: ChangePage;
         let calibrationHead: number | null = null;
         do {
@@ -178,22 +201,33 @@ export class AccountSync implements AccountEventPort {
           }
           if (page.nextCursor !== baseline.cursor || page.hasMore && !page.changes.length) throw new ApiError('增量没有完整前进。', 410, 'cursor_gap');
           baseline.capabilities = page.capabilities;
+          changeCount += page.changes.length;
         } while (page.hasMore && baseline.cursor < calibrationHead);
         this.needSnapshot = false; this.completed = serial;
         this.publish({ data: { tickets: [...baseline.tickets.values()] }, cursor: baseline.cursor, serverId: baseline.serverId, capabilities: baseline.capabilities, ready: true, rebuilding: false, error: '' });
-        if (this.socket?.serverId && this.socket.serverId !== baseline.serverId) {
+        const applied = { cursor: baseline.cursor, head: page.headCursor, pending: page.hasMore || this.desiredCursor > baseline.cursor };
+        finishPull(snapshotObservation, 'completed', { ...applied, count: snapshotCount });
+        finishPull(deltaObservation, 'completed', { ...applied, count: changeCount });
+        if (this.socket && (this.socket.retired || this.socket.serverId && this.socket.serverId !== baseline.serverId)) {
           const old = this.socket; this.socket = null; old.stop(); clearTimeout(this.watchdog);
           this.publish({ connected: false }); this.connect();
         }
         if (this.desiredCursor > page.headCursor && !page.changes.length) { if (++stagnant > 2) throw new ApiError('同步水位尚未追上提示，请稍后重试。'); } else stagnant = 0;
         if (page.hasMore) this.desiredCursor = Math.max(this.desiredCursor, page.headCursor);
       } catch (error) {
+        const status = controller.signal.aborted || error instanceof DOMException && error.name === 'AbortError' ? 'cancelled' : 'failed';
+        const errorCode = error instanceof ApiError && ['cursor_gap', 'cursor_expired', 'cursor_ahead', 'server_changed', 'snapshot_expired'].includes(error.code ?? '') ? 'invalid' : 'unknown';
+        finishPull(snapshotObservation, status, undefined, errorCode); finishPull(deltaObservation, status, undefined, errorCode);
         this.guard(generation);
         if (error instanceof ApiError && error.status === 410 && ++restarts <= 3 || controller.signal.aborted && this.needSnapshot && ++restarts <= 3) {
+          if (error instanceof ApiError && error.code === 'server_changed') {
+            if (this.socket) this.socket.retired = true;
+            this.monitoring = startSync();
+          }
           this.needSnapshot = true; this.desiredCursor = 0; continue;
         }
         throw error;
-      } finally { if (this.request === controller) this.request = null; }
+      } finally { finishPull(snapshotObservation, 'cancelled'); finishPull(deltaObservation, 'cancelled'); if (this.request === controller) this.request = null; }
     } while (this.needSnapshot || this.completed < this.requested || this.view.cursor < this.desiredCursor);
   }
 }
