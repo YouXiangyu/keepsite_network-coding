@@ -14,6 +14,7 @@ from .store import StoreError
 from .sync_notifications import MAX_MESSAGE_BYTES
 from .peer_contracts import PeerProtocolError, parse_message
 from .peer_registry import RegistryError
+from .diagnostics import safe, span, using
 
 SEND_TIMEOUT_SECONDS = 5
 
@@ -46,12 +47,15 @@ def install_sync_socket(app, hub, auth_service, peer_service=None):
             await authorize()
             if subscription.close_code is not None:
                 raise SocketEnd(subscription.close_code)
-            cursor = subscription.cursor
+            cursor, coalesced, trace_unknown = subscription.take_hint()
             raw = json.dumps({"v": 1, "type": kind, "serverId": hub.server_id,
-                "userId": subscription.user_id, "cursor": cursor}, ensure_ascii=False, separators=(",", ":"))
+                "userId": subscription.user_id, "cursor": cursor,
+                "heartbeatMs": round(hub.heartbeat_seconds * 1000), "diagnosticsVersion": 1}, ensure_ascii=False, separators=(",", ":"))
             if len(raw.encode()) > MAX_MESSAGE_BYTES:
                 raise SocketEnd(1011)
-            await asyncio.wait_for(socket.send_text(raw), SEND_TIMEOUT_SECONDS)
+            ref = safe(hub.store.diagnostics.recall, "cursor", subscription.user_id, cursor) if kind == "sync.hint" and cursor > sent_cursor and not trace_unknown else None
+            with using(ref), span("ws.hint" if kind == "sync.hint" else "ws.ready", coalesced=coalesced):
+                await asyncio.wait_for(socket.send_text(raw), SEND_TIMEOUT_SECONDS)
             sent_cursor = cursor
 
         async def writer():

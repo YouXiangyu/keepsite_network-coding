@@ -19,6 +19,7 @@ from redis.retry import Retry
 
 from .contracts import FIELD_NAMES, Identifier, TicketFields
 from .posters import validate_source
+from .diagnostics import span
 
 log = logging.getLogger(__name__)
 FORMAT_VERSION = 1
@@ -153,7 +154,8 @@ class RedisSharedState:
         if self.client is None:
             return None
         try:
-            raw = self.client.get(self.snapshot_key(user_id, server_id, revision, storage_identity))
+            with span("redis.snapshot.read"):
+                raw = self.client.get(self.snapshot_key(user_id, server_id, revision, storage_identity))
             if not isinstance(raw, (bytes, str)) or len(raw) > MAX_SNAPSHOT_BYTES:
                 return None
             envelope = _decode(raw)
@@ -174,7 +176,8 @@ class RedisSharedState:
                              ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()
             if len(raw) > MAX_SNAPSHOT_BYTES:
                 return False
-            return bool(self.client.set(key, raw, ex=self.ttl_seconds))
+            with span("redis.snapshot.write"):
+                return bool(self.client.set(key, raw, ex=self.ttl_seconds))
         except (RedisError, OSError, UnicodeError, ValueError, TypeError, RecursionError):
             return False
 

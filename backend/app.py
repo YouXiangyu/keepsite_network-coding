@@ -20,6 +20,8 @@ from .store import Store, StoreError, require_schema3_root
 from .shared_state import RedisSharedState
 from .processing import ProcessingWorker
 from .sync_http import SyncHTTP, SyncError
+from .diagnostics import safe
+from .diagnostics_http import install_diagnostics
 
 ROOT = Path(__file__).resolve().parents[1]
 log = logging.getLogger(__name__)
@@ -39,6 +41,8 @@ def create_app(data_dir: Path | None = None, *, auth_provider=None, object_store
 
     @asynccontextmanager
     async def lifespan(app):
+        diagnostics_unsubscribe = safe(app.state.auth.subscribe_revocations, lambda key: safe(store.diagnostics.revoke, key))
+        store.diagnostics.enabled = diagnostics_unsubscribe is not None
         try:
             await sync_hub.start()
             await peer_service.start()
@@ -62,6 +66,9 @@ def create_app(data_dir: Path | None = None, *, auth_provider=None, object_store
                         await sync_hub.stop()
                 finally:
                     sync_http.close()
+                    safe(store.diagnostics.close)
+                    if diagnostics_unsubscribe is not None:
+                        safe(diagnostics_unsubscribe)
                     try:
                         await run_in_threadpool(shared_state.close)
                     finally:
@@ -72,6 +79,8 @@ def create_app(data_dir: Path | None = None, *, auth_provider=None, object_store
     app.state.shared_state, app.state.upload_recovery = shared_state, recovery
     app.state.processing_worker = processing
     app.state.sync_http = sync_http
+    app.state.diagnostics = store.diagnostics
+    store.diagnostics.instrumented.update({"sql", "redis", "ws", "s3", "worker", "p2p"})
 
     @app.exception_handler(SyncError)
     async def synchronization_error(request, error):
@@ -110,6 +119,7 @@ def create_app(data_dir: Path | None = None, *, auth_provider=None, object_store
         return response
 
     install_routes(app, store, sync_http)
+    install_diagnostics(app, store.diagnostics)
     if auth_provider is None:
         from .auth import install_auth
         auth_provider = install_auth

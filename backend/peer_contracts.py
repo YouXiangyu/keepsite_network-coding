@@ -1,6 +1,7 @@
 """Strict, bounded v1 control messages for optional same-account peer transfer."""
 import json
 import re
+from .diagnostics import identifier as diagnostic_id
 
 MAX_FRAME_BYTES = 65536
 MAX_CONTROL_BYTES = 4096
@@ -72,6 +73,7 @@ def parse_message(raw):
         raise PeerProtocolError(1009 if size > MAX_CONTROL_BYTES else 1008) from None
     if not isinstance(body, dict):
         raise PeerProtocolError()
+    diagnostic = body.pop("diagnostics", None)
     kind = body.get("type")
     if kind != "peer.signal" and size > MAX_CONTROL_BYTES:
         raise PeerProtocolError(1009)
@@ -110,4 +112,7 @@ def parse_message(raw):
                 valid = False
     if not valid:
         raise PeerProtocolError()
+    if (isinstance(diagnostic, dict) and set(diagnostic) == {"captureId", "traceId"}
+            and diagnostic_id(diagnostic.get("captureId")) and diagnostic_id(diagnostic.get("traceId"))):
+        body["diagnostics"] = diagnostic
     return body
