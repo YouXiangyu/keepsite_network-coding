@@ -5,6 +5,18 @@ import io.github.youxiangyu.keepsite.core.DeviceView
 import io.github.youxiangyu.keepsite.core.MediaRef
 import io.github.youxiangyu.keepsite.core.PeerView
 import io.github.youxiangyu.keepsite.core.TransferView
+import io.github.youxiangyu.keepsite.core.MediaAttempt
+import io.github.youxiangyu.keepsite.core.NetworkDiagnostics
+import io.github.youxiangyu.keepsite.core.NetworkMonitor
+import io.github.youxiangyu.keepsite.core.MonitorError
+import io.github.youxiangyu.keepsite.core.MonitorEvent
+import io.github.youxiangyu.keepsite.core.MonitorStatus
+import io.github.youxiangyu.keepsite.core.MonitorRoute
+import io.github.youxiangyu.keepsite.core.MonitorRtcState
+import io.github.youxiangyu.keepsite.core.MonitorValues
+import io.github.youxiangyu.keepsite.core.diagnostic
+import io.github.youxiangyu.keepsite.core.PeerCommand
+import io.github.youxiangyu.keepsite.core.PeerTransferLive
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.Closeable
@@ -28,22 +40,47 @@ class NativePeer internal constructor(
     private val cache: PeerCache,
     private val onChanged: (PeerView) -> Unit,
     private val rtc: RtcFactory,
+    private val diagnostics: NetworkDiagnostics? = null,
+    private val diagnosticAccount: NetworkMonitor.Account? = null,
+    private val expectedEpoch: Long = 0,
     private val now: () -> Long = { System.nanoTime() / 1_000_000 },
 ) : Closeable {
-    constructor(context: Context, userId: String, port: EventPort, cache: PeerCache, onChanged: (PeerView) -> Unit) :
-        this(userId, port, cache, onChanged, AndroidRtcFactory(context.applicationContext))
+    constructor(context: Context, userId: String, port: EventPort, cache: PeerCache, diagnostics: NetworkDiagnostics? = null,
+                diagnosticAccount: NetworkMonitor.Account? = null, expectedEpoch: Long = 0, onChanged: (PeerView) -> Unit) :
+        this(userId, port, cache, onChanged, AndroidRtcFactory(context.applicationContext), diagnostics, diagnosticAccount, expectedEpoch)
+    private val observation = diagnostics?.peer(diagnosticAccount, expectedEpoch)
 
     private data class Pending(
         val expected: String, val deadline: Long, val owner: String?,
-        val success: (JSONObject) -> Unit, val failure: (String) -> Unit,
+        val success: (JSONObject) -> Unit, val failure: (String) -> Unit, val observation: PeerCommand?,
     )
-    private class Download(val media: MediaRef, val cancelled: () -> Boolean, val deadline: Long) {
+    private class Download(val media: MediaRef, val cancelled: () -> Boolean, val deadline: Long, val observation: MediaAttempt?) {
         val id = UUID.randomUUID().toString()
         val aborted = AtomicBoolean(false)
         val result = CompletableFuture<PeerDownload?>()
         private val prefixStorage = lazy { ReceivePrefix(media.size.toInt()) }
         val prefix get() = prefixStorage.value
-        fun clearPrefix() { if (prefixStorage.isInitialized()) prefixStorage.value.clear() }
+        private var prefixRoute = "unknown"
+        private var prefixRouteBytes = 0L
+        fun clearPrefix() {
+            if (prefixStorage.isInitialized()) prefixStorage.value.clear()
+            prefixRoute = "unknown"; prefixRouteBytes = 0
+        }
+        fun assembledRoute(route: String, payloadBytes: Long): String {
+            if (prefixRouteBytes + payloadBytes != prefix.offset.toLong()) return "unknown"
+            val suffix = route.takeIf { it in setOf("direct", "relay", "mixed") } ?: "unknown"
+            return when {
+                prefixRouteBytes == 0L -> if (payloadBytes > 0) suffix else "unknown"
+                payloadBytes == 0L -> prefixRoute
+                prefixRoute == "unknown" || suffix == "unknown" -> "unknown"
+                prefixRoute == suffix -> prefixRoute
+                else -> "mixed"
+            }
+        }
+        fun retainPrefix(route: String, payloadBytes: Long) {
+            prefixRoute = assembledRoute(route, payloadBytes)
+            prefixRouteBytes = prefix.offset.toLong()
+        }
         var source = ""
         var opening = false
         var resumedBytes = 0L
@@ -84,6 +121,21 @@ class NativePeer internal constructor(
         var completionUntil = Long.MAX_VALUE
         var completionTask: java.util.concurrent.ScheduledFuture<*>? = null
         var payloadBytes = 0L
+        var observation: MediaAttempt? = null
+        var statsPending = false
+        var statsGeneration = 0L
+        var nextStatsAt = 0L
+        var statsCompletion: (() -> Unit)? = null
+        var liveObservation: PeerTransferLive? = null
+        var controlBytes = 0L
+        var discardedBytes = 0L
+        var sample = RtcSample()
+        var statsAt: Long? = null
+        var iceState = MonitorRtcState.UNKNOWN
+        var pcState = MonitorRtcState.UNKNOWN
+        val pendingIce = java.util.concurrent.atomic.AtomicReference<MonitorRtcState?>()
+        val pendingPc = java.util.concurrent.atomic.AtomicReference<MonitorRtcState?>()
+        val stateQueued = AtomicBoolean(false)
     }
 
     private val closed = AtomicBoolean(false)
@@ -185,10 +237,11 @@ class NativePeer internal constructor(
     }
 
     /** Only call from a media worker. A closed account lifetime never returns a cloud-fallback result. */
-    fun fetch(media: MediaRef, cancelled: () -> Boolean): PeerDownload? {
+    fun fetch(media: MediaRef, observation: MediaAttempt? = null, cancelled: () -> Boolean): PeerDownload? {
         if (closed.get() || cancelled()) throw CancellationException("设备读取已取消")
         require(PeerJson.valid(media))
-        val request = Download(media, cancelled, now() + PeerWire.ATTEMPT_MS)
+        observation?.read(0)
+        val request = Download(media, cancelled, now() + PeerWire.ATTEMPT_MS, observation)
         post {
             if (!ready() || occupied() >= 2) { request.clearPrefix(); request.result.complete(null); return@post }
             downloads[request.id] = request; dirty = true
@@ -197,6 +250,7 @@ class NativePeer internal constructor(
                     if (!active(request)) { finish(request, null); return@rpc }
                     require(PeerJson.text(reply, "assetId", 64) == media.assetId)
                     val peers = PeerJson.array(reply, "peers", 8)
+                    this.observation?.event(MonitorEvent.DISCOVERY, MonitorStatus.COMPLETED, MonitorValues(items = peers.length().toLong()))
                     for (index in 0 until peers.length()) {
                         val id = PeerJson.token(peers.getJSONObject(index), "peerId")
                         if (id != peerId) { request.source = id; break }
@@ -265,24 +319,37 @@ class NativePeer internal constructor(
             }
             if (!PeerJson.flag(reply, "enabled")) { reset("设备服务暂不可用", false); registerAt = now() + 2000; return@rpc }
             peerId = PeerJson.token(reply, "peerId"); peerUntil = now() + 45000
+            observation?.event(MonitorEvent.REGISTRATION, MonitorStatus.COMPLETED)
             inventoryRevision = PeerJson.number(reply, "inventoryRevision")
             advertised = emptySet(); replaceRequired = true; inventoryDirty = true; inventoryAt = now()
             heartbeatAt = now() + 15000; listAt = now(); error = ""; dirty = true
         }, failure = { registering = false; error = errorMessage(it); registerAt = now() + 2000; dirty = true })
     }
 
-    private fun send(kind: String, fields: JSONObject = JSONObject(), requestId: String = UUID.randomUUID().toString()): Boolean {
+    private fun send(kind: String, fields: JSONObject = JSONObject(), requestId: String = UUID.randomUUID().toString(),
+                     command: PeerCommand? = null, rpc: Boolean = false, parent: NetworkMonitor.Operation? = null): Boolean {
         val message = obj("v" to 1, "type" to kind, "requestId" to requestId)
         fields.keys().forEach { key -> message.put(key, fields.get(key)) }
         val maximum = if (kind == "peer.signal" && fields.optString("kind") != "ice") 65536 else 4096
-        return message.toString().toByteArray(Charsets.UTF_8).size <= maximum && port.send(message)
+        val span = if (rpc) command else observation?.command(kind, generation, parent, kind == "peer.signal" && fields.optString("kind") == "ice")
+        try {
+            val allowed = message.toString().toByteArray(Charsets.UTF_8).size <= maximum
+            val sent = allowed && port.send(message, span)
+            if (!allowed) span?.failed(MonitorError.CAPACITY)
+            if (!rpc) { if (sent) span?.complete() else span?.failed(MonitorError.UNAVAILABLE) }
+            return sent
+        } catch (failure: Throwable) { span?.failed(MonitorError.UNKNOWN); throw failure }
+        finally { if (!rpc) span?.close() }
     }
     private fun rpc(kind: String, fields: JSONObject, expected: String, owner: String? = null,
         success: (JSONObject) -> Unit, failure: (String) -> Unit) {
         if (pending.size >= 64) { failure("capacity"); return }
         val id = UUID.randomUUID().toString()
-        pending[id] = Pending(expected, now() + 3000, owner, success, failure)
-        if (!send(kind, fields, id)) { pending.remove(id); failure("unavailable") }
+        val parent = downloads[owner]?.observation?.operation ?: transfers[owner]?.observation?.operation
+        val span = observation?.command(kind, generation, parent, kind == "peer.signal" && fields.optString("kind") == "ice")
+        pending[id] = Pending(expected, now() + 3000, owner, success, failure, span)
+        try { if (!send(kind, fields, id, span, rpc = true)) { pending.remove(id); span?.failed(MonitorError.UNAVAILABLE); span?.close(); failure("unavailable") } }
+        catch (failure: Throwable) { span?.failed(MonitorError.UNKNOWN); span?.close(); throw failure }
     }
     private fun message(body: JSONObject) {
         require(PeerJson.number(body, "v", 1, 1) == 1L)
@@ -291,8 +358,17 @@ class NativePeer internal constructor(
         val request = body.optString("requestId")
         val waiting = pending[request]
         if (waiting != null) {
-            if (kind == "peer.error") { pending.remove(request); waiting.failure(PeerJson.text(body, "code", 40)); return }
-            if (kind == waiting.expected) { pending.remove(request); waiting.success(body); return }
+            if (kind == "peer.error") {
+                pending.remove(request); waiting.observation?.failed(MonitorError.UNAVAILABLE); waiting.observation?.close()
+                waiting.failure(PeerJson.text(body, "code", 40)); return
+            }
+            if (kind == waiting.expected) {
+                pending.remove(request)
+                try { waiting.success(body); waiting.observation?.complete() }
+                catch (failure: Throwable) { waiting.observation?.failed(MonitorError.PROTOCOL); throw failure }
+                finally { waiting.observation?.close() }
+                return
+            }
         }
         if (kind == "device.registered" && !body.optBoolean("enabled", false)) { reset("设备服务暂不可用", false); return }
         if (kind == "peer.request") { sourceRequest(body); return }
@@ -438,7 +514,15 @@ class NativePeer internal constructor(
     }
     private fun installPeer(transfer: Transfer) {
         transfer.progressAt = now()
+        transfer.observation = observation?.transfer(transfer.download?.observation, transfer.other, transfer.media.size, transfer.source)
+        transfer.liveObservation = observation?.live(transfer.other, transfer.media.size, transfer.source, transfer.observation?.operation?.id)
         transfer.pc = rtc.create(object : RtcPeer.Listener {
+            override fun state(ice: MonitorRtcState?, pc: MonitorRtcState?) {
+                if (closed.get()) return
+                if (ice != null) transfer.pendingIce.set(ice)
+                if (pc != null) transfer.pendingPc.set(pc)
+                queueStates(transfer)
+            }
             override fun ice(ice: RtcIce?) = post {
                 if (live(transfer)) {
                     if (transfer.localSet) queueSignal(transfer, "ice", PeerJson.ice(ice)) else {
@@ -451,9 +535,23 @@ class NativePeer internal constructor(
                 else attach(transfer, channel)
             }
             override fun failed() = post {
-                if (live(transfer)) { if (transfer.verified) completeWhenFlushed(transfer) else fail(transfer, "设备连接中断", true) }
+                if (live(transfer)) { if (transfer.verified) completeWhenFlushed(transfer) else fail(transfer, "设备连接中断", true, MonitorError.NETWORK) }
             }
         })
+    }
+    private fun queueStates(transfer: Transfer) {
+        if (!transfer.stateQueued.compareAndSet(false, true)) return
+        cleanup {
+            val ice = transfer.pendingIce.getAndSet(null); val pc = transfer.pendingPc.getAndSet(null)
+            transfer.stateQueued.set(false)
+            if (live(transfer)) {
+                if (ice != null) transfer.iceState = ice
+                if (pc != null) transfer.pcState = pc
+                transfer.observation?.state(if (ice != null) MonitorEvent.ICE else MonitorEvent.CONNECTION, ice = ice, pc = pc)
+                publishTransfer(transfer)
+                if (transfer.pendingIce.get() != null || transfer.pendingPc.get() != null) queueStates(transfer)
+            }
+        }
     }
     private fun authorize(transfer: Transfer, body: JSONObject) {
         if (!live(transfer)) return
@@ -464,6 +562,7 @@ class NativePeer internal constructor(
         require(!transfer.authorized)
         val lease = PeerJson.number(body, "leaseMs", 1, 10000)
         transfer.authorized = true; transfer.leaseUntil = now() + lease; transfer.renewAt = now() + minOf(5000, lease / 2)
+        transfer.observation?.state(MonitorEvent.SIGNAL)
         transfer.connectUntil = minOf(transfer.deadline, now() + 4000)
         if (!transfer.source) localDescription(transfer, "offer")
     }
@@ -524,13 +623,17 @@ class NativePeer internal constructor(
         channel.observe(object : RtcChannel.Listener {
             override fun opened() = post { if (live(transfer)) channelOpened(transfer) }
             override fun received(bytes: ByteArray, binary: Boolean) = post {
-                if (live(transfer)) try { receive(transfer, bytes, binary) } catch (_: Exception) { fail(transfer, "设备分块或确认消息无效") }
+                if (live(transfer)) try { receive(transfer, bytes, binary) } catch (_: Exception) {
+                    transfer.observation?.discarded(bytes.size); transfer.download?.observation?.discarded(bytes.size)
+                    transfer.discardedBytes += bytes.size
+                    fail(transfer, "设备分块或确认消息无效", error = MonitorError.PROTOCOL)
+                }
             }
             override fun bufferedAmountChanged() = post {
                 if (live(transfer)) { if (transfer.source) pump(transfer) else if (transfer.verified) completeWhenFlushed(transfer) }
             }
             override fun closed() = post {
-                if (live(transfer)) { if (transfer.verified) completeWhenFlushed(transfer) else fail(transfer, "设备传输中断", true) }
+                if (live(transfer)) { if (transfer.verified) completeWhenFlushed(transfer) else fail(transfer, "设备传输中断", true, MonitorError.NETWORK) }
             }
         })
         if (channel.open) channelOpened(transfer)
@@ -538,6 +641,8 @@ class NativePeer internal constructor(
     private fun channelOpened(transfer: Transfer) {
         if (transfer.channelOpened) return
         transfer.channelOpened = true
+        transfer.observation?.state(MonitorEvent.CHANNEL, channelOpen = true)
+        publishTransfer(transfer)
         transfer.connectUntil = Long.MAX_VALUE; transfer.progressAt = now()
         if (!transfer.source) {
             val prefix = transfer.download!!.prefix
@@ -546,7 +651,9 @@ class NativePeer internal constructor(
     }
     private fun control(transfer: Transfer, value: JSONObject) {
         val bytes = value.toString().toByteArray(Charsets.UTF_8)
-        require(bytes.size <= 1024 && transfer.channel?.open == true && transfer.channel!!.send(bytes, false))
+        val sent = bytes.size <= 1024 && transfer.channel?.open == true && transfer.channel!!.send(bytes, false)
+        if (sent) { transfer.controlBytes += bytes.size; transfer.observation?.control(bytes.size); transfer.download?.observation?.control(bytes.size) }
+        require(sent)
     }
     private fun receive(transfer: Transfer, bytes: ByteArray, binary: Boolean) {
         require(transfer.authorized)
@@ -554,8 +661,11 @@ class NativePeer internal constructor(
             require(!transfer.source && !transfer.verifying && transfer.verifiedBytes == null)
             val prefix = transfer.download!!.prefix
             prefix.append(bytes, transfer.frameLimit); transfer.payloadBytes += bytes.size - 8; transfer.progressAt = now(); dirty = true
+            transfer.observation?.read(bytes.size - 8); transfer.download?.observation?.read(bytes.size - 8)
             control(transfer, obj("v" to 1, "type" to "ack", "offset" to prefix.offset)); return
         }
+        transfer.controlBytes += bytes.size
+        transfer.observation?.control(bytes.size); transfer.download?.observation?.control(bytes.size)
         val value = PeerJson.control(bytes)
         when (PeerJson.text(value, "type", 20)) {
             "get" -> {
@@ -573,19 +683,22 @@ class NativePeer internal constructor(
                 require(!transfer.source && !transfer.verifying && transfer.verifiedBytes == null)
                 PeerJson.keys(value, setOf("v", "type", "size")); require(PeerJson.number(value, "size") == transfer.media.size)
                 val data = transfer.download!!.prefix.complete(); transfer.verifying = true; transfer.progressAt = now()
+                transfer.observation?.state(MonitorEvent.VERIFICATION)
                 fileWork({ require(PeerWire.sha256(data) == transfer.media.sha256 && PeerWire.matchesMime(data, transfer.media.mimeType)); data }, { verified ->
                     if (!live(transfer)) return@fileWork
                     transfer.verifying = false; transfer.verifiedBytes = verified; transfer.verified = true
+                    transfer.observation?.verified()
                     control(transfer, obj("v" to 1, "type" to "verified", "size" to transfer.media.size))
                     completionWindow(transfer)
                     route(transfer) { if (live(transfer)) completeWhenFlushed(transfer) }
-                }, { if (live(transfer)) fail(transfer, "设备图片完整性校验失败") })
+                }, { if (live(transfer)) fail(transfer, "设备图片完整性校验失败", error = MonitorError.INTEGRITY) })
             }
             "verified" -> {
                 require(transfer.source && transfer.ended)
                 PeerJson.keys(value, setOf("v", "type", "size"))
                 require(transfer.sending!!.verified(PeerJson.number(value, "size", 1, transfer.media.size).toInt()))
                 transfer.verified = true; transfer.progressAt = now(); completionWindow(transfer)
+                transfer.observation?.verified()
                 route(transfer) { if (live(transfer)) complete(transfer) }
             }
             else -> throw IllegalArgumentException("Unknown peer control")
@@ -600,8 +713,9 @@ class NativePeer internal constructor(
         while (progress.sent < bytes.size && batches++ < 16) {
             val count = minOf(bytes.size - progress.sent, transfer.frameLimit - 8)
             if (!transfer.backpressure.canSend(channel.bufferedAmount, count + 8)) return
-            if (!channel.send(PeerWire.encode(progress.sent, bytes, progress.sent, count), true)) { fail(transfer, "设备通道发送失败", true); return }
+            if (!channel.send(PeerWire.encode(progress.sent, bytes, progress.sent, count), true)) { fail(transfer, "设备通道发送失败", true, MonitorError.NETWORK); return }
             progress.sent(count); transfer.payloadBytes += count; dirty = true
+            transfer.observation?.read(count)
         }
         if (progress.sent == bytes.size) { transfer.ended = true; control(transfer, obj("v" to 1, "type" to "end", "size" to bytes.size)) }
         else serial.execute { if (live(transfer)) guarded { pump(transfer) } }
@@ -609,20 +723,40 @@ class NativePeer internal constructor(
     private fun route(transfer: Transfer, finished: () -> Unit) {
         if (transfer.routePending) return
         transfer.routePending = true
-        transfer.pc!!.route { route -> post {
-            if (live(transfer)) {
-                transfer.routePending = false
-                if (route in setOf("direct", "relay")) transfer.route = if (transfer.route in setOf("unknown", route)) route else "mixed"
-                finished()
-            }
-        } }
+        transfer.statsCompletion = finished
+        requestStats(transfer)
+    }
+    private fun requestStats(transfer: Transfer) {
+        if (transfer.statsPending || !live(transfer)) return
+        val pc = transfer.pc ?: return
+        transfer.statsPending = true; transfer.nextStatsAt = now() + 1000
+        val sampleGeneration = ++transfer.statsGeneration
+        val delivered = AtomicBoolean(false)
+        fun received(sample: RtcSample) {
+          if (closed.get() || !delivered.compareAndSet(false, true)) return
+          cleanup {
+            if (!live(transfer) || transfer.pc !== pc || !transfer.statsPending || sampleGeneration != transfer.statsGeneration) return@cleanup
+            transfer.statsPending = false; transfer.routePending = false
+            transfer.sample = sample; transfer.statsAt = System.currentTimeMillis()
+            transfer.observation?.sample(sample.values())
+            val route = when (sample.route) { MonitorRoute.P2P_DIRECT -> "direct"; MonitorRoute.P2P_RELAY -> "relay"; else -> "unknown" }
+            if (route != "unknown") transfer.route = if (transfer.route in setOf("unknown", route)) route else "mixed"
+            val finished = transfer.statsCompletion; transfer.statsCompletion = null; dirty = true
+            publishTransfer(transfer)
+            finished?.invoke()
+          }
+        }
+        try { pc.stats(::received) } catch (_: Exception) { received(RtcSample()) }
     }
     private fun complete(transfer: Transfer) {
         if (transfer.closed) return
         val bytes = transfer.verifiedBytes
         if (!transfer.source && bytes == null) { fail(transfer, "设备文件尚未完成校验"); return }
+        val assembledRoute = transfer.download?.assembledRoute(transfer.route, transfer.payloadBytes) ?: transfer.route
+        transfer.download?.observation?.assembledRoute(when (assembledRoute) { "direct" -> MonitorRoute.P2P_DIRECT
+            "relay" -> MonitorRoute.P2P_RELAY; "mixed" -> MonitorRoute.MIXED; else -> MonitorRoute.P2P_UNKNOWN })
         detach(transfer, "complete", "", true)
-        transfer.download?.let { finish(it, PeerDownload(bytes!!, transfer.route, it.resumedBytes)) }
+        transfer.download?.let { finish(it, PeerDownload(bytes!!, assembledRoute, it.resumedBytes)) }
     }
     private fun completeWhenFlushed(transfer: Transfer) {
         if (!live(transfer) || !transfer.verified) return
@@ -642,32 +776,40 @@ class NativePeer internal constructor(
         transfer.completionTask = serial.schedule({ guarded { completeWhenFlushed(transfer) } },
             (transfer.completionUntil - now()).coerceAtLeast(0), TimeUnit.MILLISECONDS)
     }
-    private fun fail(transfer: Transfer, reason: String, retryable: Boolean = false) {
+    private fun fail(transfer: Transfer, reason: String, retryable: Boolean = false, error: MonitorError = MonitorError.UNKNOWN) {
         if (transfer.closed) return
-        detach(transfer, "failed", reason, true)
+        detach(transfer, "failed", reason, true, error)
         val request = transfer.download ?: return
         if (retryable && ready() && !request.cancelled() && request.prefix.tryResume(now(), request.deadline)) {
+            request.retainPrefix(transfer.route, transfer.payloadBytes)
             request.resumedBytes = request.prefix.offset.toLong(); open(request)
         } else finish(request, null, reason)
     }
-    private fun detach(transfer: Transfer, status: String, reason: String, notify: Boolean) {
+    private fun detach(transfer: Transfer, status: String, reason: String, notify: Boolean, error: MonitorError = MonitorError.CANCELLED) {
         if (transfer.closed) return
         transfer.closed = true; transfers.remove(transfer.id)
         transfer.completionTask?.cancel(false)
-        pending.entries.removeAll { it.value.owner == transfer.id }
-        if (notify) send("peer.cancel", obj("transferId" to transfer.id, "reason" to if (status == "complete") "complete" else "cancelled"))
+        transfer.statsCompletion = null
+        pending.entries.removeAll { if (it.value.owner == transfer.id) { it.value.observation?.close(); true } else false }
+        if (notify) send("peer.cancel", obj("transferId" to transfer.id, "reason" to if (status == "complete") "complete" else "cancelled"), parent = transfer.observation?.operation)
         try { transfer.channel?.close() } catch (_: Exception) { }
         try { transfer.pc?.close() } catch (_: Exception) { }
+        if (status == "complete") transfer.observation?.complete(verified = true, resumedBytes = transfer.download?.resumedBytes)
+        else transfer.observation?.failed(error)
+        transfer.observation?.close(); transfer.observation = null
+        publishTransfer(transfer, if (status == "complete") MonitorStatus.COMPLETED else if (status == "cancelled") MonitorStatus.CANCELLED else MonitorStatus.FAILED,
+            if (status == "complete") MonitorError.NONE else error, terminal = true)
+        transfer.liveObservation = null
         transfer.sourceBytes = null; transfer.signals.clear(); transfer.localIce.clear(); transfer.remoteIce.clear()
         recent.addFirst(TransferView(transfer.media.assetId, if (transfer.source) "send" else "receive", status, transfer.route, transfer.payloadBytes, reason))
         while (recent.size > 50) recent.removeLast()
-        if (reason.isNotEmpty()) error = reason
+        if (reason.isNotEmpty()) this.error = reason
         dirty = true
     }
     private fun finish(request: Download, result: PeerDownload?, reason: String = "", cancel: Boolean = false) {
         request.aborted.set(true)
         transfers.values.filter { it.download === request }.toList().forEach { detach(it, "cancelled", reason, true) }
-        downloads.remove(request.id); pending.entries.removeAll { it.value.owner == request.id }
+        downloads.remove(request.id); pending.entries.removeAll { if (it.value.owner == request.id) { it.value.observation?.close(); true } else false }
         request.clearPrefix()
         if (reason.isNotEmpty()) error = reason
         if (cancel || closed.get() || request.cancelled()) request.result.completeExceptionally(CancellationException("设备读取已取消"))
@@ -675,7 +817,7 @@ class NativePeer internal constructor(
         dirty = true
     }
     private fun reset(reason: String, cancel: Boolean) {
-        pending.clear(); registering = false
+        pending.values.forEach { it.observation?.close() }; pending.clear(); registering = false
         transfers.values.toList().forEach { detach(it, "cancelled", reason, false) }
         downloads.values.toList().forEach { finish(it, null, reason, cancel) }
         peerId = ""; peerUntil = 0; advertised = emptySet(); inventoryRevision = 0; replaceRequired = true; withdrawn.clear()
@@ -691,15 +833,17 @@ class NativePeer internal constructor(
         if (closed.get()) return
         connectionChanged()
         val instant = now()
-        pending.filterValues { it.deadline <= instant }.toList().forEach { (id, waiting) -> if (pending.remove(id) === waiting) waiting.failure("expired") }
+        pending.filterValues { it.deadline <= instant }.toList().forEach { (id, waiting) -> if (pending.remove(id) === waiting) {
+            waiting.observation?.failed(MonitorError.TIMEOUT); waiting.observation?.close(); waiting.failure("expired")
+        } }
         downloads.values.toList().forEach { if (it.cancelled()) finish(it, null, cancel = true) else if (instant >= it.deadline - 100) finish(it, null, "设备读取已超时，已改用云端") }
         transfers.values.toList().forEach { transfer ->
             if (!live(transfer)) return@forEach
             when {
                 instant >= transfer.completionUntil -> completeWhenFlushed(transfer)
-                instant >= transfer.deadline || instant >= transfer.leaseUntil -> fail(transfer, "设备授权或读取预算已到期")
-                instant >= transfer.connectUntil -> fail(transfer, "设备连接超时", true)
-                transfer.channel?.open == true && instant - transfer.progressAt > PeerWire.STALL_MS -> fail(transfer, "设备传输停滞", true)
+                instant >= transfer.deadline || instant >= transfer.leaseUntil -> fail(transfer, "设备授权或读取预算已到期", error = MonitorError.TIMEOUT)
+                instant >= transfer.connectUntil -> fail(transfer, "设备连接超时", true, MonitorError.TIMEOUT)
+                transfer.channel?.open == true && instant - transfer.progressAt > PeerWire.STALL_MS -> fail(transfer, "设备传输停滞", true, MonitorError.TIMEOUT)
                 transfer.authorized && !transfer.renewing && instant >= transfer.renewAt -> {
                     transfer.renewing = true
                     rpc("peer.renew", obj("transferId" to transfer.id), "peer.lease", transfer.id,
@@ -709,6 +853,11 @@ class NativePeer internal constructor(
                             transfer.renewing = false; transfer.leaseUntil = now() + lease; transfer.renewAt = now() + minOf(5000, lease / 2)
                         }, failure = { fail(transfer, errorMessage(it)) })
                 }
+            }
+            if (live(transfer)) {
+                transfer.observation?.progress(transfer.channel?.bufferedAmount)
+                publishTransfer(transfer)
+                if (transfer.liveObservation != null && instant >= transfer.nextStatsAt) requestStats(transfer)
             }
         }
         while (early.isNotEmpty() && instant - early.first().first > 5000) { earlyBytes -= early.removeFirst().second.toString().toByteArray(Charsets.UTF_8).size }
@@ -737,7 +886,17 @@ class NativePeer internal constructor(
         dirty = false
         val active = transfers.values.map { TransferView(it.media.assetId, if (it.source) "send" else "receive", "active", it.route, it.payloadBytes) }
         val view = PeerView(enabled, ready(), peerId, devices, (active + recent).take(50), transfers.values.count { it.source }, downloads.size, error)
+        observation?.state(enabled, view.registered, devices.size, transfers.size)
         try { onChanged(view) } catch (_: Exception) { }
+    }
+    private fun publishTransfer(transfer: Transfer, status: MonitorStatus? = null, error: MonitorError = MonitorError.NONE, terminal: Boolean = false) = diagnostic(Unit) {
+        val route = when (transfer.route) { "direct" -> MonitorRoute.P2P_DIRECT; "relay" -> MonitorRoute.P2P_RELAY; "mixed" -> MonitorRoute.MIXED; else -> MonitorRoute.P2P_UNKNOWN }
+        val phase = status ?: when { transfer.verifying || transfer.verified -> MonitorStatus.VERIFYING
+            !transfer.channelOpened -> MonitorStatus.STARTED; transfer.payloadBytes == 0L -> MonitorStatus.OPEN; else -> MonitorStatus.TRANSFERRING }
+        transfer.liveObservation?.publish(transfer.sample.values().copy(bytes = transfer.payloadBytes, controlBytes = transfer.controlBytes,
+            discardedBytes = transfer.discardedBytes, route = route, verified = transfer.verified,
+            iceState = transfer.iceState, pcState = transfer.pcState, channelOpen = if (terminal) false else transfer.channel?.open,
+            bufferedBytes = if (terminal) null else transfer.channel?.bufferedAmount, resumedBytes = transfer.download?.resumedBytes, error = error), phase, transfer.statsAt, terminal)
     }
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
@@ -745,7 +904,7 @@ class NativePeer internal constructor(
         ticking.cancel(false)
         try { serial.execute {
             try { send("device.unregister"); reset("", true); rtc.close() }
-            finally { io.shutdownNow(); closeDone.complete(Unit); serial.shutdown() }
+            finally { observation?.close(); io.shutdownNow(); closeDone.complete(Unit); serial.shutdown() }
         } } catch (_: RejectedExecutionException) { closeDone.complete(Unit) }
     }
 

@@ -94,19 +94,25 @@ class FileCache(
         lastError = if (failed) "无引用缓存清理未完成，重新检查时重试。" else ""
     }
     fun refresh() { synchronized(lock) { prune() }; notifyChanged() }
-    override fun read(media: MediaRef): ByteArray? {
+    override fun read(media: MediaRef): ByteArray? = readObserved(media, null)
+    private fun readObserved(media: MediaRef, observation: MediaAttempt?): ByteArray? {
         var changed = false
+        observation?.read(0)
         val bytes = synchronized(lock) {
             if (!active || !same(media, refs[media.assetId])) return@synchronized null
             val file = path(media.assetId)
             try {
                 if (!file.isFile || file.length() != media.size || file.length() > MAX_IMAGE_BYTES) throw java.io.IOException()
                 val raw = file.readBytes()
-                validate(raw, media)
+                observation?.read(raw.size)
+                try { validate(raw, media) }
+                catch (failure: Exception) { observation?.failed(MonitorError.INTEGRITY); throw failure }
                 if (!active) return@synchronized null
                 validated.add(media.assetId)
+                observation?.verified()
                 raw
             } catch (_: Exception) {
+                observation?.failed(MonitorError.UNAVAILABLE)
                 changed = validated.remove(media.assetId)
                 if (file.exists()) file.delete()
                 null
@@ -115,7 +121,7 @@ class FileCache(
         if (changed) notifyChanged()
         return bytes
     }
-    fun file(media: MediaRef): File? = if (read(media) == null) null else path(media.assetId)
+    fun file(media: MediaRef, observation: MediaAttempt? = null): File? = if (readObserved(media, observation) == null) null else path(media.assetId)
     override fun inventory(): List<MediaRef> {
         val candidates = synchronized(lock) { if (!active) return emptyList(); refs.values.sortedBy { it.assetId } }
         var removed = false

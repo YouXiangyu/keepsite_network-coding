@@ -51,7 +51,7 @@ class NativePeerTest {
             values.forEach { (key, value) -> response.put(key, value ?: JSONObject.NULL) }
             listeners.forEach { it(response) }
         }
-        override fun send(message: JSONObject): Boolean {
+        override fun send(message: JSONObject, observation: io.github.youxiangyu.keepsite.core.PeerCommand?): Boolean {
             if (message.getString("type") == blockKind) { entered.countDown(); check(release.await(3, TimeUnit.SECONDS)) }
             when (message.getString("type")) {
                 "device.register" -> reply(message, "device.registered", "enabled" to true, "peerId" to "nativepeer", "reason" to null,
@@ -113,7 +113,11 @@ class NativePeerTest {
         }
     }
 
-    private class Native(private val interruptFirst: Boolean = false, private val stall: Boolean = false, private val delayVerified: Boolean = false) : RtcFactory {
+    private class Native(private val interruptFirst: Boolean = false, private val stall: Boolean = false, private val delayVerified: Boolean = false,
+                         private val deferStats: Boolean = false, private val sample: RtcSample = RtcSample(io.github.youxiangyu.keepsite.core.MonitorCandidate.HOST,
+                             io.github.youxiangyu.keepsite.core.MonitorCandidate.HOST), private val interruptAfterSample: Boolean = false,
+                         private val fullPrefix: Boolean = false, private val zeroFirstPayload: Boolean = false,
+                         private val sampleForAttempt: ((Int) -> RtcSample)? = null) : RtcFactory {
         val created = AtomicInteger()
         val disposed = AtomicInteger()
         val channelDisposed = AtomicInteger()
@@ -121,6 +125,9 @@ class NativePeerTest {
         val verified = AtomicInteger()
         val queuedVerification = AtomicInteger()
         val drainVerification = AtomicReference<() -> Unit>()
+        val statsCalls = AtomicInteger()
+        val pendingStats = CopyOnWriteArrayList<(RtcSample) -> Unit>()
+        val statsTimes = CopyOnWriteArrayList<Long>()
         override fun create(listener: RtcPeer.Listener): RtcPeer {
             val ordinal = created.incrementAndGet()
             return object : RtcPeer {
@@ -138,11 +145,12 @@ class NativePeerTest {
                         val value = JSONObject(bytes.toString(Charsets.UTF_8))
                         if (value.getString("type") == "get") {
                             var offset = value.getInt("offset"); gets.add(offset)
+                            if (ordinal == 1 && zeroFirstPayload) return true
                             while (offset < image.size) {
                                 val count = minOf(PeerWire.FRAME_BYTES - 8, image.size - offset)
                                 observer.received(PeerWire.encode(offset, image, offset, count), true); offset += count
-                                if (stall || interruptFirst && ordinal == 1) {
-                                    if (!stall) observer.closed()
+                                if (stall || interruptFirst && ordinal == 1 && (!fullPrefix || offset == image.size)) {
+                                    if (!stall && !interruptAfterSample) observer.closed()
                                     return true
                                 }
                             }
@@ -162,7 +170,15 @@ class NativePeerTest {
                 override fun createLocal(type: String, result: (Result<RtcDescription>) -> Unit) { result(Result.success(RtcDescription(type, SDP))) }
                 override fun setRemote(description: RtcDescription, result: (Boolean) -> Unit) { result(true); channel.open = true; channel.observer.opened() }
                 override fun addIce(ice: RtcIce?) = Unit
-                override fun route(result: (String) -> Unit) { result("direct") }
+                override fun stats(result: (RtcSample) -> Unit) {
+                    statsCalls.incrementAndGet()
+                    statsTimes.add(System.nanoTime())
+                    if (deferStats) pendingStats.add(result)
+                    else {
+                        result(sampleForAttempt?.invoke(ordinal) ?: sample)
+                        if (ordinal == 1 && interruptAfterSample && (interruptFirst || zeroFirstPayload)) channel.observer.closed()
+                    }
+                }
                 override fun close() { if (!gone) { gone = true; channel.close(); disposed.incrementAndGet() } }
             }
         }
@@ -210,7 +226,7 @@ class NativePeerTest {
             override fun createLocal(type: String, result: (Result<RtcDescription>) -> Unit) { result(Result.success(RtcDescription(type, SDP))) }
             override fun setRemote(description: RtcDescription, result: (Boolean) -> Unit) { result(true); listener.channel(channel) }
             override fun addIce(ice: RtcIce?) = Unit
-            override fun route(result: (String) -> Unit) { result("direct") }
+            override fun stats(result: (RtcSample) -> Unit) { result(RtcSample(io.github.youxiangyu.keepsite.core.MonitorCandidate.HOST, io.github.youxiangyu.keepsite.core.MonitorCandidate.HOST)) }
             override fun close() { if (!gone) { gone = true; channel.close() } }
         }
         override fun close() = Unit
@@ -232,6 +248,84 @@ class NativePeerTest {
         } finally { peer.close() }
     }
 
+    @Test fun observedResumeCountsActualPayloadAndControlWithoutAddingPrefixTwice() {
+        val diagnostics = io.github.youxiangyu.keepsite.core.NetworkDiagnostics()
+        val account = diagnostics.openAccount(3)!!; diagnostics.setDetailed(true)
+        val parent = diagnostics.media(account, 3, media.size)!!
+        val attempt = parent.attempt(io.github.youxiangyu.keepsite.core.MonitorRoute.P2P_UNKNOWN, io.github.youxiangyu.keepsite.core.MonitorProtocol.P2P)!!
+        val native = Native(interruptFirst = true, interruptAfterSample = true)
+        val view = AtomicReference(PeerView())
+        val peer = NativePeer("user", Server(), Cache(), { view.set(it) }, native, diagnostics, account, 3)
+        try {
+            waitUntil { view.get().registered }
+            val result = peer.fetch(media, attempt) { false }!!
+            assertArrayEquals(image, result.bytes)
+            assertEquals(PeerWire.FRAME_BYTES - 8L, result.resumedBytes)
+            attempt.complete(verified = true, actualIfUnknown = result.bytes.size.toLong(), resumedBytes = result.resumedBytes)
+            parent.validating { Unit }; parent.complete(result.bytes.size.toLong(), io.github.youxiangyu.keepsite.core.MonitorRoute.P2P_DIRECT)
+            val rows = diagnostics.snapshot()!!.observations.events
+            val parentAttempt = rows.last { it.operationId == attempt.operation.id }
+            assertEquals(media.size, parentAttempt.values.bytes); assertTrue(parentAttempt.values.controlBytes!! > 0)
+            assertEquals(result.resumedBytes, parentAttempt.values.resumedBytes)
+            assertFalse(rows.toString().contains(media.assetId)); assertFalse(rows.toString().contains("Browser"))
+            assertEquals(native.created.get(), native.disposed.get())
+        } finally { attempt.close(); parent.close(); peer.close(); assertTrue(peer.awaitClosed()) }
+        assertEquals(0, diagnostics.snapshot()!!.observations.active)
+    }
+
+    @Test fun pendingDiagnosticStatsNeverDelayCompletionOrAcceptLateOldPcSamples() {
+        val diagnostics = io.github.youxiangyu.keepsite.core.NetworkDiagnostics()
+        val account = diagnostics.openAccount(3)!!; diagnostics.setDetailed(true)
+        val parent = diagnostics.media(account, 3, media.size)!!
+        val attempt = parent.attempt(io.github.youxiangyu.keepsite.core.MonitorRoute.P2P_UNKNOWN, io.github.youxiangyu.keepsite.core.MonitorProtocol.P2P)!!
+        val native = Native(deferStats = true); val view = AtomicReference(PeerView())
+        val peer = NativePeer("user", Server(), Cache(), { view.set(it) }, native, diagnostics, account, 3)
+        try {
+            waitUntil { view.get().registered }
+            val started = System.nanoTime()
+            assertArrayEquals(image, peer.fetch(media, attempt) { false }!!.bytes)
+            assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) < 2500)
+            assertEquals(1, native.statsCalls.get()); assertEquals(1, native.pendingStats.size)
+        } finally { attempt.close(); parent.close(); peer.close(); assertTrue(peer.awaitClosed()) }
+        diagnostics.openAccount(3)
+        val before = diagnostics.snapshot()!!
+        native.pendingStats.single().invoke(RtcSample(io.github.youxiangyu.keepsite.core.MonitorCandidate.RELAY, io.github.youxiangyu.keepsite.core.MonitorCandidate.HOST, 123.0))
+        assertEquals(before, diagnostics.snapshot())
+        assertEquals(native.created.get(), native.disposed.get())
+    }
+
+    @Test fun detailOffAndClearStillExposeCurrentBoundedTransferStatsWithoutHistoryOrOldScopeReturn() {
+        val diagnostics = io.github.youxiangyu.keepsite.core.NetworkDiagnostics()
+        val account = diagnostics.openAccount(3)!! // Detailed history remains OFF throughout this scenario.
+        val native = Native(stall = true, sample = RtcSample(io.github.youxiangyu.keepsite.core.MonitorCandidate.HOST,
+            io.github.youxiangyu.keepsite.core.MonitorCandidate.RELAY, 25.0, io.github.youxiangyu.keepsite.core.MonitorRtcState.CONNECTED))
+        val view = AtomicReference(PeerView())
+        val peer = NativePeer("user", Server(), Cache(), { view.set(it) }, native, diagnostics, account, 3)
+        val executor = Executors.newSingleThreadExecutor(); val cancel = java.util.concurrent.atomic.AtomicBoolean(false)
+        try {
+            waitUntil { view.get().registered }
+            val future = executor.submit<PeerDownload?> { peer.fetch(media) { cancel.get() } }
+            waitUntil { diagnostics.snapshot()!!.peerTransfers.any { it.statsAt != null } }
+            val before = diagnostics.snapshot()!!.peerTransfers.single()
+            assertEquals(25.0, before.values.rttMs!!, 0.001)
+            assertEquals((PeerWire.FRAME_BYTES - 8).toLong(), before.values.bytes)
+            assertEquals(io.github.youxiangyu.keepsite.core.MonitorRoute.P2P_RELAY, before.values.route)
+            assertEquals(io.github.youxiangyu.keepsite.core.MonitorRtcState.CONNECTED, before.values.dtlsState)
+            assertTrue(diagnostics.snapshot()!!.observations.events.isEmpty())
+            diagnostics.clearHistory()
+            waitUntil { native.statsCalls.get() >= 2 }
+            val after = diagnostics.snapshot()!!.peerTransfers.single()
+            assertEquals(before.id, after.id); assertTrue(after.statsAt!! >= before.statsAt!!)
+            assertTrue(diagnostics.snapshot()!!.observations.events.isEmpty())
+            assertTrue(TimeUnit.NANOSECONDS.toMillis(native.statsTimes[1] - native.statsTimes[0]) >= 900)
+            diagnostics.openAccount(3); cancel.set(true)
+            val failure = assertThrows(ExecutionException::class.java) { future.get(3, TimeUnit.SECONDS) }
+            assertTrue(failure.cause is CancellationException)
+            assertTrue(diagnostics.snapshot()!!.peerTransfers.isEmpty())
+        } finally { cancel.set(true); peer.close(); assertTrue(peer.awaitClosed()); executor.shutdownNow() }
+        assertTrue(diagnostics.snapshot()!!.peerTransfers.isEmpty())
+    }
+
     @Test fun oneInterruptedChannelRequestsTheRetainedPrefixAndDoesNotRestartAtZero() {
         val server = Server(); val native = Native(interruptFirst = true); val peer = peer(server, native)
         try {
@@ -241,6 +335,70 @@ class NativePeerTest {
             assertEquals((PeerWire.FRAME_BYTES - 8).toLong(), result.resumedBytes)
             assertEquals(2, server.opens.get()); assertEquals(2, native.disposed.get()); assertEquals(2, native.channelDisposed.get())
         } finally { peer.close() }
+    }
+
+    @Test fun resumedFileAndFinalParentUseOnlyTheRetainedPrefixAndActualSuffixRoutes() {
+        val host = io.github.youxiangyu.keepsite.core.MonitorCandidate.HOST
+        val direct = RtcSample(host, host); val relay = RtcSample(host, io.github.youxiangyu.keepsite.core.MonitorCandidate.RELAY)
+        for ((first, second, expected) in listOf(Triple(direct, relay, "mixed"), Triple(direct, direct, "direct"), Triple(relay, relay, "relay"),
+            Triple(RtcSample(), relay, "unknown"), Triple(direct, RtcSample(), "unknown"))) {
+            val diagnostics = io.github.youxiangyu.keepsite.core.NetworkDiagnostics()
+            val account = diagnostics.openAccount(3)!!; diagnostics.setDetailed(true)
+            val parent = diagnostics.media(account, 3, media.size)!!
+            val attempt = parent.attempt(io.github.youxiangyu.keepsite.core.MonitorRoute.P2P_UNKNOWN, io.github.youxiangyu.keepsite.core.MonitorProtocol.P2P)!!
+            val native = Native(interruptFirst = true, interruptAfterSample = true, sampleForAttempt = { if (it == 1) first else second })
+            val view = AtomicReference(PeerView()); val peer = NativePeer("user", Server(), Cache(), { view.set(it) }, native, diagnostics, account, 3)
+            try {
+                waitUntil { view.get().registered }
+                val result = peer.fetch(media, attempt) { false }!!
+                assertArrayEquals(image, result.bytes); assertEquals(expected, result.route)
+                assertEquals(PeerWire.FRAME_BYTES - 8L, result.resumedBytes)
+                val route = when (result.route) { "mixed" -> io.github.youxiangyu.keepsite.core.MonitorRoute.MIXED
+                    "direct" -> io.github.youxiangyu.keepsite.core.MonitorRoute.P2P_DIRECT; "relay" -> io.github.youxiangyu.keepsite.core.MonitorRoute.P2P_RELAY
+                    else -> io.github.youxiangyu.keepsite.core.MonitorRoute.P2P_UNKNOWN }
+                attempt.complete(verified = true, actualIfUnknown = result.bytes.size.toLong(), resumedBytes = result.resumedBytes)
+                parent.validating { Unit }; parent.complete(result.bytes.size.toLong(), route)
+                val state = diagnostics.snapshot()!!
+                val finalAttempt = state.observations.events.last { it.operationId == attempt.operation.id }
+                assertEquals(route, finalAttempt.values.route); assertEquals(media.size, finalAttempt.values.bytes)
+                assertEquals(result.resumedBytes, finalAttempt.values.resumedBytes)
+                assertEquals(route, state.media.route); assertEquals(media.size, state.media.bytes)
+            } finally { attempt.close(); parent.close(); peer.close(); assertTrue(peer.awaitClosed()) }
+            assertEquals(0, diagnostics.snapshot()!!.observations.active)
+        }
+    }
+
+    @Test fun zeroPayloadSuffixCannotReplaceTheRouteOfAnEntireRetainedFile() {
+        val host = io.github.youxiangyu.keepsite.core.MonitorCandidate.HOST
+        val native = Native(interruptFirst = true, interruptAfterSample = true, fullPrefix = true,
+            sampleForAttempt = { RtcSample(host, if (it == 1) host else io.github.youxiangyu.keepsite.core.MonitorCandidate.RELAY) })
+        val diagnostics = io.github.youxiangyu.keepsite.core.NetworkDiagnostics(); val account = diagnostics.openAccount(3)!!
+        val view = AtomicReference(PeerView()); val peer = NativePeer("user", Server(), Cache(), { view.set(it) }, native, diagnostics, account, 3)
+        try {
+            waitUntil { view.get().registered }
+            val result = peer.fetch(media) { false }!!
+            assertArrayEquals(image, result.bytes); assertEquals("direct", result.route)
+            assertEquals(media.size, result.resumedBytes); assertEquals(listOf(0, image.size), native.gets)
+            assertTrue(native.statsCalls.get() >= 2)
+        } finally { peer.close(); assertTrue(peer.awaitClosed()) }
+    }
+
+    @Test fun failedZeroPayloadDownloadCannotPolluteAFreshDownload() {
+        val host = io.github.youxiangyu.keepsite.core.MonitorCandidate.HOST
+        val native = Native(zeroFirstPayload = true, interruptAfterSample = true,
+            sampleForAttempt = { RtcSample(host, if (it == 1) host else io.github.youxiangyu.keepsite.core.MonitorCandidate.RELAY) })
+        val diagnostics = io.github.youxiangyu.keepsite.core.NetworkDiagnostics(); val account = diagnostics.openAccount(3)!!
+        val view = AtomicReference(PeerView()); val peer = NativePeer("user", Server(), Cache(), { view.set(it) }, native, diagnostics, account, 3)
+        try {
+            waitUntil { view.get().registered }
+            assertNull(peer.fetch(media) { false })
+            assertTrue(native.statsCalls.get() >= 1)
+            val empty = diagnostics.snapshot()!!.peerTransfers.single()
+            assertEquals(0L, empty.values.bytes); assertEquals(io.github.youxiangyu.keepsite.core.MonitorRoute.P2P_DIRECT, empty.values.route)
+            val result = peer.fetch(media) { false }!!
+            assertArrayEquals(image, result.bytes); assertEquals("relay", result.route)
+            assertEquals(0L, result.resumedBytes); assertEquals(listOf(0, 0), native.gets)
+        } finally { peer.close(); assertTrue(peer.awaitClosed()) }
     }
 
     @Test fun closingLifetimeCancelsBlockedReadsInsteadOfReturningCloudFallback() {

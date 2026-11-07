@@ -2,6 +2,7 @@ package io.github.youxiangyu.keepsite.core
 
 import io.github.youxiangyu.keepsite.peer.EventPort
 import io.github.youxiangyu.keepsite.peer.EventState
+import io.github.youxiangyu.keepsite.peer.sendPeerMessage
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
@@ -46,18 +47,19 @@ class SyncEvents(
     private fun dispatch(block: () -> Unit) {
         if (!ended) try { executor.execute { if (valid()) block() } } catch (_: java.util.concurrent.RejectedExecutionException) { }
     }
-    override fun send(message: JSONObject): Boolean {
+    override fun send(message: JSONObject, observation: PeerCommand?): Boolean {
         val current = socket
         if (!view.connected || !valid() || current == null) return false
-        val raw = message.toString()
-        val maximum = if (message.optString("type") == "peer.signal" && message.optString("kind") != "ice") 65536 else 4096
-        if (raw.toByteArray().size > maximum || current.queueSize() + raw.toByteArray().size > 256 * 1024) return false
-        return current.send(raw)
+        val state = view
+        return sendPeerMessage(message, state, diagnostics, observation, current::queueSize) { raw ->
+            if (socket !== current || view.generation != state.generation || !view.connected || !valid()) false else current.send(raw)
+        }
     }
     private fun connect() {
         if (!valid() || socket != null) return
-        ready = false; observation = diagnostics?.socket(diagnosticAccount, epoch)
-        view = EventState(false, "", view.generation + 1); publish()
+        val generation = view.generation + 1
+        ready = false; observation = diagnostics?.socket(diagnosticAccount, epoch, generation)
+        view = EventState(false, "", generation); publish()
         val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) = dispatch {
                 if (socket === webSocket) observation?.opened()

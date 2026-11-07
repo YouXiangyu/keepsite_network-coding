@@ -1,6 +1,7 @@
 package io.github.youxiangyu.keepsite.peer
 
 import io.github.youxiangyu.keepsite.core.MediaRef
+import io.github.youxiangyu.keepsite.core.PeerCommand
 import org.json.JSONObject
 import java.io.Closeable
 
@@ -12,7 +13,7 @@ interface EventPort {
     fun state(): EventState
     fun subscribeConnection(listener: () -> Unit): Closeable
     fun subscribeMessages(listener: (JSONObject) -> Unit): Closeable
-    fun send(message: JSONObject): Boolean
+    fun send(message: JSONObject, observation: PeerCommand? = null): Boolean
 }
 
 /** Inventory contains only live refs with validated files; read revalidates the actual file. */

@@ -4,13 +4,15 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
-enum class MonitorProtocol { HTTP, WS, SYNC, P2P, CACHE, S3, SQL, REDIS, WORKER }
+enum class MonitorProtocol { HTTP, WS, SYNC, P2P, CACHE, S3, SQL, REDIS, WORKER, MEDIA }
 enum class MonitorLane { HTTP, WS, SYNC, PEER, MEDIA }
-enum class MonitorEvent { REQUEST, CONNECTION, MESSAGE, SNAPSHOT, DELTA, DISCOVERY, SIGNAL, ICE, CHANNEL, MEDIA_READ, MEDIA_ATTEMPT, VERIFICATION }
+enum class MonitorEvent { REQUEST, CONNECTION, MESSAGE, SNAPSHOT, DELTA, DISCOVERY, SIGNAL, ICE, CHANNEL, MEDIA_READ, MEDIA_ATTEMPT, VERIFICATION, CACHE_WRITE, STATS, REGISTRATION }
 enum class MonitorStatus { UNKNOWN, STARTED, OPEN, TRANSFERRING, VERIFYING, COMPLETED, FAILED, CANCELLED, RETRYING, PAUSED, CLOSED }
 enum class MonitorRoute { UNKNOWN, CACHE, P2P_DIRECT, P2P_RELAY, P2P_UNKNOWN, MIXED, SERVER_PROXY, DIRECT_S3 }
 enum class MonitorError { NONE, UNKNOWN, NETWORK, AUTH_REQUIRED, AUTH_DENIED, TIMEOUT, PROTOCOL, INTEGRITY, CAPACITY, UNAVAILABLE, CANCELLED }
 enum class MonitorDestination { AUTHENTICATED_API, ANONYMOUS_API, EXTERNAL, DIAGNOSTICS }
+enum class MonitorRtcState { UNKNOWN, NEW, CHECKING, CONNECTING, CONNECTED, COMPLETED, DISCONNECTED, FAILED, CLOSED }
+enum class MonitorCandidate { UNKNOWN, HOST, SRFLX, PRFLX, RELAY }
 enum class MonitorTemplate(val path: String) {
     UNKNOWN("unknown"), SESSION("/api/auth/session"), AUTH("/api/auth/:action"),
     SNAPSHOT("/api/sync/snapshot"), DELTA("/api/sync/changes"), EVENTS("/api/sync/events"),
@@ -19,13 +21,17 @@ enum class MonitorTemplate(val path: String) {
 }
 
 data class MonitorValues(
-    val bytes: Long? = null, val expectedBytes: Long? = null, val httpStatus: Int? = null, val closeCode: Int? = null,
+    val bytes: Long? = null, val expectedBytes: Long? = null, val controlBytes: Long? = null, val discardedBytes: Long? = null,
+    val httpStatus: Int? = null, val closeCode: Int? = null,
     val localCursor: Long? = null, val observedCursor: Long? = null, val items: Long? = null,
     val heartbeatMs: Long? = null, val retryDelayMs: Long? = null, val resumedBytes: Long? = null,
     val bufferedBytes: Long? = null, val rttMs: Double? = null, val bytesPerSecond: Double? = null,
     val verified: Boolean? = null, val route: MonitorRoute = MonitorRoute.UNKNOWN, val error: MonitorError = MonitorError.NONE,
+    val localCandidate: MonitorCandidate = MonitorCandidate.UNKNOWN, val remoteCandidate: MonitorCandidate = MonitorCandidate.UNKNOWN,
+    val dtlsState: MonitorRtcState = MonitorRtcState.UNKNOWN, val pcState: MonitorRtcState = MonitorRtcState.UNKNOWN,
+    val iceState: MonitorRtcState = MonitorRtcState.UNKNOWN, val channelOpen: Boolean? = null, val outgoing: Boolean? = null,
 ) {
-    internal fun safe() = copy(bytes = number(bytes), expectedBytes = number(expectedBytes),
+    internal fun safe() = copy(bytes = number(bytes), expectedBytes = number(expectedBytes), controlBytes = number(controlBytes), discardedBytes = number(discardedBytes),
         httpStatus = httpStatus?.takeIf { it in 100..599 }, closeCode = closeCode?.takeIf { it in 1000..4999 },
         localCursor = number(localCursor), observedCursor = number(observedCursor), items = number(items),
         heartbeatMs = number(heartbeatMs), retryDelayMs = number(retryDelayMs), resumedBytes = number(resumedBytes),
@@ -132,6 +138,8 @@ class NetworkMonitor internal constructor(private val clock: MonitorClock = Proc
     }
     private fun valid(connection: Connection) = account === connection.account && connections[connection.lane] === connection
     private fun valid(operation: Operation) = valid(operation.connection) && active[operation.id] === operation
+    @Synchronized internal fun operationCurrent(operation: Operation) = valid(operation)
+    @Synchronized internal fun historyEnabled(owner: Account) = account === owner && detailed && !paused
     @Synchronized fun abandon(operation: Operation) { if (active[operation.id] === operation) active.remove(operation.id) }
     private inline fun <T> observing(fallback: T, rollback: () -> Unit, block: () -> T): T = try { block() }
         catch (_: Exception) { rollback(); dropped++; fallback }
@@ -299,11 +307,20 @@ class NetworkMonitor internal constructor(private val clock: MonitorClock = Proc
                 .put("operationId", record.operationId).put("traceId", record.traceId).put("parentOperationId", json(record.parentOperationId))
                 .put("captureId", json(record.captureId)).put("device", json(record.device)).put("routeTemplate", record.template.path)
                 .put("values", JSONObject().put("bytes", json(v.bytes)).put("expectedBytes", json(v.expectedBytes))
+                    .put("controlBytes", json(v.controlBytes)).put("discardedBytes", json(v.discardedBytes))
                     .put("httpStatus", json(v.httpStatus)).put("closeCode", json(v.closeCode)).put("localCursor", json(v.localCursor))
                     .put("observedCursor", json(v.observedCursor)).put("items", json(v.items)).put("heartbeatMs", json(v.heartbeatMs))
                     .put("retryDelayMs", json(v.retryDelayMs)).put("resumedBytes", json(v.resumedBytes)).put("bufferedBytes", json(v.bufferedBytes))
                     .put("rttMs", json(v.rttMs)).put("bytesPerSecond", json(v.bytesPerSecond)).put("verified", json(v.verified))
                     .put("route", v.route.name.lowercase()).put("errorCode", v.error.name.lowercase()))
+                .also { value -> value.getJSONObject("values").also { fields ->
+                    if (v.localCandidate != MonitorCandidate.UNKNOWN) fields.put("localCandidate", v.localCandidate.name.lowercase())
+                    if (v.remoteCandidate != MonitorCandidate.UNKNOWN) fields.put("remoteCandidate", v.remoteCandidate.name.lowercase())
+                    if (v.dtlsState != MonitorRtcState.UNKNOWN) fields.put("dtlsState", v.dtlsState.name.lowercase())
+                    if (v.pcState != MonitorRtcState.UNKNOWN) fields.put("pcState", v.pcState.name.lowercase())
+                    if (v.iceState != MonitorRtcState.UNKNOWN) fields.put("iceState", v.iceState.name.lowercase())
+                    v.channelOpen?.let { fields.put("channelOpen", it) }; v.outgoing?.let { fields.put("outgoing", it) }
+                } }
         }
     }
 }

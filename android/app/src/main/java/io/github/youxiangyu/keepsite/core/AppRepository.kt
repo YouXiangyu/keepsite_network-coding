@@ -508,7 +508,7 @@ class AppRepository(context: Context) : AppController {
     }
     private fun createPeer(userId: String, port: SyncEvents, local: FileCache, expected: Long): NativePeer {
         val owner = java.util.concurrent.atomic.AtomicReference<NativePeer>()
-        return NativePeer(context, userId, port, local) { view ->
+        return NativePeer(context, userId, port, local, diagnostics, diagnosticAccount, expected) { view ->
             publish(expected, predicate = { owner.get() != null && peer === owner.get() && peerWanted }) { it.copy(peer = view) }
         }.also { owner.set(it) }
     }
@@ -525,33 +525,62 @@ class AppRepository(context: Context) : AppController {
         val local = cache
         if (local == null || !foreground) { job.emit(MediaLoad(status = "error", error = "图片引用已不可用。")); return job }
         val token = local.token()
+        val observationOwner = diagnosticAccount
         job.emit(MediaLoad(status = "loading"))
         mediaWorkers.execute {
+            val observation = diagnostics.media(observationOwner, job.expected, media.size)
             try {
                 job.check()
                 if (!local.live(media)) throw ApiFailure(message = "图片引用已不可用。")
-                local.file(media)?.let { cached -> job.check(); job.emit(MediaLoad(cached, "cached", "cache")); return@execute }
+                val cacheAttempt = observation?.attempt(MonitorRoute.CACHE, MonitorProtocol.CACHE)
+                val cached = try { local.file(media, cacheAttempt).also { if (it != null) cacheAttempt?.complete(verified = true) else cacheAttempt?.failed(MonitorError.UNAVAILABLE) } }
+                    catch (failure: Throwable) { cacheAttempt?.failed(mediaFailure(failure)); throw failure }
+                    finally { cacheAttempt?.close() }
+                if (cached != null) {
+                    job.check(); observation?.cacheValidated(); observation?.complete(cacheAttempt?.payloadBytes(), MonitorRoute.CACHE)
+                    job.emit(MediaLoad(cached, "cached", "cache")); return@execute
+                }
+                val peerReader = peer
+                val peerAttempt = peerReader?.let { observation?.attempt(MonitorRoute.P2P_UNKNOWN, MonitorProtocol.P2P) }
                 val accelerated = try {
-                    peer?.fetch(media) { job.cancelled.get() || !current(job.expected) || !foreground || !local.live(media) }
-                } catch (_: CancellationException) {
-                    job.check()
-                    if (!local.live(media)) throw CancellationException()
-                    null // Disabling only P2P preserves this foreground media request and its cloud fallback.
+                    val result = try {
+                        peerReader?.fetch(media, peerAttempt) { job.cancelled.get() || !current(job.expected) || !foreground || !local.live(media) }
+                    } catch (_: CancellationException) {
+                        peerAttempt?.failed(MonitorError.CANCELLED)
+                        job.check()
+                        if (!local.live(media)) throw CancellationException()
+                        null // Disabling only P2P preserves this foreground media request and its cloud fallback.
+                    }
+                    if (result != null) peerAttempt?.complete(verified = true, actualIfUnknown = result.bytes.size.toLong(), resumedBytes = result.resumedBytes)
+                    else peerAttempt?.failed(MonitorError.UNAVAILABLE)
+                    result
+                } catch (failure: Throwable) { peerAttempt?.failed(mediaFailure(failure)); throw failure }
+                  finally { peerAttempt?.close() }
+                job.check()
+                val (bytes, source) = accelerated?.let { it.bytes to "peer" } ?: api.withScope(job.expected) {
+                    api.withObservation(observation?.operation) { api.download(media, observation) }
                 }
                 job.check()
-                val (bytes, source) = accelerated?.let { it.bytes to "peer" } ?: api.withScope(job.expected) { api.download(media) }
-                job.check(); ImageFiles.validate(bytes, media)
-                if (local.commit(media, bytes, token)) {
+                if (observation != null) observation.validating { ImageFiles.validate(bytes, media) } else ImageFiles.validate(bytes, media)
+                val route = when (source) { "server" -> MonitorRoute.SERVER_PROXY; "s3" -> MonitorRoute.DIRECT_S3
+                    else -> when (accelerated?.route) { "direct" -> MonitorRoute.P2P_DIRECT; "relay" -> MonitorRoute.P2P_RELAY; "mixed" -> MonitorRoute.MIXED; else -> MonitorRoute.P2P_UNKNOWN } }
+                val write = observation?.attempt(MonitorRoute.CACHE, MonitorProtocol.CACHE, MonitorEvent.CACHE_WRITE)
+                val committed = try { local.commit(media, bytes, token).also { if (it) { write?.read(bytes.size); write?.complete(verified = true) } else write?.failed(MonitorError.UNAVAILABLE) } }
+                    finally { write?.close() }
+                if (committed) {
                     job.check(); val file = local.file(media) ?: throw ApiFailure(message = "本机图片已被回收，请重试。")
+                    observation?.complete(bytes.size.toLong(), route)
                     job.emit(MediaLoad(file, "cached", source))
                 } else {
                     job.check()
+                    observation?.complete(bytes.size.toLong(), route)
                     job.emit(MediaLoad(status = "temporary", source = source, error = "未写入本机缓存，可临时查看。", bytes = bytes))
                 }
-            } catch (_: CancellationException) { job.close() }
+            } catch (_: CancellationException) { observation?.failed(MonitorError.CANCELLED); job.close() }
             catch (failure: Exception) {
+                observation?.failed(mediaFailure(failure))
                 if (current(job.expected) && !job.cancelled.get()) job.emit(MediaLoad(status = "error", error = failure.message?.take(300) ?: "图片读取失败。"))
-            }
+            } finally { observation?.close() }
         }
         return job
     }

@@ -100,7 +100,7 @@ class HttpApi(val origin: String, private val secrets: SecretStore, private val 
         }
     }
     private fun bounded(response: Response, limit: Long, expected: Long, clientMedia: Boolean = false,
-                        observation: NetworkDiagnostics.HttpObservation? = null): ByteArray {
+                        observation: NetworkDiagnostics.HttpObservation? = null, mediaObservation: MediaAttempt? = null): ByteArray {
         val body = response.body ?: throw ApiFailure(message = "服务响应正文缺失。")
         if (body.contentLength() > limit) throw ApiFailure(message = "服务响应超过大小限制。")
         return body.byteStream().use { stream ->
@@ -111,6 +111,7 @@ class HttpApi(val origin: String, private val secrets: SecretStore, private val 
                 val count = stream.read(block)
                 if (count == -1) break
                 observation?.read(count)
+                mediaObservation?.read(count)
                 if (output.size().toLong() + count > limit) throw ApiFailure(message = if (clientMedia) "图片大小与记录不一致。" else "服务响应超过大小限制。")
                 output.write(block, 0, count)
             }
@@ -181,44 +182,35 @@ class HttpApi(val origin: String, private val secrets: SecretStore, private val 
     }
     fun events(listener: WebSocketListener, expected: Long): WebSocket = client.newWebSocket(builder("/api/sync/events", expected).build(), listener)
 
-    private fun media(path: String, signed: Boolean, ref: MediaRef, expected: Long): ByteArray {
+    private fun media(path: String, signed: Boolean, ref: MediaRef, expected: Long, attempt: MediaAttempt?): ByteArray {
         check(expected)
         val request = if (signed) Request.Builder().url(path).get().build() else builder(path, expected).get().build()
         val transport = if (signed) mediaClient else readClient
-        try {
-            return transport.newCall(request).execute().use { response ->
+        fun perform(actual: Request, http: NetworkDiagnostics.HttpObservation?): ByteArray {
+          try {
+            attempt?.read(0)
+            return transport.newCall(actual).execute().use { response ->
                 check(expected)
-                if (!response.isSuccessful) throw if (signed) ApiFailure(response.code, message = "云端图片读取失败。") else failure(response, expected)
+                http?.response(response.code)
+                if (!response.isSuccessful) throw if (signed) ApiFailure(response.code, message = "云端图片读取失败。") else failure(response, expected, http)
                 if (response.header("Content-Type")?.substringBefore(';')?.trim()?.lowercase() != ref.mimeType) {
                     throw ApiFailure(message = "图片格式与记录不一致。")
                 }
-                val bytes = bounded(response, ref.size, expected, true)
+                val bytes = bounded(response, ref.size, expected, true, http, attempt)
                 if (bytes.size.toLong() != ref.size) throw ApiFailure(message = "图片下载不完整。")
                 bytes
             }
-        } catch (_: IOException) { check(expected); throw ApiFailure(message = "图片下载失败，请重新检查。") }
-    }
-    fun download(ref: MediaRef): Pair<ByteArray, String> {
-        val expected = requestEpoch()
-        for (attempt in 0..1) {
-            val auth = json("${ref.url}/download")
-            check(expected)
-            if (Wire.text(auth, "sha256") != ref.sha256 || Wire.number(auth, "size") != ref.size || Wire.text(auth, "mimeType") != ref.mimeType) Wire.invalid()
-            val transport = Wire.text(auth, "transport")
-            val url = Wire.text(auth, "url", 16000)
-            if (transport == "server") {
-                if (url != ref.url) Wire.invalid()
-            } else if (transport != "s3" || !validS3Url(url)) Wire.invalid()
-            if (Wire.number(auth, "expiresAt") <= System.currentTimeMillis()) continue
-            try { return media(url, transport == "s3", ref, expected) to transport }
-            catch (failure: ApiFailure) {
-                if (transport == "server") throw failure
-                if (attempt == 0 && failure.status == 403) continue
-                break
-            }
+          } catch (failure: IOException) {
+              attempt?.failed(diagnosticIoError(failure)); http?.failedAs(diagnosticIoError(failure))
+              check(expected); throw ApiFailure(message = "图片下载失败，请重新检查。")
+          }
         }
-        check(expected)
-        return media(ref.url, false, ref, expected) to "server"
+        return if (signed) perform(request, null) else diagnostics?.http(expected, base, request, session?.authenticated == true,
+            attempt?.operation ?: diagnosticParent.get(), ::perform) ?: perform(request, null)
+    }
+    fun download(ref: MediaRef, observation: MediaObservation? = null): Pair<ByteArray, String> {
+        val expected = requestEpoch()
+        return downloadMedia(ref, observation, { json("${ref.url}/download") }, { path, signed, attempt -> media(path, signed, ref, expected, attempt) }, { check(expected) })
     }
     @Synchronized override fun close() {
         if (closed) return
