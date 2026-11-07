@@ -24,6 +24,11 @@ class AppRepository(context: Context) : AppController {
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
     private val mediaWorkers = Executors.newFixedThreadPool(4)
+    private val reportWorker = object : java.util.concurrent.ThreadPoolExecutor(1, 1, 0, java.util.concurrent.TimeUnit.MILLISECONDS,
+        java.util.concurrent.ArrayBlockingQueue(1), java.util.concurrent.ThreadPoolExecutor.AbortPolicy()) {
+        override fun terminated() { mediaWorkers.shutdown() } // Drain already-owned document cleanup, including an active writer's finally.
+    }
+    private val reportJobs = CopyOnWriteArrayList<Closeable>()
     private val photoImporter = PhotoImporter(this.context.contentResolver)
     private val listeners = CopyOnWriteArrayList<(AppState) -> Unit>()
     private val mediaJobs = CopyOnWriteArrayList<MediaJob>()
@@ -69,12 +74,53 @@ class AppRepository(context: Context) : AppController {
         main.post { if (!closed && state === latest) listeners.forEach { it(latest) } }
     }
     override fun snapshot() = state
-    internal fun networkSnapshot() = diagnostics.snapshot()
-    internal fun refreshServerTrace(clearing: Boolean = false) {
+    override fun openNetworkPage() = if (!closed && api.session?.authenticated == true) diagnostics.openPage() else null
+    override fun networkSnapshot(owner: NetworkPageOwner) = if (!closed && api.session?.authenticated == true) diagnostics.pageSnapshot(owner) else null
+    override fun networkDeviceNames(owner: NetworkPageOwner): List<String> = synchronized(lock) {
+        if (closed || !owner.current() || accountId == null || state.session?.userId != accountId || api.session?.userId != accountId) emptyList()
+        else state.peer.devices.take(8).map { it.label.ifBlank { "未命名设备" } }.takeIf { owner.current() } ?: emptyList()
+    }
+    override fun setNetworkDetailed(owner: NetworkPageOwner, enabled: Boolean) { if (!closed && api.session?.authenticated == true) diagnostics.pageDetailed(owner, enabled) }
+    override fun pauseNetworkHistory(owner: NetworkPageOwner, paused: Boolean) { if (!closed && api.session?.authenticated == true) diagnostics.pagePause(owner, paused) }
+    override fun clearNetworkHistory(owner: NetworkPageOwner) { if (!closed && api.session?.authenticated == true) diagnostics.pageClear(owner) }
+    override fun prepareNetworkReport(owner: NetworkPageOwner) = if (!closed && api.session?.authenticated == true)
+        diagnostics.prepareReport(owner, NetworkReportEnvironment(BuildConfig.API_BASE_URL, BuildConfig.VERSION_NAME, android.os.Build.VERSION.SDK_INT)) else null
+    override fun refreshServerTrace(owner: NetworkPageOwner, clearing: Boolean) {
         if (closed || !foreground || api.session?.authenticated != true) return
-        val action = diagnostics.prepareServerAction(api.epoch(), clearing) ?: return
+        val action = diagnostics.pageServerAction(owner, api.epoch(), clearing) ?: return
         pendingServerTrace.set(action)
         scheduleServerTrace()
+    }
+    private fun reportJob(rejected: () -> Unit, work: (AtomicBoolean) -> Unit): Closeable {
+        val cancelled = AtomicBoolean(false)
+        lateinit var job: Closeable
+        job = Closeable { cancelled.set(true); reportJobs.remove(job) }
+        if (closed) { job.close(); return job }
+        reportJobs.add(job)
+        try { reportWorker.execute { try { if (!cancelled.get()) work(cancelled) } finally { reportJobs.remove(job) } } }
+        catch (_: java.util.concurrent.RejectedExecutionException) { job.close(); main.post { if (!closed) rejected() } }
+        return job
+    }
+    override fun renderNetworkReport(report: NetworkReport, format: NetworkReportFormat, callback: (String?) -> Unit): Closeable {
+      if (closed || !report.current()) { main.post { callback(null) }; return Closeable { } }
+      return reportJob({ callback(null) }) { cancelled ->
+        val result = if (!closed && !cancelled.get() && report.current()) report.render(format) else null
+        main.post { if (!closed && !cancelled.get()) callback(result?.takeIf { report.current() }) }
+      }
+    }
+    override fun saveNetworkReport(report: NetworkReport, format: NetworkReportFormat, uri: Uri, callback: (Boolean) -> Unit): Closeable {
+        // The caller supplies only its just-created ACTION_CREATE_DOCUMENT URI.
+        lateinit var job: ReportFileJob
+        job = ReportFileJob(reportWorker, mediaWorkers, { !closed && report.current() },
+            { context.contentResolver.openOutputStream(uri, "wt") },
+            { android.provider.DocumentsContract.deleteDocument(context.contentResolver, uri); Unit },
+            { output, cancelled -> report.write(format, output, cancelled) },
+            { saved ->
+                reportJobs.remove(job)
+                main.post { if (!closed && !job.cancelled.get()) callback(saved && report.current()) }
+            }
+        )
+        reportJobs.add(job); job.start(); return job
     }
     private fun scheduleServerTrace() {
         if (closed || pendingServerTrace.get() == null || !serverTraceScheduled.compareAndSet(false, true)) return
@@ -144,6 +190,7 @@ class AppRepository(context: Context) : AppController {
         peer?.close(); peer = null; events?.close(); events = null
     }
     private fun stopAccount() {
+        reportJobs.toList().forEach(Closeable::close)
         pendingServerTrace.set(null)
         diagnostics.closeAccount(diagnosticAccount); diagnosticAccount = null
         stopNetwork(); mediaJobs.forEach(MediaJob::close)
@@ -589,7 +636,7 @@ class AppRepository(context: Context) : AppController {
         synchronized(lock) {
             if (closed) return
             closed = true; foreground = false; api.cancelRequests(); stopAccount(); api.close()
-            worker.shutdownNow(); mediaWorkers.shutdownNow(); listeners.clear()
+            worker.shutdownNow(); reportWorker.shutdown(); listeners.clear()
         }
     }
 }

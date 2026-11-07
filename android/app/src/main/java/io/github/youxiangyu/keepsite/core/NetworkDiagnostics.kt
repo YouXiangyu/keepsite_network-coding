@@ -10,8 +10,11 @@ data class ApiNetworkState(val paused: Boolean = true, val active: Int = 0, val 
 data class NativeNetworkState(val observations: MonitorSnapshot, val api: ApiNetworkState,
                               val socket: SocketNetworkState, val sync: SyncNetworkState, val serverRead: ServerReadState = ServerReadState(),
                               val media: MediaNetworkState = MediaNetworkState(), val peer: PeerNetworkState = PeerNetworkState(),
-                              val peerTransfers: List<PeerTransferState> = emptyList())
-data class ServerReadState(val status: MonitorStatus = MonitorStatus.UNKNOWN, val error: MonitorError = MonitorError.NONE, val httpStatus: Int? = null)
+                              val peerTransfers: List<PeerTransferState> = emptyList(), val httpActivities: List<HttpActivityState> = emptyList(),
+                              val httpOmitted: Int = 0)
+data class HttpActivityState(val id: String, val template: MonitorTemplate, val status: MonitorStatus, val startedAt: Long,
+    val elapsedMs: Long, val httpStatus: Int? = null)
+data class ServerReadState(val status: MonitorStatus = MonitorStatus.UNKNOWN, val error: MonitorError = MonitorError.NONE, val httpStatus: Int? = null, val clearing: Boolean = false)
 
 /** Only diagnostic actions enter this failure boundary; business execution stays outside it. */
 internal fun <T> diagnostic(fallback: T, action: () -> T): T = try { action() } catch (_: Exception) { fallback }
@@ -29,6 +32,9 @@ class NetworkDiagnostics internal constructor(internal val monitor: NetworkMonit
     private var http: HttpOwner? = null
     private var api = ApiNetworkState()
     private var socket = SocketNetworkState()
+    private var socketStartedNanos: Long? = null
+    internal class HttpActivityOwner(val connection: NetworkMonitor.Connection, val startedNanos: Long, var ended: Boolean = false)
+    private val httpActivities = linkedMapOf<HttpActivityOwner, HttpActivityState>()
     private var sync = SyncNetworkState()
     private var media = MediaNetworkState()
     private var peer = PeerNetworkState()
@@ -40,6 +46,30 @@ class NetworkDiagnostics internal constructor(internal val monitor: NetworkMonit
     private var ignoredWatermarkSocket: NetworkMonitor.Connection? = null
     private var serverAction: ServerAction? = null
     private var serverRead = ServerReadState()
+    private val pageSeal = Any()
+    private val reportSeal = Any()
+    @Synchronized fun openPage(): NetworkPageOwner? = account?.let { NetworkPageOwner(this, it, pageSeal) }
+    @Synchronized fun pageCurrent(page: NetworkPageOwner) = page.matches(pageSeal) && account === page.account
+    @Synchronized fun pageSnapshot(page: NetworkPageOwner): NativeNetworkState? = if (pageCurrent(page)) snapshot() else null
+    @Synchronized fun pageDetailed(page: NetworkPageOwner, enabled: Boolean) { if (pageCurrent(page)) setDetailed(enabled) }
+    @Synchronized fun pagePause(page: NetworkPageOwner, paused: Boolean) { if (pageCurrent(page)) pauseHistory(paused) }
+    @Synchronized fun pageClear(page: NetworkPageOwner) { if (pageCurrent(page)) clearHistory() }
+    @Synchronized internal fun pageServerAction(page: NetworkPageOwner, expected: Long, clearing: Boolean): ServerAction? =
+        if (pageCurrent(page)) prepareServerAction(expected, clearing) else null
+    @Synchronized fun prepareReport(page: NetworkPageOwner, environment: NetworkReportEnvironment): NetworkReport? = diagnostic(null) {
+        if (!pageCurrent(page)) return@diagnostic null
+        val prepared = monitor.prepareExportState(page.account) ?: return@diagnostic null
+        val state = snapshot()?.copy(observations = prepared.second) ?: return@diagnostic null
+        NetworkReport(this, page.account, reportSeal, prepared.first, state, environment, System.currentTimeMillis())
+    }
+    @Synchronized fun reportCurrent(report: NetworkReport) = account === report.account && report.contents(reportSeal) != null && monitor.exportCurrent(report.history)
+    internal fun renderReport(report: NetworkReport, format: NetworkReportFormat): String? = diagnostic(null) {
+        if (!reportCurrent(report)) return@diagnostic null
+        val (state, environment, capturedAt) = report.contents(reportSeal) ?: return@diagnostic null
+        val history = monitor.exportJson(report.history) ?: return@diagnostic null
+        val value = NetworkReports.format(NetworkReports.build(history, state, environment, capturedAt), state, format)
+        value.takeIf { reportCurrent(report) }
+    }
 
     class ServerAction internal constructor(private val owner: NetworkDiagnostics, internal val read: NetworkMonitor.ServerRead,
         val epoch: Long, val captureId: String, val clearing: Boolean) {
@@ -62,7 +92,7 @@ class NetworkDiagnostics internal constructor(internal val monitor: NetworkMonit
         if (clearing) { recentPeerTransfers.clear(); monitor.clearHistory(binding.account) } // DELETE targets only the captured old ID.
         val guard = monitor.prepareServerRead(binding.connection) ?: return@diagnostic null
         ServerAction(this, guard, expected, original.captureId, clearing).also {
-            serverAction = it; serverRead = ServerReadState(MonitorStatus.STARTED)
+            serverAction = it; serverRead = ServerReadState(MonitorStatus.STARTED, clearing = clearing)
         }
     }
     @Synchronized internal fun serverActionCurrent(action: ServerAction) = serverAction === action && http?.epoch == action.epoch && monitor.serverReadCurrent(action.read)
@@ -89,6 +119,7 @@ class NetworkDiagnostics internal constructor(internal val monitor: NetworkMonit
     @Synchronized fun openAccount(epoch: Long): NetworkMonitor.Account? = diagnostic(null) {
         invalidateServerAction()
         activePeerTransfers.clear(); recentPeerTransfers.clear()
+        httpActivities.clear(); socketStartedNanos = null
         account?.let(monitor::closeAccount); account = null; lanes.clear(); http = null; api = ApiNetworkState()
         socket = SocketNetworkState(); sync = SyncNetworkState(); media = MediaNetworkState(); peer = PeerNetworkState(); syncSpace = null; socketSpace = null; ignoredWatermarkSocket = null
         account = monitor.openAccount()
@@ -98,6 +129,7 @@ class NetworkDiagnostics internal constructor(internal val monitor: NetworkMonit
         if (owner != null && owner === account) {
             invalidateServerAction()
             activePeerTransfers.clear(); recentPeerTransfers.clear()
+            httpActivities.clear(); socketStartedNanos = null
             monitor.closeAccount(owner); account = null; lanes.clear(); http = null; api = ApiNetworkState()
             socket = SocketNetworkState(); sync = SyncNetworkState(); media = MediaNetworkState(); peer = PeerNetworkState(); syncSpace = null; socketSpace = null; ignoredWatermarkSocket = null
         }
@@ -112,21 +144,23 @@ class NetworkDiagnostics internal constructor(internal val monitor: NetworkMonit
         if (owner == null || account !== owner) return@diagnostic
         invalidateServerAction()
         activePeerTransfers.clear(); recentPeerTransfers.clear()
+        httpActivities.clear()
         lanes.values.toList().forEach(monitor::disconnect); lanes.clear(); http = null
         api = api.copy(paused = true, active = 0)
-        socket = socket.copy(status = MonitorStatus.PAUSED, opened = false, aligned = false, heartbeatMs = null, diagnosticsVersion = null)
+        socket = socket.copy(status = MonitorStatus.PAUSED, opened = false, aligned = false, heartbeatMs = null, diagnosticsVersion = null, durationMs = socketElapsed())
+        socketStartedNanos = null
         sync = sync.copy(paused = true, running = false)
         media = media.copy(active = 0, status = MonitorStatus.PAUSED)
         peer = peer.copy(registered = false, active = 0, status = MonitorStatus.PAUSED)
     }
     @Synchronized fun connect(owner: NetworkMonitor.Account, lane: MonitorLane): NetworkMonitor.Connection? = diagnostic(null) {
-        if (account === owner && lane == MonitorLane.HTTP) invalidateServerAction()
+        if (account === owner && lane == MonitorLane.HTTP) { invalidateServerAction(); httpActivities.clear(); api = api.copy(active = 0) }
         if (account === owner && lane == MonitorLane.PEER) { activePeerTransfers.clear(); recentPeerTransfers.clear() }
         if (account !== owner) null else monitor.connect(owner, lane)?.also { lanes[lane] = it }
     }
     @Synchronized fun disconnect(connection: NetworkMonitor.Connection?) = diagnostic(Unit) {
         if (connection != null && lanes[connection.lane] === connection) {
-            if (connection.lane == MonitorLane.HTTP) invalidateServerAction()
+            if (connection.lane == MonitorLane.HTTP) { invalidateServerAction(); httpActivities.clear(); api = api.copy(active = 0) }
             if (connection.lane == MonitorLane.PEER) activePeerTransfers.clear()
             monitor.disconnect(connection); lanes.remove(connection.lane)
         }
@@ -142,7 +176,10 @@ class NetworkDiagnostics internal constructor(internal val monitor: NetworkMonit
     }
     @Synchronized fun clearHistory() = diagnostic(Unit) { invalidateServerAction(); recentPeerTransfers.clear(); account?.let(monitor::clearHistory) }
     @Synchronized fun snapshot(): NativeNetworkState? = diagnostic(null) {
-        NativeNetworkState(monitor.snapshot(), api, socket, sync, serverRead, media, peer, activePeerTransfers.values.toList() + recentPeerTransfers.toList())
+        val now = System.nanoTime()
+        val activities = httpActivities.map { (owner, state) -> state.copy(elapsedMs = ((now - owner.startedNanos) / 1_000_000).coerceAtLeast(0)) }
+        NativeNetworkState(monitor.snapshot(), api, socket.copy(durationMs = socketElapsed()), sync, serverRead, media, peer,
+            activePeerTransfers.values.toList() + recentPeerTransfers.toList(), activities, (api.active - activities.size).coerceAtLeast(0))
     }
     @Synchronized internal fun currentPeer(connection: NetworkMonitor.Connection, expected: Long) = current(connection) && http?.epoch == expected
     @Synchronized internal fun beginPeerTransfer(connection: NetworkMonitor.Connection, alias: String, expected: Long, outgoing: Boolean, operationId: String?, epoch: Long): PeerTransferLive? = diagnostic(null) {
@@ -192,8 +229,9 @@ class NetworkDiagnostics internal constructor(internal val monitor: NetworkMonit
             begin(connection, MonitorProtocol.SYNC, MonitorEvent.DELTA)?.let { SyncObservation(this, connection, it) }
         }
     }
-    @Synchronized internal fun socketState(connection: NetworkMonitor.Connection, state: SocketNetworkState) = diagnostic(Unit) {
-        if (current(connection)) socket = state
+    private fun socketElapsed() = if (socket.opened) socketStartedNanos?.let { ((System.nanoTime() - it) / 1_000_000).coerceAtLeast(0) } else socket.durationMs
+    @Synchronized internal fun socketState(connection: NetworkMonitor.Connection, state: SocketNetworkState, startedNanos: Long? = null) = diagnostic(Unit) {
+        if (current(connection)) { socket = state; socketStartedNanos = if (state.opened) startedNanos else null }
     }
     @Synchronized internal fun syncStarted(connection: NetworkMonitor.Connection) = diagnostic(Unit) {
         if (current(connection)) sync = sync.copy(paused = false, running = true)
@@ -256,17 +294,40 @@ class NetworkDiagnostics internal constructor(internal val monitor: NetworkMonit
             else -> MonitorTemplate.UNKNOWN
         }
     }
-    @Synchronized private fun startHttp(expected: Long, origin: HttpUrl, request: Request, parent: NetworkMonitor.Operation?): HttpObservation? = diagnostic(null) {
+    @Synchronized private fun startActivity(expected: Long, origin: HttpUrl, request: Request): HttpActivityOwner? = diagnostic(null) {
+        val binding = http?.takeIf { it.epoch == expected && current(it.connection) } ?: return@diagnostic null
+        val template = template(request, origin)
+        if (template == MonitorTemplate.DIAGNOSTICS) return@diagnostic null
+        val activity = HttpActivityOwner(binding.connection, System.nanoTime())
+        api = api.copy(active = api.active + 1)
+        if (httpActivities.size < 16) httpActivities[activity] = HttpActivityState(java.util.UUID.randomUUID().toString().replace("-", ""),
+            template, MonitorStatus.STARTED, System.currentTimeMillis(), 0)
+        activity
+    }
+    @Synchronized private fun finishActivity(activity: HttpActivityOwner?) = diagnostic(Unit) {
+        if (activity != null && !activity.ended) {
+            activity.ended = true; httpActivities.remove(activity)
+            if (current(activity.connection)) api = api.copy(active = (api.active - 1).coerceAtLeast(0))
+        }
+    }
+    @Synchronized private fun activityResponse(activity: HttpActivityOwner?, code: Int) = diagnostic(Unit) {
+        if (activity != null && current(activity.connection)) httpActivities[activity]?.let {
+            httpActivities[activity] = it.copy(status = MonitorStatus.TRANSFERRING, httpStatus = code.takeIf { value -> value in 100..599 })
+        }
+    }
+    @Synchronized private fun startHttp(expected: Long, origin: HttpUrl, request: Request, parent: NetworkMonitor.Operation?, activity: HttpActivityOwner?): HttpObservation? = diagnostic(null) {
         val binding = http?.takeIf { it.epoch == expected && current(it.connection) } ?: return@diagnostic null
         val template = template(request, origin)
         if (template == MonitorTemplate.DIAGNOSTICS) return@diagnostic null
         val operation = monitor.begin(binding.connection, MonitorProtocol.HTTP, MonitorEvent.REQUEST, template, parent = parent) ?: return@diagnostic null
-        HttpObservation(binding.connection, operation, template).also { api = api.copy(active = api.active + 1) }
+        activity?.let { httpActivities[it]?.let { state -> httpActivities[it] = state.copy(id = operation.id) } }
+        HttpObservation(binding.connection, operation, template, activity)
     }
 
     fun <T> http(expected: Long, origin: HttpUrl, request: Request, authenticated: Boolean, parent: NetworkMonitor.Operation? = null,
                  business: (Request, HttpObservation?) -> T): T {
-        val observation = startHttp(expected, origin, request, parent)
+        val activity = startActivity(expected, origin, request)
+        val observation = startHttp(expected, origin, request, parent, activity)
         val clean = request.newBuilder().removeHeader("X-Keepsite-Diagnostics").removeHeader("X-Keepsite-Trace-Id").build()
         val actual = diagnostic(clean) {
             val eligible = authenticated && sameOrigin(request.url, origin) && observation?.template !in setOf(
@@ -288,16 +349,17 @@ class NetworkDiagnostics internal constructor(internal val monitor: NetworkMonit
             }
             observation?.finish(if (failure is CancellationException) MonitorStatus.CANCELLED else MonitorStatus.FAILED, error)
             throw failure
-        } finally { abandon(observation?.operation) }
+        } finally { abandon(observation?.operation); finishActivity(activity) }
     }
     inner class HttpObservation internal constructor(internal val connection: NetworkMonitor.Connection,
-                                                    internal val operation: NetworkMonitor.Operation, internal val template: MonitorTemplate) {
+                                                    internal val operation: NetworkMonitor.Operation, internal val template: MonitorTemplate,
+                                                    private val activity: HttpActivityOwner?) {
         private val started = System.nanoTime()
         private var status: Int? = null
         private var bytes = 0L
         private var failureCategory: MonitorError? = null
         fun failedAs(error: MonitorError) { failureCategory = error }
-        fun response(code: Int) { status = code; observe(operation, MonitorProtocol.HTTP, MonitorEvent.REQUEST,
+        fun response(code: Int) { status = code; activityResponse(activity, code); observe(operation, MonitorProtocol.HTTP, MonitorEvent.REQUEST,
             MonitorStatus.TRANSFERRING, MonitorValues(httpStatus = code)) }
         fun read(count: Int) { if (count > 0) bytes = if (Long.MAX_VALUE - bytes < count) Long.MAX_VALUE else bytes + count }
         internal fun finish(terminal: MonitorStatus, error: MonitorError) = diagnostic(Unit) {
@@ -307,7 +369,7 @@ class NetworkDiagnostics internal constructor(internal val monitor: NetworkMonit
             synchronized(this@NetworkDiagnostics) {
                 if (!current(connection)) return@synchronized
                 val now = System.currentTimeMillis()
-                api = api.copy(active = (api.active - 1).coerceAtLeast(0), lastDurationMs = ((System.nanoTime() - started) / 1_000_000).coerceAtLeast(0),
+                api = api.copy(lastDurationMs = ((System.nanoTime() - started) / 1_000_000).coerceAtLeast(0),
                     lastSuccessAt = if (terminal == MonitorStatus.COMPLETED) now else api.lastSuccessAt,
                     lastFailureAt = if (terminal == MonitorStatus.FAILED) now else api.lastFailureAt,
                     lastStatus = status, lastError = actualError)

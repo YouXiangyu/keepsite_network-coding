@@ -8,7 +8,7 @@ data class SocketNetworkState(val status: MonitorStatus = MonitorStatus.UNKNOWN,
     val aligned: Boolean = false, val connectedSince: Long? = null, val lastMessageAt: Long? = null,
     val lastMessage: SocketMessage = SocketMessage.UNKNOWN, val intervalMs: Long? = null,
     val heartbeatMs: Long? = null, val diagnosticsVersion: Int? = null, val watchdogMs: Long? = null,
-    val retryDelayMs: Long? = null, val closeCode: Int? = null, val error: MonitorError = MonitorError.NONE)
+    val retryDelayMs: Long? = null, val closeCode: Int? = null, val error: MonitorError = MonitorError.NONE, val durationMs: Long? = null)
 /** Item counts are snapshot rows and delta operations, separately; data-change time means nonempty data applied, not a content diff. */
 data class SyncNetworkState(val paused: Boolean = true, val running: Boolean = false, val localCursor: Long? = null,
     val observedCursor: Long? = null, val lastSnapshotAt: Long? = null, val lastDeltaAt: Long? = null,
@@ -31,14 +31,16 @@ class SocketObservation internal constructor(private val owner: NetworkDiagnosti
     private val operation = owner.begin(connection, MonitorProtocol.WS, MonitorEvent.CONNECTION, MonitorTemplate.EVENTS)
     private var state = SocketNetworkState(status = MonitorStatus.STARTED, watchdogMs = 8000)
     private var messageNanos: Long? = null
+    private var openedNanos: Long? = null
     init { owner.socketState(connection, state) }
     private fun publish(event: MonitorEvent = MonitorEvent.CONNECTION, bytes: Long? = null) {
         owner.observe(operation, MonitorProtocol.WS, event, state.status,
             MonitorValues(bytes = bytes, heartbeatMs = state.heartbeatMs, retryDelayMs = state.retryDelayMs, closeCode = state.closeCode, error = state.error))
-        owner.socketState(connection, state)
+        owner.socketState(connection, state, openedNanos)
     }
     fun opened() = diagnostic(Unit) {
-        state = state.copy(status = MonitorStatus.OPEN, opened = true, connectedSince = System.currentTimeMillis()); publish()
+        openedNanos = System.nanoTime()
+        state = state.copy(status = MonitorStatus.OPEN, opened = true, connectedSince = System.currentTimeMillis(), durationMs = 0); publish()
     }
     fun aligned(aligned: Boolean) = diagnostic(Unit) {
         if (state.aligned != aligned) { state = state.copy(aligned = aligned); publish() }
@@ -62,13 +64,15 @@ class SocketObservation internal constructor(private val owner: NetworkDiagnosti
         val messageOperation = owner.begin(connection, MonitorProtocol.WS, MonitorEvent.MESSAGE, MonitorTemplate.EVENTS)
         owner.observe(messageOperation, MonitorProtocol.WS, MonitorEvent.MESSAGE, MonitorStatus.COMPLETED,
             MonitorValues(bytes = bytes.toLong(), heartbeatMs = state.heartbeatMs, observedCursor = cursor))
-        owner.abandon(messageOperation); owner.socketState(connection, state)
+        owner.abandon(messageOperation); owner.socketState(connection, state, openedNanos)
         if (server != null && cursor != null) owner.watermark(connection, server, cursor)
     }
     fun closed(code: Int? = null, retryMs: Long? = null, error: MonitorError = MonitorError.NONE) = diagnostic(Unit) {
         state = state.copy(status = if (retryMs != null) MonitorStatus.RETRYING else MonitorStatus.CLOSED,
             opened = false, aligned = false, heartbeatMs = null, diagnosticsVersion = null, watchdogMs = null,
-            retryDelayMs = retryMs, closeCode = code?.takeIf { it in 1000..4999 }, error = error)
+            retryDelayMs = retryMs, closeCode = code?.takeIf { it in 1000..4999 }, error = error,
+            durationMs = openedNanos?.let { ((System.nanoTime() - it) / 1_000_000).coerceAtLeast(0) })
+        openedNanos = null
         publish(); owner.abandon(operation); owner.disconnect(connection)
     }
 }

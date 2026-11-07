@@ -64,6 +64,7 @@ data class MonitorSnapshot(
     val historyBytes: Int, val recorded: Long, val dropped: Long, val droppedOperations: Long, val captureCostNs: Long,
     val aliases: Int, val completedTraces: Int,
     val serverDomains: List<ServerTraceDomain> = emptyList(), val importedServerEvents: Long = 0,
+    val clearRevision: Long = 0,
 )
 data class MonitorTraceContext(val captureId: String, val traceId: String)
 
@@ -109,6 +110,7 @@ class NetworkMonitor internal constructor(private val clock: MonitorClock = Proc
     private var paused = false
     private var capture: String? = null
     private var history = 0L
+    private var clearRevision = 0L
     private var sequence = 0L
     private var historyBytes = 0
     private var recorded = 0L
@@ -123,7 +125,7 @@ class NetworkMonitor internal constructor(private val clock: MonitorClock = Proc
     @Synchronized fun closeAccount(owner: Account) { if (account === owner) reset() }
     private fun reset() {
         account = null; connections.clear(); active.clear(); completed.clear(); aliases.clear(); latest.clear(); events.clear(); serverDomains.clear()
-        detailed = false; paused = false; capture = null; history++; sequence = 0; historyBytes = 0
+        detailed = false; paused = false; capture = null; history++; clearRevision = 0; sequence = 0; historyBytes = 0
         recorded = 0; dropped = 0; droppedOperations = 0; costNs = 0; importedServerEvents = 0
     }
     @Synchronized fun connect(owner: Account, lane: MonitorLane): Connection? {
@@ -154,7 +156,7 @@ class NetworkMonitor internal constructor(private val clock: MonitorClock = Proc
     }
     @Synchronized fun clearHistory(owner: Account) {
         if (account !== owner) return
-        events.clear(); serverDomains.clear(); aliases.clear(); historyBytes = 0; recorded = 0; dropped = 0; importedServerEvents = 0; rotate()
+        events.clear(); serverDomains.clear(); aliases.clear(); historyBytes = 0; recorded = 0; dropped = 0; importedServerEvents = 0; clearRevision++; rotate()
     }
     @Synchronized fun alias(owner: Account, peerKey: String): DeviceAlias? {
         if (account !== owner || peerKey.isEmpty() || peerKey.length > 128) return null
@@ -254,14 +256,20 @@ class NetworkMonitor internal constructor(private val clock: MonitorClock = Proc
     }
     @Synchronized fun snapshot(): MonitorSnapshot = MonitorSnapshot(account?.sessionId, clock.id, detailed, paused,
         latest.toMap(), events.mapNotNull { it.record }, active.size, historyBytes, recorded, dropped, droppedOperations, costNs, aliases.size, completed.size,
-        serverDomains.map { (key, domain) -> domain.copy(instrumented = domain.instrumented.toSet(), events = events.filter { it.domain == key }.mapNotNull { it.server }) }, importedServerEvents)
+        serverDomains.map { (key, domain) -> domain.copy(instrumented = domain.instrumented.toSet(), events = events.filter { it.domain == key }.mapNotNull { it.server }) }, importedServerEvents, clearRevision)
     @Synchronized fun prepareExport(owner: Account): Export? = if (account === owner) Export(exportSeal, owner, history, snapshot()) else null
+    @Synchronized internal fun prepareExportState(owner: Account): Pair<Export, MonitorSnapshot>? {
+        if (account !== owner) return null
+        val state = snapshot()
+        return Export(exportSeal, owner, history, state) to state
+    }
     @Synchronized fun exportCurrent(export: Export) = account === export.account && history == export.history && export.contents(exportSeal) != null
     fun exportJson(export: Export): String? {
         if (!exportCurrent(export)) return null
         val state = export.contents(exportSeal) ?: return null
         val value = JSONObject().put("v", 1).put("clockId", state.clockId).put("sessionId", state.sessionId)
             .put("origin", "client").put("detailed", state.detailed).put("historyPaused", state.historyPaused)
+            .put("clearRevision", state.clearRevision)
             .put("events", JSONArray(state.events.map(::recordJson)))
             .put("serverDomains", JSONArray(state.serverDomains.map { ServerTraceBatch.exportJson(it) ?: return null }))
             .put("latest", JSONArray(state.latest.values.map(::recordJson)))
