@@ -4,7 +4,12 @@ import { join } from 'node:path';
 import { sampleItem, media, pngHash, otherHash, otherPng, imageFixture, posterSource } from '../tests/web-fixtures.mjs';
 const password = 'abcdefgh';
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=', 'base64');
-async function mockApi(page: Page, options: { user?: string; configured?: boolean; google?: boolean; sessionGate?: Promise<void>; empty?: boolean; cloud?: boolean; processing?: boolean; deviceSync?: boolean; peerName?: string } = {}) {
+function monthlyTickets() {
+  return Array.from({ length: 14 }, (_, index) => ({ ...sampleItem(`month-${index}`),
+    fields: { ...sampleItem().fields, title: `观影记忆 ${index}`, cinema: `影院 ${index % 2}`, showtime: `2026-${String(index % 7 + 1).padStart(2, '0')}-15T19:30` },
+    createdAt: Date.parse('2026-11-01T12:00:00Z') + index * 1000 }));
+}
+async function mockApi(page: Page, options: { user?: string; configured?: boolean; google?: boolean; sessionGate?: Promise<void>; snapshotGate?: Promise<void>; empty?: boolean; cloud?: boolean; processing?: boolean; deviceSync?: boolean; peerName?: string } = {}) {
   const server = {
     user: options.user ?? '', configured: options.configured ?? true, google: options.google ?? false,
     requests: [] as { path: string; method: string; body: any; headers: Record<string, string> }[],
@@ -12,6 +17,7 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
     rejectVerification: false, unverifiedLogin: false, holdChanges: undefined as Promise<void> | undefined,
     csrfToken: undefined as string | undefined, logoutUrl: undefined as string | undefined,
     appliedOperations: new Set<string>(),
+    mediaBytes: new Map<string, Buffer>([[pngHash, png], [otherHash, otherPng]]),
     uploads: new Map<string, { uploadId: string; status: string; asset: ReturnType<typeof media> }>(),
     processing: options.processing ?? false,
     accountMethods: { password: { linked: true, email: 'a@example.test' as string | null }, google: { linked: false, email: null as string | null } },
@@ -85,6 +91,7 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
       return route.fulfill({ status: 302, headers: { Location: '/devices?account_link=success' } });
     }
     if (path === '/api/sync/snapshot') {
+      await options.snapshotGate;
       const token = new URL(request.url()).searchParams.get('pageToken'); let view;
       if (token) view = views.get(token);
       else {
@@ -108,7 +115,7 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
     if (path.startsWith('/api/operations/')) { const operationId = path.split('/')[3]; const applied = server.appliedOperations.has(`${server.user}/${operationId}`); return respond(route, { serverId: 'web-server', operationId, applied, committedCursor: applied ? history().cursor : null }); }
     if (path.startsWith('/api/uploads/')) { const upload = server.uploads.get(`${server.user}/${path.split('/')[3]}`); return respond(route, upload ?? { detail: '未找到上传' }, upload ? 200 : 404); }
     if (path.endsWith('/download')) { const hash = path.split('/')[3]; const assets = currentData().tickets.flatMap(ticket => [ticket.media.original, ticket.media.poster]).filter(Boolean); const asset = assets.find(asset => asset!.assetId === hash) ?? media(); return respond(route, { ...asset, transport: 'server', expiresAt: Date.now() + 60000 }); }
-    if (path.startsWith('/api/media/')) return route.fulfill({ contentType: 'image/png', body: path.endsWith(otherHash) ? otherPng : png });
+    if (path.startsWith('/api/media/')) return route.fulfill({ contentType: 'image/png', body: server.mediaBytes.get(path.split('/').at(-1)!) ?? png });
     if (path === '/api/media') { const uploadId = /name="uploadId"\r\n\r\n([^\r]+)/.exec(body)?.[1] ?? ''; const asset = media(); server.uploads.set(`${server.user}/${uploadId}`, { uploadId, status: 'stored', asset }); return respond(route, { ...asset, uploadId }); }
     const data = currentData();
     if (server.appliedOperations.has(`${server.user}/${body?.operationId}`)) return respond(route, { serverId: 'web-server', operationId: body.operationId, committedCursor: history().cursor });
@@ -126,7 +133,233 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
   });
   return Object.assign(server, { hint });
 }
+async function openDevices(page: Page) {
+  const shortcut = page.locator('.app-header').getByRole('link', { name: '设备与状态', exact: true });
+  if (await shortcut.isVisible()) await shortcut.click();
+  else { await page.getByRole('navigation').getByRole('link', { name: '我的', exact: true }).click(); await page.locator('.mine-settings').click(); }
+}
 async function login(page: Page, email = 'a@example.test') { await page.getByLabel('邮箱地址', { exact: true }).fill(email); await page.getByLabel('密码', { exact: true }).fill(password); await page.getByRole('button', { name: '登录', exact: true }).click(); }
+
+test.describe('monthly review', () => {
+  test.use({ timezoneId: 'Asia/Macau' });
+
+  async function prepareMonthlyLibrary(page: Page) {
+    const api = await mockApi(page, { user: 'a' });
+    const tickets = monthlyTickets();
+    tickets.forEach((ticket, index) => { const fixture = imageFixture(index * 7000, 60, 80); ticket.media.original = fixture.asset; api.mediaBytes.set(fixture.asset.assetId, fixture.bytes); });
+    api.data.set('a', { tickets });
+  }
+
+  for (const width of [360, 390, 768, 1280, 1440]) test(`responsive monthly pages at ${width}px`, async ({ page }, info) => {
+    await prepareMonthlyLibrary(page);
+    await page.setViewportSize({ width, height: 900 });
+    const geometry = [];
+    for (const [route, title] of [['/mine', '我的'], ['/months', '全部月份'], ['/months/2026-01', '2026年1月']]) {
+      await page.goto(route);
+      await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
+      const bounds = await page.evaluate(() => ({ width: innerWidth, scrollWidth: document.documentElement.scrollWidth,
+        outside: [...document.querySelectorAll('body *')].map(node => ({ node: node.tagName, class: node.className, x: node.getBoundingClientRect().x, right: node.getBoundingClientRect().right }))
+          .filter(box => box.right > innerWidth + 1 && box.x < innerWidth).slice(0, 16) }));
+      if (bounds.scrollWidth > bounds.width) await page.screenshot({ path: info.outputPath(`overflow-${width}.png`), fullPage: true });
+      expect(bounds.scrollWidth, JSON.stringify({ route, ...bounds })).toBeLessThanOrEqual(bounds.width);
+      if (width === 390 || width === 768 || width === 1440) {
+        await expect(page.locator('.ticket-image img').first()).toBeVisible();
+        await page.screenshot({ path: info.outputPath(`${route.replaceAll('/', '-')}-${width}.png`), fullPage: true });
+      }
+      geometry.push({ route, width, ...await page.evaluate(() => ({ scrollWidth: document.documentElement.scrollWidth, title: document.title })) });
+    }
+    await info.attach('responsive-geometry', { body: JSON.stringify(geometry, null, 2), contentType: 'application/json' });
+  });
+
+  test('account summary and complete history keep all months accessible', async ({ page }) => {
+    await prepareMonthlyLibrary(page);
+    await page.goto('/tickets');
+    await page.getByRole('navigation').getByRole('link', { name: '我的', exact: true }).click();
+    await expect(page.getByRole('heading', { name: '我的', exact: true })).toBeVisible();
+    await expect(page.locator('.profile-stats dd')).toHaveText(['14 张', '7 个']);
+    await expect(page.locator('.recent-tickets > li')).toHaveCount(10);
+    await expect(page.locator('.recent-tickets h3').first()).toHaveText('观影记忆 13');
+    await expect(page.locator('.month-card')).toHaveCount(6);
+    await expect(page.locator('.month-card h3').first()).toHaveText('2026年7月');
+    await expect(page.locator('.month-card a button,.recent-tickets a button')).toHaveCount(0);
+    await page.getByRole('link', { name: '查看全部月份' }).click();
+    await expect(page.locator('.month-card')).toHaveCount(7);
+    await page.locator('.month-card').filter({ hasText: '2026年1月' }).click();
+    await expect(page.locator('.ticket-card')).toHaveCount(2);
+    await page.locator('.ticket-card').first().getByRole('link').click();
+    await page.getByRole('link', { name: '返回2026年1月' }).click();
+    await expect(page.getByRole('heading', { name: '2026年1月', exact: true })).toBeVisible();
+  });
+
+  test('filters stay local, do not move focus or history while typing, and survive detail edit cancel and refresh', async ({ page }) => {
+    const api = await mockApi(page, { user: 'a' }); api.data.set('a', { tickets: monthlyTickets() });
+    await page.goto('/tickets');
+    await page.getByRole('searchbox').fill('影院 1');
+    await page.getByRole('combobox', { name: '电影票排序' }).selectOption('oldest');
+    await page.getByRole('navigation').getByRole('link', { name: '我的', exact: true }).click();
+    await page.locator('.month-card').filter({ hasText: '2026年7月' }).click();
+    await expect(page.getByRole('searchbox')).toHaveValue('');
+    const history = await page.evaluate(() => window.history.length);
+    await page.getByRole('searchbox').pressSequentially('记忆');
+    await expect(page.getByRole('searchbox')).toBeFocused();
+    expect(await page.evaluate(() => window.history.length)).toBe(history);
+    await page.getByRole('combobox', { name: '电影票排序' }).selectOption('oldest');
+    await page.locator('.ticket-card').first().getByRole('link').click();
+    await page.reload();
+    await page.getByRole('link', { name: '编辑票根', exact: true }).click();
+    await page.getByRole('link', { name: '取消', exact: true }).click();
+    await page.getByRole('link', { name: '返回2026年7月' }).click();
+    await expect(page.getByRole('heading', { name: '2026年7月', exact: true })).toBeVisible();
+    await expect(page.getByRole('searchbox')).toHaveValue('记忆');
+    await expect(page.getByRole('combobox', { name: '电影票排序' })).toHaveValue('oldest');
+    await page.locator('.ticket-card').first().getByRole('link').click();
+    await page.getByRole('link', { name: '编辑票根', exact: true }).click();
+    await page.getByRole('link', { name: '返回2026年7月' }).click();
+    await expect(page.getByRole('searchbox')).toHaveValue('记忆');
+    await page.locator('.ticket-card').first().getByRole('link').click();
+    await page.goBack(); await expect(page.getByRole('searchbox')).toHaveValue('记忆');
+    await page.goForward(); await page.getByRole('link', { name: '返回2026年7月' }).click();
+    await page.getByRole('link', { name: '返回我的' }).click();
+    await page.locator('.month-card').filter({ hasText: '2026年6月' }).click();
+    await expect(page.getByRole('searchbox')).toHaveValue('');
+    await expect(page.getByRole('combobox', { name: '电影票排序' })).toHaveValue('recent');
+    await page.getByRole('navigation').getByRole('link', { name: '票夹', exact: true }).click();
+    // Reload above creates a fresh account workspace; restore a library filter and verify its own round trip.
+    await page.getByRole('searchbox').fill('影院 1');
+    await page.getByRole('combobox', { name: '电影票排序' }).selectOption('oldest');
+    await page.locator('.ticket-card').first().getByRole('link').click();
+    await page.getByRole('link', { name: '编辑票根', exact: true }).click();
+    await page.getByRole('link', { name: '取消', exact: true }).click();
+    await page.getByRole('link', { name: '返回票夹' }).click();
+    await expect(page.getByRole('searchbox')).toHaveValue('影院 1');
+    await expect(page.getByRole('combobox', { name: '电影票排序' })).toHaveValue('oldest');
+  });
+
+  test('legacy library aliases and encoded month keys remain usable on direct links and refresh', async ({ page }) => {
+    const api = await mockApi(page, { user: 'a' }); api.data.set('a', { tickets: monthlyTickets() });
+    for (const route of ['/tickets/', '/t%69ckets', '/tickets//', '/months/2026-%31%30']) {
+      await page.goto(`${route}?search=影院+1&sort=oldest`);
+      await expect(page.getByRole('searchbox')).toHaveValue('影院 1');
+      await page.reload(); await expect(page.getByRole('combobox', { name: '电影票排序' })).toHaveValue('oldest');
+      if (!route.startsWith('/months/')) {
+        await page.locator('.ticket-card').first().getByRole('link').click();
+        await page.getByRole('link', { name: '返回票夹' }).click();
+        await expect(page.getByRole('searchbox')).toHaveValue('影院 1');
+      } else await expect(page.getByRole('heading', { name: '2026年10月', exact: true })).toBeVisible();
+    }
+    await page.goto('/tickets/month-0/edit');
+    await page.getByRole('link', { name: '取消', exact: true }).click();
+    await expect(page).toHaveURL(/\/tickets\/month-0$/);
+    await expect(page.getByRole('heading', { name: '观影记忆 0', exact: true })).toBeVisible();
+  });
+
+  test('date edits, last-ticket deletion and remote hints immediately recompute months', async ({ page }) => {
+    const api = await mockApi(page, { user: 'a' });
+    const first = sampleItem('october'), second = sampleItem('november'); second.fields.showtime = '2026-11-15T19:30';
+    first.createdAt = second.createdAt = Date.parse('2026-09-30T20:00:00Z');
+    api.data.set('a', { tickets: [first, second] }); await page.goto('/months/2026-10');
+    await page.locator('.ticket-card').first().getByRole('link').click();
+    await page.getByRole('link', { name: '编辑票根', exact: true }).click();
+    await page.getByLabel('放映时间').fill('2026-12-15T19:30');
+    await page.getByRole('button', { name: '保存票根', exact: true }).click();
+    await page.getByRole('link', { name: '返回2026年10月' }).click();
+    await expect(page.getByText('这个月份没有电影票', { exact: true })).toBeVisible();
+    await page.getByRole('link', { name: '返回我的' }).click();
+    await expect(page.locator('.month-card h3')).toHaveText(['2026年12月', '2026年11月']);
+    first.fields.showtime = ''; first.version++; api.revision++;
+    await expect(page.locator('.month-card h3')).toHaveText(['2026年11月', '2026年10月']);
+    const third = sampleItem('remote'); third.fields.showtime = '2027-01-01T00:00'; api.data.get('a')!.tickets.push(third); api.revision++;
+    await expect(page.locator('.profile-stats dd')).toHaveText(['3 张', '3 个']);
+    await page.locator('.month-card').filter({ hasText: '2027年1月' }).click();
+    await page.locator('.ticket-card').getByRole('link').click();
+    await page.getByRole('button', { name: '删除票根', exact: true }).click();
+    await page.getByRole('button', { name: '确认删除', exact: true }).click();
+    await expect(page.getByText('这个月份没有电影票', { exact: true })).toBeVisible();
+    await page.getByRole('link', { name: '返回我的' }).click();
+    await expect(page.locator('.profile-stats dd')).toHaveText(['2 张', '2 个']);
+    expect(first.fields.showtime).toBe('');
+  });
+
+  test('initial reading, empty states and unavailable images stay clear and navigable', async ({ page }) => {
+    let release!: () => void; const snapshotGate = new Promise<void>(resolve => { release = resolve; });
+    const api = await mockApi(page, { user: 'a', empty: true, snapshotGate }); await page.goto('/mine');
+    await expect(page.getByText('正在读取票夹…')).toBeVisible(); await expect(page.locator('.profile-stats')).toHaveCount(0);
+    release(); await expect(page.getByText('还没有电影票', { exact: true })).toBeVisible();
+    const ticket = sampleItem(); ticket.fields.showtime = ''; ticket.createdAt = Date.parse('2026-09-30T20:00:00Z');
+    await page.route('**/api/media/*', route => route.fulfill({ status: 503, body: 'unavailable' }));
+    api.data.get('a')!.tickets.push(ticket); api.revision++;
+    await expect(page.locator('.month-card h3')).toHaveText(['2026年10月']);
+    await expect(page.locator('.recent-tickets [data-media-status="error"]')).toHaveCount(1);
+    await expect(page.locator('.month-card button,.recent-tickets button')).toHaveCount(0);
+    await page.locator('.month-card').click();
+    await page.getByRole('searchbox').fill('无匹配');
+    await expect(page.getByText('没有找到匹配的电影票', { exact: true })).toBeVisible();
+    await expect(page.locator('.collection-count')).toHaveText('1件');
+    await page.getByRole('button', { name: '清除搜索' }).click();
+    await page.locator('.ticket-card').getByRole('link').click();
+    await expect(page.getByRole('heading', { name: ticket.fields.title, exact: true })).toBeVisible();
+  });
+
+  test('new views share metadata and cached media, and account replacement clears their private state', async ({ page }) => {
+    const api = await mockApi(page, { user: 'a' }); api.data.set('a', { tickets: monthlyTickets() });
+    await page.goto('/mine');
+    await expect(page.locator('.recent-tickets [data-media-status="cached"]').first()).toBeVisible();
+    const snapshots = api.requests.filter(request => request.path === '/api/sync/snapshot').length;
+    const downloads = api.requests.filter(request => request.path.endsWith('/download')).length;
+    await page.getByRole('link', { name: '查看全部月份' }).click();
+    await page.locator('.month-card').first().click();
+    await expect(page.locator('.ticket-card img').first()).toBeVisible();
+    await page.getByRole('link', { name: '返回我的' }).click();
+    expect(api.requests.filter(request => request.path === '/api/sync/snapshot')).toHaveLength(snapshots);
+    expect(api.requests.filter(request => request.path.endsWith('/download'))).toHaveLength(downloads);
+    expect(api.requests.some(request => request.path.includes('/collections') || request.path.includes('/months'))).toBe(false);
+    api.data.set('b', { tickets: [] });
+    await page.getByRole('button', { name: '退出登录' }).click(); await login(page, 'b@example.test');
+    await page.getByRole('navigation').getByRole('link', { name: '我的', exact: true }).click();
+    await expect(page.locator('.profile-summary')).toContainText('b@example.test');
+    await expect(page.locator('.profile-stats dd')).toHaveText(['0 张', '0 个']);
+    await expect(page.locator('.month-card,.recent-tickets')).toHaveCount(0);
+    await expect(page.getByText('观影记忆 13', { exact: true })).toHaveCount(0);
+  });
+
+  test('keyboard links and larger text remain usable with long names and a short viewport', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 600 });
+    const user = 'LongName'.repeat(10), api = await mockApi(page, { user });
+    const tickets = monthlyTickets(); tickets[0].fields.title = '长电影名称'.repeat(20); api.data.set(user, { tickets });
+    await page.goto('/mine');
+    await page.addStyleTag({ content: '.mine-page h1{font-size:64px}.profile-summary h2{font-size:44px}.profile-summary p{font-size:28px}.profile-stats dd{font-size:56px}.section-heading h2{font-size:40px}.month-card h3{font-size:32px}.recent-tickets h3{font-size:30px}' });
+    await expect(page.locator('.profile-summary')).toContainText(user);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.getByRole('link', { name: '查看全部月份' }).focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('heading', { name: '全部月份', exact: true })).toBeVisible();
+    await page.locator('.month-card').last().focus(); await page.keyboard.press('Enter');
+    await expect(page.getByRole('heading', { name: '2026年1月', exact: true })).toBeVisible();
+    await page.locator('.ticket-card').first().getByRole('link').focus(); await page.keyboard.press('Enter');
+    await page.getByRole('link', { name: '返回2026年1月' }).focus(); await page.keyboard.press('Enter');
+    await expect(page.getByRole('searchbox')).toBeVisible();
+  });
+
+  test('session expiry removes private month and profile views before another login', async ({ page }) => {
+    const api = await mockApi(page, { user: 'a' }); api.data.set('a', { tickets: monthlyTickets() });
+    await page.goto('/mine'); await expect(page.locator('.profile-stats dd')).toHaveText(['14 张', '7 个']);
+    await page.route('**/api/sync/changes?**', route => route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ detail: '会话已失效' }) }));
+    api.data.get('a')!.tickets[0].version++; api.revision++;
+    await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
+    await expect(page.locator('.profile-summary,.month-card,.recent-tickets')).toHaveCount(0);
+  });
+});
+
+for (const [zone, expected] of [['UTC', '2026年10月'], ['America/Los_Angeles', '2026年9月']]) test.describe(`monthly review timezone ${zone}`, () => {
+  test.use({ timezoneId: zone });
+  test('empty showtime falls back to the client month without changing its actual field', async ({ page }) => {
+    const api = await mockApi(page, { user: 'a' }), ticket = sampleItem('fallback');
+    ticket.fields.showtime = ''; ticket.createdAt = Date.parse('2026-10-01T02:00:00Z'); api.data.set('a', { tickets: [ticket] });
+    await page.goto('/mine'); await expect(page.locator('.month-card h3')).toHaveText([expected]);
+    await page.locator('.month-card').click(); await expect(page.getByRole('heading', { name: expected, exact: true })).toBeVisible();
+    await expect(page.locator('.ticket-date')).toHaveText('日期待补充'); expect(ticket.fields.showtime).toBe('');
+  });
+});
 
 test('Google-first account adds verified password access with inline errors and responsive fields', async ({ page }, info) => {
   const api = await mockApi(page, { user: 'a', google: true });
@@ -223,7 +456,7 @@ test('a remote tombstone preserves edited fields and the selected photo while di
 test('peer inventory follows durable cache clearing, external eviction and the page toggle without stopping sync', async ({ page }) => {
   const api = await mockApi(page, { user: 'a', deviceSync: true }); await page.goto('/tickets');
   await expect(page.getByText('已校验并保存到本机缓存', { exact: true })).toBeVisible();
-  await page.getByRole('link', { name: '设备与状态', exact: true }).click();
+  await openDevices(page);
   await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '1');
   await page.getByLabel('本页启用 P2P 加速').uncheck(); await expect(page.getByTestId('peer-status')).toHaveAttribute('data-enabled', 'false');
   const before = api.requests.filter(request => request.path.endsWith('/changes')).length;
@@ -238,7 +471,7 @@ test('peer inventory follows durable cache clearing, external eviction and the p
   expect(api.peerMessages.some(message => message.type === 'cache.patch' && message.remove.includes(pngHash))).toBe(true);
   await page.getByRole('link', { name: '票夹', exact: true }).click(); await expect(page.getByText('停用P2P仍同步', { exact: true })).toBeVisible();
   await expect(page.getByText('已校验并保存到本机缓存', { exact: true })).toBeVisible();
-  await page.getByRole('link', { name: '设备与状态', exact: true }).click(); await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '1');
+  await openDevices(page); await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '1');
   await page.getByRole('button', { name: '清除本账号本机缓存', exact: true }).click(); await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '0');
 });
 
@@ -246,7 +479,7 @@ test('a quota-failed temporary image is never advertised as a peer source', asyn
   await page.addInitScript(() => { IDBObjectStore.prototype.put = function() { throw new DOMException('test quota', 'QuotaExceededError'); }; });
   const api = await mockApi(page, { user: 'a', deviceSync: true }); await page.goto('/tickets');
   await expect(page.getByText('本机缓存空间不足 · 当前仅临时展示', { exact: true })).toBeVisible();
-  await page.getByRole('link', { name: '设备与状态', exact: true }).click();
+  await openDevices(page);
   await expect(page.getByTestId('peer-status')).toHaveAttribute('data-enabled', 'true');
   await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '0');
   expect(api.peerMessages.filter(message => message.type === 'cache.replace').every(message => message.assetIds.length === 0)).toBe(true);
@@ -256,7 +489,7 @@ test('a quota-failed temporary image is never advertised as a peer source', asyn
 test('online page controls and observed transport totals fit all supported viewport widths', async ({ page }, info) => {
   await mockApi(page, { user: 'a', deviceSync: true, peerName: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef' }); await page.goto('/tickets');
   await expect(page.getByText('已校验并保存到本机缓存', { exact: true })).toBeVisible();
-  await page.getByRole('link', { name: '设备与状态', exact: true }).click(); await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '1');
+  await openDevices(page); await expect(page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '1');
   for (const width of [360, 390, 768, 1280, 1440]) {
     await page.setViewportSize({ width, height: 900 }); await page.getByLabel('本页启用 P2P 加速').focus();
     await expect(page.getByLabel('本页启用 P2P 加速')).toBeFocused(); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -523,7 +756,7 @@ test('direct links, refresh, back and cloud status remain accurate', async ({ pa
   await page.reload(); await expect(page.getByRole('heading', { name: 'A 的电影票' })).toBeVisible();
   await page.getByRole('link', { name: '编辑票根' }).click(); await page.goBack();
   await expect(page.getByRole('heading', { name: 'A 的电影票' })).toBeVisible();
-  await page.getByRole('link', { name: '设备与状态' }).click();
+  await openDevices(page);
   await expect(page.getByText('当前服务器未配置云存储。当前保存不具备云端恢复保障。')).toBeVisible();
 });
 test('upload with empty fields, field-only correction and deletion use the new contract', async ({ page }) => {
@@ -614,7 +847,7 @@ test('verified cache survives reload and clearing recovers from the server only 
   const firstReads = imageReads(api); expect(firstReads).toBe(1);
   await page.reload(); await expect(page.locator('.media-availability').first()).toContainText('本机缓存可用');
   expect(imageReads(api)).toBe(firstReads);
-  await page.getByRole('link', { name: '设备与状态' }).click();
+  await openDevices(page);
   await expect(page.getByText(/本账号已存 1 张图片/)).toBeVisible();
   await page.screenshot({ path: info.outputPath('cache-desktop-1440.png'), fullPage: true });
   await page.setViewportSize({ width: 390, height: 900 });
@@ -634,7 +867,7 @@ test('equal hashes remain isolated across accounts and clearing B keeps A cache'
   await expect(page.locator('.media-availability').first()).toContainText('已校验');
   expect(imageReads(api)).toBe(2);
   expect((await cacheEntries(page)).map(entry => entry.accountId).sort()).toEqual(['a', 'b']);
-  await page.getByRole('link', { name: '设备与状态' }).click(); await page.getByRole('button', { name: '清除本账号本机缓存' }).click();
+  await openDevices(page); await page.getByRole('button', { name: '清除本账号本机缓存' }).click();
   await expect(page.getByText(/本账号已存 0 张图片/)).toBeVisible();
   expect((await cacheEntries(page)).map(entry => entry.accountId)).toEqual(['a']);
 });
@@ -714,7 +947,7 @@ test('focus and device status recheck storage eviction without redownloading an 
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(page.locator('.media-availability')).toContainText('本机缓存已被回收');
   await expect(page.locator('.ticket-image img')).toBeVisible(); expect(imageReads(api)).toBe(reads);
-  await page.getByRole('link', { name: '设备与状态' }).click();
+  await openDevices(page);
   await expect(page.getByText(/本账号已存 0 张图片/)).toBeVisible(); expect(imageReads(api)).toBe(reads);
 });
 
@@ -760,7 +993,7 @@ test('a collapsed original photo is not downloaded until it is opened', async ({
 });
 test('a corrupt cached blob is removed even when cloud retrieval also fails', async ({ page }) => {
   await mockApi(page, { user: 'a' }); await page.goto('/tickets'); await expect(page.locator('.media-availability').first()).toContainText('已校验');
-  await page.getByRole('link', { name: '设备与状态' }).click();
+  await openDevices(page);
   await page.evaluate(() => new Promise<void>((resolve, reject) => {
     const open = indexedDB.open('keepsite-media-cache-v1', 1);
     open.onsuccess = () => { const database = open.result, tx = database.transaction('media', 'readwrite'), store = tx.objectStore('media'), request = store.openCursor();
@@ -845,7 +1078,7 @@ for (const recovery of ['focus', 'metadata'] as const) {
     await page.goto('/tickets');
     await expect(page.locator('.media-availability')).toHaveText(['已校验并保存到本机缓存', '已校验并保存到本机缓存']);
     await expect.poll(async () => (await cacheEntries(page)).map(entry => entry.sha256)).toEqual([oldPoster.asset.sha256, nextPoster.asset.sha256].sort());
-    await page.getByRole('link', { name: '设备与状态', exact: true }).click(); await expect(page.getByText(/本账号已存 2 张图片/)).toBeVisible();
+    await openDevices(page); await expect(page.getByText(/本账号已存 2 张图片/)).toBeVisible();
     await page.evaluate(() => {
       const open = IDBIndex.prototype.openCursor;
       (window as any).__pruneFault = { remaining: 1, attempts: 0 };
