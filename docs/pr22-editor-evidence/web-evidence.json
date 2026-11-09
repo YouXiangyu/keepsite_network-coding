@@ -1,0 +1,100 @@
+{
+  "recordType": "Excerpt of original controlled Web regression; no new measurement",
+  "environment": {
+    "renderer": "Chromium",
+    "network": "Existing mocked API and WebSocket fixtures",
+    "geometryUnits": "CSS pixels",
+    "images": "Original current-viewport PNGs, copied byte-for-byte",
+    "realPhoneIme": false,
+    "production": false
+  },
+  "sourceSha256": {
+    "editor": "8a8cba9c6287235d22d85077a18ff6c889beb472c5c6388722005510472fabd4",
+    "browserSpec": "2f2b0631da05c08a67ce94f8b6ec6a5b896885cf3f73baf5e60cac8df6767c4a",
+    "styles": "5ecfd4e30b3e2af8ba36f03ded5c75fdcfb9c85dadf316e483fe4ceae8efd113"
+  },
+  "suite": {
+    "total": 84,
+    "passed": 83,
+    "skipped": 1,
+    "failed": 0,
+    "flaky": 0,
+    "allCasesSingleAttempt": true,
+    "origins": {
+      "oldReviewedRetained": 66,
+      "existingMain": 18,
+      "addedThisRevision": 0,
+      "removedRedundantInstances": 16
+    }
+  },
+  "scenes": [
+    {
+      "name": "missing-photo",
+      "image": "web-missing-photo.png",
+      "currentVisualViewport": {
+        "top": 0,
+        "left": 0,
+        "bottom": 844,
+        "right": 390,
+        "scale": 1
+      },
+      "alert": {
+        "left": 18,
+        "top": 606.375,
+        "right": 372,
+        "bottom": 651.171875,
+        "width": 354,
+        "height": 44.796875,
+        "visible": true,
+        "clearOfFooterAndFixedNavigation": true,
+        "hit": true
+      },
+      "footer": {
+        "top": 713,
+        "bottom": 783,
+        "height": 70,
+        "visible": true,
+        "controlsVisible": true
+      },
+      "navigation": {
+        "bounds": null,
+        "boundsStatus": "not retained in original attachment",
+        "footerAboveNavigation": true
+      }
+    },
+    {
+      "name": "unchanged-edit",
+      "image": "web-unchanged-edit.png",
+      "currentVisualViewport": {
+        "top": 0,
+        "left": 0,
+        "bottom": 844,
+        "right": 390,
+        "scale": 1
+      },
+      "alert": {
+        "left": 18,
+        "top": 606.15625,
+        "right": 372,
+        "bottom": 650.953125,
+        "width": 354,
+        "height": 44.796875,
+        "visible": true,
+        "clearOfFooterAndFixedNavigation": true,
+        "hit": true
+      },
+      "footer": {
+        "top": 713,
+        "bottom": 783,
+        "height": 70,
+        "visible": true,
+        "controlsVisible": true
+      },
+      "navigation": {
+        "bounds": null,
+        "boundsStatus": "not retained in original attachment",
+        "footerAboveNavigation": true
+      }
+    }
+  ]
+}

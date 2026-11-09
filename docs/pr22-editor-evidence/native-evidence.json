@@ -1,0 +1,442 @@
+{
+  "schemaVersion": 1,
+  "scope": "Isolated debug layout Host; synthetic notice/state and local callback counters, no business save or cancel",
+  "formalMainReproduced": false,
+  "formalMainStatus": "Deferred: no authorized formal-page reproduction resources; no confirmed formal runtime defect",
+  "source": {
+    "baseCommit": "9b9dfa7bddc6a98dfcebfc4b5548aaf6a7fb639d",
+    "sourceSnapshot": "bf8fce8233d2eef6a6cda78e1811fd373845cb66343e356449bd904711365f43",
+    "hostSha256": "ccdfdf1beb7ee20619b5739cad7659a2e3674b38039f1ea43603eee45b2fd4f2",
+    "instrumentationSha256": "4259c99f979a915fae6802cbfc70dbc4d30d93a9bdf85067f7383b772dc32cb9",
+    "appApkSha256": "c55bf35933b881523b52fccf747c5afdecbb1a84bb466c98be21161081d26b31",
+    "testApkSha256": "7db89ed2407d2e9bd89482d3762d695328d327ce0e6432c44e6615c6066024b6",
+    "formalSourcesChanged": false
+  },
+  "runtime": {
+    "androidApi": 35,
+    "ime": "Gboard",
+    "imeVersion": "14.2.09.629370537-preload-x86_64",
+    "imeVersionCode": 143544272,
+    "screenPx": {
+      "width": 1080,
+      "height": 1920
+    },
+    "densityDpi": 420,
+    "density": 2.625,
+    "systemFontScale": 1.0,
+    "normalHostFontScale": 1.0,
+    "largeHostFontScale": 2.0,
+    "largeFontScope": "Local Host UI context only; system and real IME remained at system settings"
+  },
+  "results": {
+    "methodsRun": 2,
+    "attemptsPerMethod": 1,
+    "passed": 0,
+    "failed": 2,
+    "firstOriginalMethodNotRun": true,
+    "caseRetries": 0,
+    "methods": [
+      {
+        "name": "fixedActionsWithRealKeyboardAndRecreation",
+        "durationSeconds": 9.448,
+        "runnerResult": "failed",
+        "nativeExitCode": 0,
+        "actualAssertion": "expected:<2> but was:<1>",
+        "assertionScope": "Original combined local save/cancel click-count assertion; which counter failed was not separately recorded",
+        "lastCapturedStep": "portrait-seat-ime",
+        "landscapeReached": false,
+        "recreationReached": false,
+        "failureMomentScreenshotAvailable": false
+      },
+      {
+        "name": "largeEditorTextAndLongHintRemainReachable",
+        "durationSeconds": 26.401,
+        "runnerResult": "failed",
+        "nativeExitCode": 0,
+        "actualAssertion": "Layout/IME condition did not settle within 20 seconds",
+        "assertionScope": "Original focused-input / complete buttons / stable real IME condition",
+        "pendingBusyAndProgressChecksReached": true,
+        "localBusyCancelCountReached": 1,
+        "lastStep": "large-portrait-title-ime",
+        "landscapeReached": false,
+        "failureMomentScreenshotAvailable": true
+      }
+    ],
+    "remainingGap": "Short-error landscape evidence was not reached; no old landscape image is reused",
+    "nativeExitCaveat": "Both native commands exited 0 while the test runner reported one failure each"
+  },
+  "frames": [
+    {
+      "image": "native-short-error-seat.png",
+      "originalPngSha256": "7526847c989ede31edeefda777b98252156459497bd287346b8d2533237edb17",
+      "testMethod": "fixedActionsWithRealKeyboardAndRecreation",
+      "scene": "portrait-seat-ime",
+      "meaning": "Reached portrait seat frame before later original click-counter failure; not a failure screenshot",
+      "capturedAtAssertionFailure": false,
+      "orientation": "portrait",
+      "systemFontScale": 1,
+      "hostUiFontScale": 1,
+      "imeVisible": true,
+      "imeInsetsPx": {
+        "left": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 872
+      },
+      "notice": {
+        "source": "synthetic_error",
+        "text": "保存未完成，草稿仍保留。",
+        "boundsPx": {
+          "x": 52,
+          "y": 84,
+          "width": 976,
+          "height": 92,
+          "complete": true
+        }
+      },
+      "scrollPx": {
+        "x": 0,
+        "y": 176,
+        "width": 1080,
+        "height": 715,
+        "complete": true
+      },
+      "inputsPx": [
+        {
+          "x": 52,
+          "y": 8,
+          "width": 976,
+          "height": 136,
+          "complete": false
+        },
+        {
+          "x": 52,
+          "y": 257,
+          "width": 976,
+          "height": 136,
+          "complete": true
+        },
+        {
+          "x": 52,
+          "y": 506,
+          "width": 976,
+          "height": 136,
+          "complete": true
+        },
+        {
+          "x": 52,
+          "y": 755,
+          "width": 976,
+          "height": 136,
+          "complete": true
+        }
+      ],
+      "focusedInputIndex": 3,
+      "footerPx": {
+        "x": 0,
+        "y": 891,
+        "width": 1080,
+        "height": 157,
+        "complete": true
+      },
+      "progress": {
+        "androidVisibility": 8,
+        "visibility": "gone",
+        "rawBoundsPx": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0
+        },
+        "boundsCaveat": "A GONE view can retain old raw bounds; those bounds do not prove visibility or occupied space."
+      },
+      "buttons": {
+        "save": {
+          "enabled": true,
+          "boundsPx": {
+            "x": 391,
+            "y": 902,
+            "width": 637,
+            "height": 136,
+            "complete": true
+          }
+        },
+        "cancel": {
+          "enabled": true,
+          "boundsPx": {
+            "x": 52,
+            "y": 907,
+            "width": 318,
+            "height": 126,
+            "complete": true
+          }
+        }
+      },
+      "editorState": {
+        "busy": "",
+        "pending": false,
+        "fieldsEnabled": [
+          true,
+          true,
+          true,
+          true
+        ],
+        "dateEnabled": true,
+        "photoEnabled": true
+      },
+      "localCallbackCounters": {
+        "save": 1,
+        "cancel": 1,
+        "scope": "Local synthetic Host callbacks at the captured frame; no business save/cancel proof"
+      }
+    },
+    {
+      "image": "native-large-busy.png",
+      "originalPngSha256": "c841734b8a233b5f7ee0188504a10c387d4cb6188c4b96e7f13b7b4ef9dce4fb",
+      "testMethod": "largeEditorTextAndLongHintRemainReachable",
+      "scene": "large-busy-action",
+      "meaning": "Reached synthetic busy frame; new progress mapping and original disabled-save/enabled-cancel assertion passed",
+      "capturedAtAssertionFailure": false,
+      "orientation": "portrait",
+      "systemFontScale": 1,
+      "hostUiFontScale": 2,
+      "imeVisible": false,
+      "imeInsetsPx": {
+        "left": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 0
+      },
+      "notice": {
+        "source": "busy",
+        "text": "正在保存",
+        "boundsPx": {
+          "x": 52,
+          "y": 84,
+          "width": 976,
+          "height": 137,
+          "complete": true
+        }
+      },
+      "scrollPx": {
+        "x": 0,
+        "y": 229,
+        "width": 1080,
+        "height": 1292,
+        "complete": true
+      },
+      "inputsPx": [
+        {
+          "x": 52,
+          "y": -20,
+          "width": 976,
+          "height": 136,
+          "complete": false
+        },
+        {
+          "x": 52,
+          "y": 274,
+          "width": 976,
+          "height": 136,
+          "complete": true
+        },
+        {
+          "x": 52,
+          "y": 568,
+          "width": 976,
+          "height": 136,
+          "complete": true
+        },
+        {
+          "x": 52,
+          "y": 862,
+          "width": 976,
+          "height": 136,
+          "complete": true
+        }
+      ],
+      "focusedInputIndex": -1,
+      "footerPx": {
+        "x": 0,
+        "y": 1521,
+        "width": 1080,
+        "height": 157,
+        "complete": true
+      },
+      "progress": {
+        "androidVisibility": 0,
+        "visibility": "visible",
+        "rawBoundsPx": {
+          "x": 0,
+          "y": 221,
+          "width": 1080,
+          "height": 8
+        },
+        "boundsCaveat": "A GONE view can retain old raw bounds; those bounds do not prove visibility or occupied space."
+      },
+      "buttons": {
+        "save": {
+          "enabled": false,
+          "boundsPx": {
+            "x": 391,
+            "y": 1532,
+            "width": 637,
+            "height": 136,
+            "complete": true
+          }
+        },
+        "cancel": {
+          "enabled": true,
+          "boundsPx": {
+            "x": 52,
+            "y": 1537,
+            "width": 318,
+            "height": 126,
+            "complete": true
+          }
+        }
+      },
+      "editorState": {
+        "busy": "正在保存",
+        "pending": false,
+        "fieldsEnabled": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "dateEnabled": false,
+        "photoEnabled": false
+      },
+      "localCallbackCounters": {
+        "save": 0,
+        "cancel": 0,
+        "scope": "Local synthetic Host callbacks at the captured frame; no business save/cancel proof"
+      }
+    },
+    {
+      "image": "native-large-error-ime.png",
+      "originalPngSha256": "e51f5ecee20bc3ca9bb98ac38a351c6360ab5996453fc8e1d9ddd9a4f7dd0560",
+      "testMethod": "largeEditorTextAndLongHintRemainReachable",
+      "scene": "large-portrait-title-ime",
+      "meaning": "Actual original 20-second layout/IME assertion failure in portrait; isolated Host only",
+      "capturedAtAssertionFailure": true,
+      "orientation": "portrait",
+      "systemFontScale": 1,
+      "hostUiFontScale": 2,
+      "imeVisible": true,
+      "imeInsetsPx": {
+        "left": 0,
+        "top": 0,
+        "right": 0,
+        "bottom": 872
+      },
+      "notice": {
+        "source": "synthetic_error",
+        "text": "本地合成错误提示：保存未完成，草稿仍保留；检查末尾状态完整滚达操作栏上方。本地合成错误提示：保存未完成，草稿仍保留；检查末尾状态完整滚达操作栏上方。",
+        "boundsPx": {
+          "x": 52,
+          "y": 84,
+          "width": 976,
+          "height": 746,
+          "complete": true
+        }
+      },
+      "scrollPx": {
+        "x": 0,
+        "y": 830,
+        "width": 1080,
+        "height": 61,
+        "complete": true
+      },
+      "inputsPx": [
+        {
+          "x": 52,
+          "y": 830,
+          "width": 976,
+          "height": 136,
+          "complete": false
+        },
+        {
+          "x": 52,
+          "y": 1124,
+          "width": 976,
+          "height": 136,
+          "complete": false
+        },
+        {
+          "x": 52,
+          "y": 1418,
+          "width": 976,
+          "height": 136,
+          "complete": false
+        },
+        {
+          "x": 52,
+          "y": 1712,
+          "width": 976,
+          "height": 136,
+          "complete": false
+        }
+      ],
+      "focusedInputIndex": 0,
+      "footerPx": {
+        "x": 0,
+        "y": 891,
+        "width": 1080,
+        "height": 157,
+        "complete": true
+      },
+      "progress": {
+        "androidVisibility": 8,
+        "visibility": "gone",
+        "rawBoundsPx": {
+          "x": 0,
+          "y": 221,
+          "width": 1080,
+          "height": 8
+        },
+        "boundsCaveat": "A GONE view can retain old raw bounds; those bounds do not prove visibility or occupied space."
+      },
+      "buttons": {
+        "save": {
+          "enabled": true,
+          "boundsPx": {
+            "x": 391,
+            "y": 902,
+            "width": 637,
+            "height": 136,
+            "complete": true
+          }
+        },
+        "cancel": {
+          "enabled": true,
+          "boundsPx": {
+            "x": 52,
+            "y": 907,
+            "width": 318,
+            "height": 126,
+            "complete": true
+          }
+        }
+      },
+      "editorState": {
+        "busy": "",
+        "pending": false,
+        "fieldsEnabled": [
+          true,
+          true,
+          true,
+          true
+        ],
+        "dateEnabled": true,
+        "photoEnabled": true
+      },
+      "localCallbackCounters": {
+        "save": 0,
+        "cancel": 1,
+        "scope": "Local synthetic Host callbacks at the captured frame; no business save/cancel proof"
+      }
+    }
+  ]
+}
