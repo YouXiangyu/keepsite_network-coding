@@ -9,7 +9,7 @@
     "test:web": "playwright test --config=playwright.web.config.ts",
     "test:reliability": "npm run build && playwright test --config=playwright.reliability.config.ts",
     "test:p2p": "playwright test --config=playwright.p2p.config.ts",
-    "test:unit": "node --test tests/api.test.mjs tests/data.test.mjs tests/media-cache.test.mjs tests/account-sync.test.mjs tests/data-channel.test.mjs tests/peer-media.test.mjs tests/network-monitor.test.mjs tests/network-wiring.test.mjs tests/server-trace.test.mjs tests/media-network.test.mjs tests/peer-network.test.mjs tests/network-report.test.mjs",
+    "test:unit": "node --test tests/api.test.mjs tests/data.test.mjs tests/collections.test.mjs tests/routes.test.mjs tests/media-cache.test.mjs tests/account-sync.test.mjs tests/data-channel.test.mjs tests/peer-media.test.mjs tests/network-monitor.test.mjs tests/network-wiring.test.mjs tests/server-trace.test.mjs tests/media-network.test.mjs tests/peer-network.test.mjs tests/network-report.test.mjs",
     "test:sites": "node --test tests/sites-worker.test.mjs",
     "predev": "npm run check:runtime",
     "dev": "vite",

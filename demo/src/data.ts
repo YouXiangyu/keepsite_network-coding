@@ -28,7 +28,7 @@ export interface AppData { tickets: Ticket[] }
 export const emptyFields = (): TicketFields => ({ title: '', cinema: '', hall: '', seat: '', showtime: '' });
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const identifier = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,120}$/.test(value);
-const showtime = (value: unknown) => {
+export const validShowtime = (value: unknown) => {
   if (value === '') return true;
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value) || Number(value.slice(0, 4)) < 1) return false;
   const parsed = new Date(value + ':00Z');
@@ -74,7 +74,7 @@ export function validTicket(value: unknown): value is Ticket {
   if (!object(value) || !identifier(value.id) || !object(value.fields) || !object(value.fieldSources)) return false;
   const fields = value.fields, sources = value.fieldSources;
   return fieldNames.every(key => typeof fields[key] === 'string' && fields[key].length <= (key === 'title' ? 120 : 200) && ['user', 'ocr', 'migration', 'empty'].includes(String(sources[key])))
-    && showtime(fields.showtime)
+    && validShowtime(fields.showtime)
     && integer(value.createdAt) && integer(value.updatedAt) && integer(value.version, 1) && integer(value.inputVersion, 1)
     && (value.deletedAt === null || integer(value.deletedAt)) && identifier(value.operationId)
     && object(value.media) && validMedia(value.media.original) && (value.media.poster === null || validMedia(value.media.poster) && object(value.media.poster) && validPosterSource(value.media.poster.source))
