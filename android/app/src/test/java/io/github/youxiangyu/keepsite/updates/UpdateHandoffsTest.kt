@@ -87,6 +87,7 @@ class UpdateHandoffsTest {
         val restored = UpdateHandoffs(store); assertTrue(restored.protects(ready.file))
         val unread = ByteArrayInputStream(byteArrayOf(0))
         files.stage(unread, first.checked().first); assertEquals(1, unread.available()); assertArrayEquals(bytes, ready.file.readBytes())
+        saved = saved.copy(entry = saved.entry!!.copy(taskId = null)); task = null
         assertEquals(UpdateStatus.Cancelled, core.cancel()); assertNull(saved.entry); assertTrue(ready.file.exists())
         next = snapshot(2)
         assertTrue(core.check(100, manual = true) is UpdateStatus.Available); assertEquals(1, sourceCalls)

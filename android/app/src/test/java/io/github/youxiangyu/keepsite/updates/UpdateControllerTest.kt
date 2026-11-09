@@ -30,23 +30,28 @@ class UpdateControllerTest {
             .put("assets", assets).toString(), record)
     }
     private inner class Store : UpdateJournalStore {
-        var value = UpdateJournal(); var failIdWrite = false
+        var value = UpdateJournal(); var failIdWrite = false; var failAfterIntentWrite = false
         override fun read() = value
         override fun write(value: UpdateJournal) {
             if (failIdWrite && value.entry?.taskId != null) throw IOException("simulated ID-write crash")
             this.value = value
+            if (failAfterIntentWrite && value.entry?.taskId == null) throw IOException("simulated crash before enqueue")
         }
     }
     private inner class Downloads : UpdateDownloads {
         val values = mutableListOf<UpdateTask>(); val removed = mutableListOf<Long>(); val metered = mutableListOf<Boolean>()
-        var enqueues = 0; var opens = 0; var body = bytes; var nullDestination = false
+        var enqueues = 0; var opens = 0; var body = bytes; var nullDestination = false; var failEnqueue = false; var failQuery = false
         override fun destination(token: String) = "file:///owned/updates/$token.apk"
         override fun enqueue(source: String, destination: String, metered: Boolean): Long {
             enqueues++; this.metered += metered
+            if (failEnqueue) throw IOException("simulated enqueue failure before task creation")
             values += UpdateTask(enqueues.toLong(), source, if (nullDestination) null else destination, DownloadPhase.PENDING)
             return enqueues.toLong()
         }
-        override fun tasks() = values.toList()
+        override fun tasks(): List<UpdateTask> {
+            if (failQuery) throw IOException("simulated incomplete query")
+            return values.toList()
+        }
         override fun open(id: Long) = ByteArrayInputStream(body).also { opens++ }
         override fun remove(id: Long) { removed += id; values.removeAll { it.id == id } }
     }
@@ -77,20 +82,32 @@ class UpdateControllerTest {
         assertTrue(f.controller().download(snapshot(), manual = true) is UpdateStatus.Transferring)
     }
 
-    @Test fun enqueueIdCrashWithPendingNullPathWaitsWithoutClaimingOrDuplicating() {
-        val f = Fixture(); f.store.failIdWrite = true; f.downloads.nullDestination = true
-        assertThrows(IOException::class.java) { f.controller().download(snapshot()) }
-        assertNull(f.store.value.entry!!.taskId)
-        assertEquals(UpdateStatus.AwaitingOwnership, f.controller().resume())
-        assertEquals(UpdateStatus.AwaitingOwnership, f.controller().download(snapshot(), manual = true))
-        assertEquals(1, f.downloads.enqueues); assertTrue(f.downloads.removed.isEmpty())
-        f.store.failIdWrite = false
-        f.downloads.values[0] = f.downloads.values[0].copy(destination = f.store.value.entry!!.destination, source = "https://untrusted.example/package.apk")
-        assertEquals(UpdateStatus.AwaitingOwnership, f.controller().resume()); assertNull(f.store.value.entry!!.taskId)
-        f.downloads.values[0] = f.downloads.values[0].copy(source = "https://release-assets.githubusercontent.com/redirected-apk")
-        assertTrue(f.controller().resume() is UpdateStatus.Transferring)
-        assertEquals(1L, f.store.value.entry!!.taskId)
-        assertEquals(UpdateStatus.Cancelled, f.controller().cancel()); assertEquals(listOf(1L), f.downloads.removed)
+    @Test fun intentWithoutCreatedTaskRetiresAndRetainsCandidateForCancelRetryAndCheck() {
+        for (beforeEnqueue in listOf(true, false)) {
+            val f = Fixture(); f.store.failAfterIntentWrite = beforeEnqueue; f.downloads.failEnqueue = !beforeEnqueue
+            assertThrows(IOException::class.java) { f.controller().download(snapshot(), metered = true, manual = true) }
+            assertNull(f.store.value.entry!!.taskId); assertTrue(f.downloads.values.isEmpty())
+            f.store.failAfterIntentWrite = false; f.downloads.failEnqueue = false
+            val attempts = f.downloads.enqueues
+            f.downloads.failQuery = true
+            assertThrows(IOException::class.java) { f.controller().resume() }; assertNotNull(f.store.value.entry)
+            f.downloads.failQuery = false
+            if (beforeEnqueue) assertEquals(UpdateStatus.Failed(0), f.controller().resume())
+            else assertEquals(UpdateStatus.Cancelled, f.controller().cancel())
+            assertNull(f.store.value.entry); assertEquals(snapshot(), f.store.value.pending)
+            assertEquals(attempts, f.downloads.enqueues)
+            assertEquals(UpdateStatus.Cancelled, f.controller().cancel())
+            assertEquals(snapshot().checked().first.identity, f.store.value.dismissed)
+            assertEquals(UpdateStatus.Cancelled, f.controller().download(snapshot()))
+            assertTrue(f.controller().retry() is UpdateStatus.Transferring)
+            assertEquals(attempts + 1, f.downloads.enqueues); assertFalse(f.downloads.metered.last())
+            assertFalse(f.store.value.entry!!.metered)
+            f.downloads.values.clear() // A complete query also proves a previously recorded ID is gone.
+            assertEquals(UpdateStatus.Failed(0), f.controller().resume())
+            assertNull(f.store.value.entry); assertEquals(snapshot(), f.store.value.pending)
+            assertTrue(f.controller().check(100, manual = true) is UpdateStatus.Available)
+            assertEquals(1, f.calls); assertTrue(f.downloads.removed.isEmpty()); assertEquals(0, f.downloads.opens)
+        }
     }
 
     @Test fun cancelledCandidateStaysSuppressedAndOnlyManualRetryGrantsMeteredForItsNewTask() {
@@ -111,13 +128,32 @@ class UpdateControllerTest {
     }
 
     @Test fun unknownPendingTaskCannotBeCancelledOrReplacedBySourceUrlGuess() {
+        val recovered = Fixture(); recovered.store.failIdWrite = true
+        assertThrows(IOException::class.java) { recovered.controller().download(snapshot()) }
+        recovered.store.failIdWrite = false
+        assertNull(recovered.store.value.entry!!.taskId); assertFalse(recovered.store.value.entry!!.cancelled)
+        assertTrue(recovered.controller().resume() is UpdateStatus.Transferring)
+        assertEquals(1L, recovered.store.value.entry!!.taskId)
+        assertEquals(1, recovered.downloads.enqueues); assertTrue(recovered.downloads.removed.isEmpty())
+
         val f = Fixture(); f.store.failIdWrite = true; f.downloads.nullDestination = true
         assertThrows(IOException::class.java) { f.controller().download(snapshot()) }; f.store.failIdWrite = false
+        f.downloads.failQuery = true
+        assertThrows(IOException::class.java) { f.controller().cancel() }
+        assertTrue(f.store.value.entry!!.cancelled); assertNull(f.store.value.entry!!.taskId)
+        f.downloads.failQuery = false
         assertEquals(UpdateStatus.AwaitingOwnership, f.controller().cancel())
-        assertTrue(f.store.value.entry!!.cancelled)
         assertEquals(UpdateStatus.AwaitingOwnership, f.controller().download(snapshot(), manual = true))
         assertEquals(UpdateStatus.AwaitingOwnership, f.controller().retry())
-        assertTrue(f.downloads.removed.isEmpty()); assertEquals(1, f.downloads.enqueues)
+        f.downloads.values[0] = f.downloads.values[0].copy(destination = f.store.value.entry!!.destination, source = "https://untrusted.example/package.apk")
+        assertEquals(UpdateStatus.AwaitingOwnership, f.controller().resume()); assertNull(f.store.value.entry!!.taskId)
+        f.downloads.values[0] = f.downloads.values[0].copy(source = "https://release-assets.githubusercontent.com/redirected-apk")
+        f.downloads.values += f.downloads.values[0].copy(id = 2L)
+        assertEquals(UpdateStatus.AwaitingOwnership, f.controller().resume())
+        assertTrue(f.downloads.removed.isEmpty()); assertEquals(1, f.downloads.enqueues); assertEquals(0, f.downloads.opens)
+        f.downloads.values.removeAt(1)
+        assertEquals(UpdateStatus.Cancelled, f.controller().resume())
+        assertNull(f.store.value.entry); assertEquals(listOf(1L), f.downloads.removed)
     }
 
     @Test fun completedTaskStagesPrivateCopyBeforeActualIdentityAndRechecksInstalledVersion() {
@@ -128,6 +164,9 @@ class UpdateControllerTest {
         val ready = f.controller().resume() as UpdateStatus.Ready
         assertEquals(ready.file, f.packages.inspected); assertTrue(f.store.value.entry!!.ready)
         assertEquals(1, f.downloads.opens)
+        f.downloads.failQuery = true
+        assertTrue(f.controller().resume() is UpdateStatus.Ready); assertEquals(1, f.downloads.opens)
+        f.downloads.failQuery = false
         f.packages.installedCode = 4
         assertEquals(UpdateStatus.Current, f.controller().resume()); assertEquals(1, f.downloads.opens)
         assertNull(f.store.value.entry); assertFalse(ready.file.exists()); assertEquals(listOf(1L), f.downloads.removed)
