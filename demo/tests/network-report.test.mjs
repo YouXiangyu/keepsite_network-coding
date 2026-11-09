@@ -9,7 +9,6 @@ const { NetworkMonitor } = await import('../src/network/monitor.ts');
 const runtime = await import('../src/network/runtime.ts');
 const presentation = await import('../src/network/presentation.ts');
 const { createReport, serializeReport, ReportDownload, safePeerView, safeHttpActivity } = await import('../src/network/report.ts');
-const { parseRoute } = await import('../src/app/routes.ts');
 const { ServerTraceClient, MonitorViewActions } = await import('../src/network/serverTraceClient.ts');
 hook.deregister();
 afterEach(() => runtime.accountMonitoring(false));
@@ -149,11 +148,6 @@ test('download observer capacity and creation/delivery failures are closed and r
   const d = downloads(m); assert.equal(d.instance.download('json', {}), false); assert.equal(d.created.length, 0); listeners.forEach(stop => stop());
   const failing = downloads(m, { deliver() { throw Error('browser'); } }); assert.equal(failing.instance.download('json', {}), false); assert.deepEqual(failing.revoked, failing.created);
   d.instance.dispose(); failing.instance.dispose();
-});
-
-test('network route supports direct authenticated entry and leaves unknown paths unresolved', () => {
-  const original = globalThis.window; globalThis.window = { location: { origin: 'https://keepsite.example' } };
-  try { assert.deepEqual(parseRoute('/devices/network?view=events'), { type: 'network' }); assert.deepEqual(parseRoute('/devices/network/extra'), { type: 'not-found' }); assert.deepEqual(parseRoute('/devices'), { type: 'devices' }); } finally { globalThis.window = original; }
 });
 
 test('unassociated server identities separate capture/clock/sequence while actual trace still spans clocks', () => {

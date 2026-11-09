@@ -7,10 +7,11 @@ const via = from => '/tickets/item-1?' + new URLSearchParams({ from });
 test('original routes and unrelated authentication queries keep their existing destinations', () => {
   for (const path of ['/', '/tickets', '/tickets?unknown=value', '/?from=//evil.test']) assert.deepEqual(parseRoute(path), { type: 'tickets' });
   assert.deepEqual(parseRoute('/devices?account_link=success&state=%E9%AA%8C%E8%AF%81'), { type: 'devices' });
+  assert.deepEqual(parseRoute('/devices/network?view=events'), { type: 'network' });
   assert.deepEqual(parseRoute('/tickets/new?unrelated=yes'), { type: 'new' });
   assert.deepEqual(parseRoute('/tickets/item-1?unknown=yes'), { type: 'detail', id: 'item-1', from: '/tickets' });
   assert.deepEqual(parseRoute('/tickets/item-1/edit?account_link=error'), { type: 'edit', id: 'item-1', from: '/tickets' });
-  for (const path of ['/missing', '/tickets/item-1/extra', '/tickets/item-1/edit/extra', '/tickets/%E0%A4%A']) assert.deepEqual(parseRoute(path), { type: 'not-found' });
+  for (const path of ['/missing', '/tickets/item-1/extra', '/tickets/item-1/edit/extra', '/tickets/%E0%A4%A', '/devices/network/extra']) assert.deepEqual(parseRoute(path), { type: 'not-found' });
 });
 
 test('mine, complete months and valid independent month routes are explicit', () => {
