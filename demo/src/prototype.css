@@ -1,4 +1,55 @@
 /* One responsive, document-scrolling movie ticket workspace. */
+.mine-page, .months-page { min-width: 0; }
+.profile-summary { display: flex; gap: 20px; align-items: center; margin: 24px 0; }
+.profile-summary > div:last-child { min-width: 0; }
+.profile-summary h2 { margin: 0 0 6px; font-size: 26px; overflow-wrap: anywhere; }
+.profile-summary p { margin: 0; color: var(--muted); overflow-wrap: anywhere; }
+.profile-avatar { display: grid; place-items: center; flex: 0 0 76px; height: 76px; border-radius: 50%; background: var(--soft); font-size: 32px; }
+.profile-stats { display: flex; gap: 64px; margin: 24px 0 40px; }
+.profile-stats dt { color: var(--muted); font-size: 14px; }
+.profile-stats dd { margin: 8px 0 0; font-size: 28px; font-weight: 600; }
+.profile-stats dd span { font-size: 14px; font-weight: 400; color: var(--muted); }
+.mine-section { margin: 36px 0; min-width: 0; }
+.section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.section-heading h2 { margin: 0; font-size: 22px; }
+.text-link { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; text-decoration: underline; text-underline-offset: 4px; }
+.section-heading .text-link { font-size: 14px; }
+.recent-tickets { display: flex; gap: 18px; overflow-x: auto; list-style: none; padding: 4px 4px 12px; margin: 0 -4px; }
+.recent-tickets > li { position: relative; flex: 0 0 180px; min-width: 0; }
+.recent-tickets a { display: block; }
+.recent-tickets h3 { font-size: 15px; margin: 10px 0 0; line-height: 1.5; overflow-wrap: anywhere; }
+.recent-tickets .ticket-image { aspect-ratio: 3 / 4; min-height: 0; border-radius: 10px; overflow: hidden; }
+.recent-tickets img, .month-photo img { object-fit: cover; }
+.recent-tickets .media-availability { font-size: 11px; padding: 6px; }
+.recent-tickets [data-media-status='cached'] .media-availability { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); padding: 0; }
+.month-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
+.month-card { display: block; min-width: 0; border-radius: 12px; }
+.month-covers { position: relative; aspect-ratio: 4 / 3; overflow: hidden; border-radius: 12px; background: var(--soft); }
+.month-photo { position: absolute; width: 55%; height: 85%; top: 9%; left: 10%; border: 5px solid #fff; background: #fff; transform: rotate(-5deg); box-shadow: 0 2px 8px #20212418; }
+.month-photo:nth-child(2) { left: 37%; top: 7%; transform: rotate(7deg); }
+.month-photo:first-child { z-index: 1; }
+.month-photo .ticket-media, .month-photo .ticket-image { height: 100%; min-height: 0; }
+.month-photo .media-availability { display: none; }
+.month-photo .image-unavailable { padding: 6px; font-size: 11px; overflow-wrap: anywhere; }
+.month-photo .image-unavailable p { margin: 0; }
+.month-card h3 { margin: 12px 0 4px; font-size: 18px; }
+.month-card > p { color: var(--muted); font-size: 14px; }
+.mine-settings { display: flex; align-items: center; gap: 12px; padding: 18px; min-height: 60px; background: var(--soft); border-radius: 10px; margin-top: 40px; }
+.mine-settings span { flex: 1; }
+@media (min-width: 761px) and (max-width: 1100px) { .keepsite-shell .app-header { gap: 16px; padding-inline: 20px; } .app-header nav { gap: 2px; } .app-header nav a { padding-inline: 8px; font-size: 14px; } }
+@media (max-width: 760px) {
+  .keepsite-shell .app-header nav .desktop-devices { display: none; }
+  .mine-page > .page-heading { flex-direction: row; align-items: center; margin-top: 12px; }
+  .mine-page h1, .months-page h1 { font-size: 32px; margin: 0; }
+  .profile-summary h2 { font-size: 22px; }
+  .profile-avatar { flex-basis: 64px; height: 64px; font-size: 28px; }
+  .profile-stats { gap: 48px; }
+  .recent-tickets { gap: 14px; }
+  .recent-tickets > li { flex-basis: 140px; }
+  .month-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 14px; }
+  .section-heading h2 { font-size: 20px; }
+  .month-card h3 { font-size: 16px; }
+}
 .app-header { min-height: 88px; border-bottom: 1px solid var(--line); padding: 18px max(24px, calc((100vw - 1320px) / 2)); display: flex; align-items: center; gap: 48px; background: #fff; }
 .app-header nav { display: flex; gap: 12px; }
 .app-header nav a { min-height: 44px; display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 8px; color: var(--muted); }

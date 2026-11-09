@@ -126,3 +126,7 @@ h1, h2, h3, p { margin-top: 0; }
 .account-method-form label { display: grid; gap: 8px; }
 .account-method-form input { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; padding: 10px 12px; border: 1px solid var(--line, #ccc); border-radius: 8px; background: transparent; color: inherit; font: inherit; }
 .tmdb-credits img { display: block; max-width: 100%; height: auto; margin: 20px 0; }
+
+.android-download { max-width: 46rem; margin: 0 auto; padding: clamp(1.5rem, 5vw, 4rem); overflow-wrap: anywhere; }
+.android-download .release-notes { white-space: pre-wrap; }
+.android-download .primary-button { display: inline-flex; text-decoration: none; }
