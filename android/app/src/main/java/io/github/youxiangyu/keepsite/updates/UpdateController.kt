@@ -62,11 +62,12 @@ class UpdateController(private val source: UpdateSource, private val journal: Up
         require(!metered || manual) { "计费网络下载需要本次手动操作。" }
         val (candidate, record) = snapshot.checked()
         if (UpdatePolicy.action(candidate, record, packages.installed()) == UpdatePolicy.Action.CURRENT) return UpdateStatus.Current
-        val saved = journal.read()
+        var saved = journal.read()
         val old = saved.entry
         if (old != null) {
             val status = resume()
-            if (journal.read().entry != null) return status
+            saved = journal.read()
+            if (saved.entry != null) return status
             if (!manual && old.cancelled && old.snapshot.checked().first.identity == candidate.identity) return UpdateStatus.Cancelled
         }
         if (!manual && saved.dismissed == candidate.identity) return UpdateStatus.Cancelled
@@ -84,31 +85,26 @@ class UpdateController(private val source: UpdateSource, private val journal: Up
         val (candidate, record) = entry.snapshot.checked()
         require(entry.destination == downloads.destination(entry.token)) { "更新任务目标与本应用记录不符。" }
         if (!entry.cancelled && record != null && UpdatePolicy.action(candidate, record, packages.installed()) == UpdatePolicy.Action.CURRENT)
-            return retire(saved, candidate, false)
+            return retire(saved, candidate, Retirement.CURRENT)
         if (entry.ready && !entry.cancelled) {
             val status = ready(candidate, record)
-            return if (status == UpdateStatus.Current) retire(saved, candidate, false) else status
+            return if (status == UpdateStatus.Current) retire(saved, candidate, Retirement.CURRENT) else status
         }
-        val tasks = downloads.tasks()
-        val matches = tasks.filter {
-            trustedUpdateDownloadUri(it.source) && if (entry.taskId == null) it.destination == entry.destination
-            else it.id == entry.taskId && (it.destination == null || it.destination == entry.destination)
+        val ownership = ownership(entry)
+        val task = when (ownership) {
+            Ownership.Absent -> return retire(saved, candidate, if (entry.cancelled) Retirement.CANCELLED else Retirement.MISSING, ownership)
+            Ownership.Unresolved -> return UpdateStatus.AwaitingOwnership
+            is Ownership.Owned -> ownership.task
         }
-        if (matches.size != 1) {
-            if (entry.taskId != null && tasks.none { it.id == entry.taskId })
-                return if (entry.cancelled) retire(saved, candidate, true) else UpdateStatus.Failed(0)
-            return UpdateStatus.AwaitingOwnership // A lost ID needs the full token target, never a source-only guess.
-        }
-        val task = matches.single()
         val owned = entry.copy(taskId = task.id)
         if (owned != entry) journal.write(saved.copy(entry = owned))
-        if (owned.cancelled) return retire(saved.copy(entry = owned), candidate, true)
+        if (owned.cancelled) return retire(saved.copy(entry = owned), candidate, Retirement.CANCELLED, ownership)
         if (task.phase == DownloadPhase.FAILED) return UpdateStatus.Failed(task.reason)
         if (task.phase != DownloadPhase.SUCCESS) return UpdateStatus.Transferring(task)
         if (task.destination == null) return UpdateStatus.AwaitingOwnership // Success alone cannot authorize opening a file.
         downloads.open(task.id).use { files.stage(it, candidate) }
         val status = ready(candidate, record)
-        if (status == UpdateStatus.Current) return retire(saved.copy(entry = owned), candidate, false)
+        if (status == UpdateStatus.Current) return retire(saved.copy(entry = owned), candidate, Retirement.CURRENT, ownership)
         journal.write(saved.copy(entry = owned.copy(ready = true)))
         return status
     }
@@ -130,23 +126,44 @@ class UpdateController(private val source: UpdateSource, private val journal: Up
         return if (status == UpdateStatus.Cancelled) download(snapshot, metered, manual = true) else status
     }
 
-    private fun retire(saved: UpdateJournal, candidate: UpdatePolicy.Candidate, cancelled: Boolean): UpdateStatus {
-        val entry = requireNotNull(saved.entry)
-        require(entry.destination == downloads.destination(entry.token))
-        val tasks = downloads.tasks()
-        val owned = tasks.filter {
-            trustedUpdateDownloadUri(it.source) && if (entry.taskId == null) it.destination == entry.destination
-            else it.id == entry.taskId && (it.destination == null || it.destination == entry.destination)
+    private sealed class Ownership {
+        data class Owned(val task: UpdateTask) : Ownership()
+        object Absent : Ownership()
+        object Unresolved : Ownership()
+    }
+    private enum class Retirement { CURRENT, CANCELLED, MISSING }
+
+    private fun ownership(entry: UpdateEntry): Ownership {
+        // tasks() must finish the complete query or throw; a failed/partial query is never absence.
+        val related = downloads.tasks().filter {
+            if (entry.taskId == null) it.destination == null || it.destination == entry.destination
+            else it.id == entry.taskId || it.destination == entry.destination
         }
-        if (owned.size == 1) {
-            val id = owned.single().id
+        if (related.isEmpty()) return Ownership.Absent
+        val task = related.singleOrNull() ?: return Ownership.Unresolved
+        val owned = trustedUpdateDownloadUri(task.source) && if (entry.taskId == null) task.destination == entry.destination
+            else task.id == entry.taskId && (task.destination == null || task.destination == entry.destination)
+        return if (owned) Ownership.Owned(task) else Ownership.Unresolved
+    }
+
+    private fun retire(saved: UpdateJournal, candidate: UpdatePolicy.Candidate, reason: Retirement,
+                       ownership: Ownership = ownership(requireNotNull(saved.entry))): UpdateStatus {
+        val entry = requireNotNull(saved.entry)
+        if (ownership == Ownership.Unresolved) return UpdateStatus.AwaitingOwnership
+        if (ownership is Ownership.Owned) {
+            val id = ownership.task.id
             if (entry.taskId == null) journal.write(saved.copy(entry = entry.copy(taskId = id)))
             downloads.remove(id)
-        } else if (entry.taskId == null || tasks.any { it.id == entry.taskId }) return UpdateStatus.AwaitingOwnership
+        }
         files.remove(candidate)
-        val pending = if (cancelled) saved.pending ?: entry.snapshot else saved.pending?.takeUnless { it.checked().first.identity == candidate.identity }
+        val pending = if (reason == Retirement.CURRENT) saved.pending?.takeUnless { it.checked().first.identity == candidate.identity }
+            else saved.pending ?: entry.snapshot
         journal.write(saved.copy(entry = null, pending = pending))
-        return if (cancelled) UpdateStatus.Cancelled else UpdateStatus.Current
+        return when (reason) {
+            Retirement.CURRENT -> UpdateStatus.Current
+            Retirement.CANCELLED -> UpdateStatus.Cancelled
+            Retirement.MISSING -> UpdateStatus.Failed(0)
+        }
     }
 
     private fun ready(candidate: UpdatePolicy.Candidate, record: UpdatePolicy.Verification?): UpdateStatus {
