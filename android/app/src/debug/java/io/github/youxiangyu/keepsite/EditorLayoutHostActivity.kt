@@ -4,8 +4,10 @@ import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Rect
 import android.os.Bundle
-import android.view.Gravity
+import android.os.SystemClock
 import android.view.ContextThemeWrapper
+import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
@@ -45,6 +47,56 @@ class EditorLayoutHostActivity : AppCompatActivity() {
     var cancelClicks = 0; private set
     private var keyboardVisible = false
     private var feedbackError = ""
+    val diagnosticHostId: String = java.util.UUID.randomUUID().toString()
+    data class TouchButton(val x: Int, val y: Int, val width: Int, val height: Int, val enabled: Boolean, val clicks: Int)
+    data class TouchFact(
+        val phase: String, val action: Int, val downTime: Long, val eventTime: Long, val uptime: Long,
+        val rawX: Float, val rawY: Float, val localX: Float, val localY: Float,
+        val save: TouchButton, val cancel: TouchButton, val focusedField: Int, val focusedClass: String?,
+        val imeVisible: Boolean, val imeBottom: Int, val windowFocus: Boolean,
+        val handled: Boolean?, val dispatchFailure: String?,
+    )
+    private val touchFacts = java.util.ArrayDeque<TouchFact>()
+    var touchRecordsEvicted = 0; private set
+    var touchRecordingErrors = 0; private set
+    fun touchDiagnosticSnapshot(): List<TouchFact> = touchFacts.toList()
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        val tracked = event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL
+        if (tracked) recordTouch("before", event)
+        try {
+            val handled = super.dispatchTouchEvent(event)
+            if (tracked) recordTouch("after", event, handled)
+            return handled
+        } catch (failure: Throwable) {
+            if (tracked) recordTouch("after", event, dispatchFailure = failure.javaClass.name)
+            throw failure
+        }
+    }
+
+    private fun recordTouch(phase: String, event: MotionEvent, handled: Boolean? = null, dispatchFailure: String? = null) {
+        try {
+            if (!::save.isInitialized || !::cancel.isInitialized || !::fields.isInitialized) {
+                touchRecordingErrors++
+                return
+            }
+            fun button(view: Button, clicks: Int): TouchButton {
+                val location = IntArray(2); view.getLocationOnScreen(location)
+                return TouchButton(location[0], location[1], view.width, view.height, view.isEnabled, clicks)
+            }
+            val insets = ViewCompat.getRootWindowInsets(window.decorView)
+            val fact = TouchFact(phase, event.actionMasked, event.downTime, event.eventTime, SystemClock.uptimeMillis(),
+                event.rawX, event.rawY, event.x, event.y, button(save, saveClicks), button(cancel, cancelClicks),
+                fields.indexOfFirst { it === currentFocus }, currentFocus?.javaClass?.name,
+                insets?.isVisible(WindowInsetsCompat.Type.ime()) == true,
+                insets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0, hasWindowFocus(), handled, dispatchFailure)
+            if (touchFacts.size == 64) { touchFacts.removeFirst(); touchRecordsEvicted++ }
+            touchFacts.addLast(fact)
+        } catch (_: Throwable) {
+            // Diagnostic recording must not consume input or hide a dispatch failure.
+            touchRecordingErrors++
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

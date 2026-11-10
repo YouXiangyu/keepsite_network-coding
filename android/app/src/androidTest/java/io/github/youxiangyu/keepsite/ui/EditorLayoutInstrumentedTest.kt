@@ -64,6 +64,18 @@ class EditorLayoutInstrumentedTest {
         val location = IntArray(2); view.getLocationOnScreen(location)
         return JSONObject().put("x", location[0]).put("y", location[1]).put("width", view.width).put("height", view.height).put("complete", complete(view))
     }
+    private fun touchJson(fact: EditorLayoutHostActivity.TouchFact): JSONObject {
+        fun button(value: EditorLayoutHostActivity.TouchButton) = JSONObject().put("x", value.x).put("y", value.y)
+            .put("width", value.width).put("height", value.height).put("enabled", value.enabled).put("clicks", value.clicks)
+        return JSONObject().put("phase", fact.phase)
+            .put("action", when (fact.action) { 0 -> "DOWN"; 1 -> "UP"; 3 -> "CANCEL"; else -> fact.action.toString() })
+            .put("downTime", fact.downTime).put("eventTime", fact.eventTime).put("uptime", fact.uptime)
+            .put("rawX", fact.rawX).put("rawY", fact.rawY).put("localX", fact.localX).put("localY", fact.localY)
+            .put("save", button(fact.save)).put("cancel", button(fact.cancel)).put("focusedField", fact.focusedField)
+            .put("focusedClass", fact.focusedClass ?: JSONObject.NULL).put("imeVisible", fact.imeVisible).put("imeBottom", fact.imeBottom)
+            .put("windowFocus", fact.windowFocus).put("handled", fact.handled ?: JSONObject.NULL)
+            .put("dispatchFailure", fact.dispatchFailure ?: JSONObject.NULL)
+    }
     private fun capture(scenario: ActivityScenario<EditorLayoutHostActivity>, name: String, failed: Boolean = false) {
         instrumentation.waitForIdleSync()
         val drawn = CountDownLatch(1)
@@ -122,6 +134,10 @@ class EditorLayoutInstrumentedTest {
                 .put("dateEnabled", activity.date.isEnabled).put("photoEnabled", activity.photo.isEnabled)
                 .put("fieldsEnabled", JSONArray(activity.fields.map { it.isEnabled }))
                 .put("fields", JSONArray(activity.fields.map(::box))).put("saveClicks", activity.saveClicks).put("cancelClicks", activity.cancelClicks)
+                .put("hostInstance", activity.diagnosticHostId)
+                .put("touchCoordinateSpace", "raw=display screen; local=Activity.dispatchTouchEvent window coordinates; button bounds=display screen")
+                .put("touchRecordsEvicted", activity.touchRecordsEvicted).put("touchRecordingErrors", activity.touchRecordingErrors)
+                .put("touchEvents", JSONArray(activity.touchDiagnosticSnapshot().map(::touchJson)))
         }
         val stem = "${++captureSequence}-$name-o${data.getInt("orientation")}-${if (failed) "failure" else "reached"}"
         val jsonFile = File(directory, "$stem.json"); val imageFile = File(directory, "$stem.png")
@@ -195,16 +211,27 @@ class EditorLayoutInstrumentedTest {
             activity.currentFocus === input && complete(input) && complete(activity.save) && complete(activity.cancel) &&
                 insets?.isVisible(WindowInsetsCompat.Type.ime()) == true && bottom > 0 && stableInsets >= 4
         }
-        var saves = 0; var cancels = 0
+        var saves = 0; var cancels = 0; var hostBefore = ""
         scenario.onActivity { activity ->
             checkLayout(activity)
             assertTrue(bounds(activity.editor.scroll).contains(bounds(activity.fields.first { it.hint.toString() == name })))
             saves = activity.saveClicks; cancels = activity.cancelClicks
+            hostBefore = activity.diagnosticHostId
         }
         capture(scenario, scene)
-        onView(withText("保存电影票")).perform(click())
-        onView(withText("取消")).perform(click())
-        scenario.onActivity { assertEquals(saves + 1, it.saveClicks); assertEquals(cancels + 1, it.cancelClicks) }
+        try {
+            onView(withText("保存电影票")).perform(click())
+            onView(withText("取消")).perform(click())
+            scenario.onActivity {
+                val clickContext = "$scene hostBefore=$hostBefore hostNow=${it.diagnosticHostId} saveBefore=$saves saveActual=${it.saveClicks} cancelBefore=$cancels cancelActual=${it.cancelClicks}"
+                assertEquals("$clickContext save callback must increment exactly once", saves + 1, it.saveClicks)
+                assertEquals("$clickContext cancel callback must increment exactly once", cancels + 1, it.cancelClicks)
+            }
+        } catch (failure: Throwable) {
+            try { capture(scenario, scene + "-actions", failed = true) }
+            catch (captureFailure: Throwable) { if (captureFailure !== failure) failure.addSuppressed(captureFailure) }
+            throw failure
+        }
         onView(withHint(name)).perform(closeSoftKeyboard())
         await(scenario) { ViewCompat.getRootWindowInsets(it.window.decorView)?.isVisible(WindowInsetsCompat.Type.ime()) == false }
     }
