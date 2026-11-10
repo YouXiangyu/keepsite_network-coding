@@ -17,6 +17,8 @@ import androidx.test.platform.app.InstrumentationRegistry
 import io.github.youxiangyu.keepsite.core.*
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.Rule
+import org.junit.rules.TestRule
 import org.json.JSONArray
 import org.json.JSONObject
 import org.hamcrest.Matchers.*
@@ -27,8 +29,69 @@ class NetworkHostInstrumentedTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     private val automation get() = instrumentation.uiAutomation
     private val output get() = File(instrumentation.targetContext.getExternalFilesDir(null), "network-n4").apply { mkdirs() }
-    private fun shell(command: String): String = automation.executeShellCommand(command).use { descriptor ->
-        java.io.FileInputStream(descriptor.fileDescriptor).bufferedReader().use { it.readText() }
+    private val displayStateRule = DisplayStateRule(object : DisplayControl {
+        override fun shell(command: String) = this@NetworkHostInstrumentedTest.shell(command)
+        override fun setRotation(rotation: Int) = automation.setRotation(rotation)
+        override var fontScale: Float
+            get() = HostConfiguration.fontScale
+            set(value) { HostConfiguration.fontScale = value }
+    }) { InstrumentationRegistry.getArguments().getString("displayGuard") }
+    @get:Rule val displayState: TestRule get() = displayStateRule
+
+    private fun shell(command: String): String {
+        check(android.os.Build.VERSION.SDK_INT >= 31) { "Checked display shell requires API31+" }
+        require(Regex("[A-Za-z0-9 _./-]+").matches(command)) { "Unexpected shell command characters" }
+        val marker = "DISPLAY_EXIT_${java.util.UUID.randomUUID()}_"
+        // Runtime.exec(String) does not interpret shell operators. Send the script to sh's stdin.
+        // A complete timeout marker still means the device command may have sent a Binder request.
+        val reader = java.util.concurrent.Executors.newSingleThreadExecutor()
+        var opened: Array<android.os.ParcelFileDescriptor>? = null
+        var completionKnown = false
+        var primary: Throwable? = null
+        try {
+            val descriptors = automation.executeShellCommandRw("sh")
+            opened = descriptors
+            val result = reader.submit<String> {
+                android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptors[0]).use { input ->
+                    val bytes = java.io.ByteArrayOutputStream()
+                    val buffer = ByteArray(1024)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        check(bytes.size() + count <= 65536) { "Display shell output exceeded limit" }
+                        bytes.write(buffer, 0, count)
+                    }
+                    bytes.toString("UTF-8")
+                }
+            }
+            android.os.ParcelFileDescriptor.AutoCloseOutputStream(descriptors[1]).use { input ->
+                input.write(("exec 2>&1\ntoybox timeout -s KILL 5 $command\nstatus=\$?\nprintf '\\n$marker%s\\n' \"\$status\"\nexit\n").toByteArray(Charsets.UTF_8))
+            }
+            val output = result.get(10, java.util.concurrent.TimeUnit.SECONDS)
+            val exit = Regex("\\n${Regex.escape(marker)}([0-9]+)\\r?\\n$").find(output)
+                ?: error("Missing shell exit status: $command")
+            val code = exit.groupValues[1].toIntOrNull()
+            check(code != null && code in 0..255) { "Invalid shell exit status: $command" }
+            completionKnown = code != 137
+            check(code == 0) { "Shell exit $code ($command): ${output.substring(0, exit.range.first)}" }
+            return output.substring(0, exit.range.first).trimEnd()
+        } catch (failure: Throwable) {
+            val reported = if (completionKnown) failure else IllegalStateException(
+                "DISPLAY_COMMAND_UNCERTAIN: command outcome not confirmed ($command)", failure)
+            primary = reported
+            throw reported
+        } finally {
+            opened?.forEach { runCatching { it.close() } }
+            reader.shutdownNow()
+            var cleanup: Throwable? = null
+            try {
+                check(reader.awaitTermination(1, java.util.concurrent.TimeUnit.SECONDS)) { "Shell reader did not terminate" }
+            } catch (failure: Throwable) {
+                cleanup = IllegalStateException("DISPLAY_COMMAND_UNCERTAIN: shell reader termination not confirmed ($command)", failure)
+                if (failure is InterruptedException) Thread.currentThread().interrupt()
+            }
+            cleanup?.let { if (primary != null) primary.addSuppressed(it) else throw it }
+        }
     }
     private fun waitFor(message: String, predicate: () -> Boolean) {
         val deadline = SystemClock.elapsedRealtime() + 15000
@@ -70,9 +133,7 @@ class NetworkHostInstrumentedTest {
         try { File(output, name).outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) } } finally { bitmap.recycle() }
     }
     private fun configure(size: String, font: Float) {
-        shell("wm size $size"); shell("wm density 320")
-        HostConfiguration.fontScale = font
-        automation.setRotation(UiAutomation.ROTATION_FREEZE_0)
+        displayStateRule.configure(size, font)
     }
     private fun globalText(node: AccessibilityNodeInfo?, text: String): AccessibilityNodeInfo? {
         if (node == null) return null
@@ -165,7 +226,7 @@ class NetworkHostInstrumentedTest {
                 assertTrue(texts.any { it.contains("完整关联成员") })
             }
             var beforeRotate = 0; scenario.onActivity { beforeRotate = it.page!!.view.scrollY }
-            automation.setRotation(UiAutomation.ROTATION_FREEZE_90); Thread.sleep(850)
+            displayStateRule.rotate(UiAutomation.ROTATION_FREEZE_90); Thread.sleep(850)
             screenshot("06-landscape-large-trace", scenario)
             scenario.onActivity { activity ->
                 assertEquals(prefix, views(activity.window.decorView).filterIsInstance<EditText>().single().text.toString())

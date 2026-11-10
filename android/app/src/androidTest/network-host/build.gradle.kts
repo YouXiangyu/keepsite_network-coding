@@ -15,12 +15,15 @@ android {
         res.directories += "../../main/res"
         assets.directories += "../../test/resources"
     }
+    sourceSets.getByName("androidTest").kotlin.directories += "src/displayGuard/kotlin"
+    sourceSets.getByName("test").kotlin.directories += "src/displayGuard/kotlin"
     signingConfigs.getByName("debug") { storeFile = file(providers.gradleProperty("verificationSigningStore").get()) }
     buildFeatures { buildConfig = true; viewBinding = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }
 kotlin { compilerOptions { jvmTarget = JvmTarget.JVM_17 } }
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     implementation("androidx.core:core-ktx:1.19.0")
     implementation("androidx.activity:activity-ktx:1.13.0")
     implementation("androidx.appcompat:appcompat:1.8.0")
