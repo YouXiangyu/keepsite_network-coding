@@ -1,5 +1,13 @@
 # keepsite 项目运行信息
 
+## 2026-11-11 GitHub CI 暂停
+
+- 按用户明确要求，工作流 `Application CI`（388197937）与 `Deployment recovery`（388185377）已设为 `disabled_manually`。暂停包含前者的制品发布步骤；恢复须用户明确要求。
+- main 分支保护没有 `required_status_checks`；活动 ruleset `main-owner-only-merge`（26608367）仅含 deletion、non_fast_forward 和 update 规则，因此本次无需删除平台 CI 门禁。仍要求一位代码所有者批准和解决审查对话。
+- PR #30 已合并为 `d0539438ad9ce735df982dca934076894ffce4ca`。合并后的 Application CI 运行 43032861637 首次因 Ubuntu 软件源 DNS 解析失败而未能安装浏览器依赖；重试也以 failure 结束。发出取消请求时运行已经完成，GitHub 返回 409，无运行被记为成功或已取消。
+- `Dependency Graph` 为独立的依赖元数据流程，保持启用。此次仅调整上述两条 CI 工作流；EC2 实际运行版本须另行核验。
+- 合并及验证约定以根 `AGENTS.md` 的“2026-11-11 CI 暂停约定”为准。
+
 ## 2026-11-05 现状核验（只读）
 
 北京时间19:05至19:06，通过既有可信SSH核对准确实例 `i-0e9ba9bc6f4b1c019`，当前发布链接及实际MainPID工作目录均为 `/opt/keepsite/releases/32b4e0326ad6bdb1c0603049491b9a753e71ae81`。`keepsite.service` 为active/running、NRestarts=0；内部及公网 `/api/health` 均返回HTTP 200和status=ok，公网首页HTTPS 200。
