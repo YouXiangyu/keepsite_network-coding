@@ -1,0 +1,99 @@
+{
+  "verifiedAt": "2026-11-11",
+  "historicalBuildDate": "2026-11-09",
+  "artifactKind": "Historical debug application and instrumentation APKs, not proposed release artifacts",
+  "buildInput": {
+    "headAtBuild": "a171dbe8de776f4613e3fa3789a838df308d14c5",
+    "patchSha256": "5e5fee0d26e074182364632c9d5fc1f62db61c9219169828582ca01f5581e4ff",
+    "equivalentCommittedSource": "a97a9f0c64cee1545a9b5be74327e05164d3d9a1",
+    "androidTree": "ebec80507e4d8688e8b155ccdd10b98036226b41",
+    "sourceFiles": [
+      {
+        "path": "android/app/src/main/java/io/github/youxiangyu/keepsite/updates/UpdateController.kt",
+        "historicalWorkingCopySha256": "4e208fcf5c34d18795ec276eccf813f7d837c3c2ac5be9d5d91c058441831384",
+        "committedFileSha256": "4e208fcf5c34d18795ec276eccf813f7d837c3c2ac5be9d5d91c058441831384",
+        "gitBlob": "7088d86a28323540f82bb09c27fa55134a6f8475"
+      },
+      {
+        "path": "android/app/src/test/java/io/github/youxiangyu/keepsite/updates/UpdateControllerTest.kt",
+        "historicalWorkingCopySha256": "c7a7b60424cbcda3f4a9adaf617f5a9d5f20220b3b6b07ae5b7d3fc4828579d7",
+        "committedFileSha256": "c7a7b60424cbcda3f4a9adaf617f5a9d5f20220b3b6b07ae5b7d3fc4828579d7",
+        "gitBlob": "3bac658f7973b07cc68542dc0107d8941539188a"
+      },
+      {
+        "path": "android/app/src/test/java/io/github/youxiangyu/keepsite/updates/UpdateHandoffsTest.kt",
+        "historicalWorkingCopySha256": "cd51e5d4afa9b07b3aa94097b2f6c27c421dc084018255a88c681cf05dce164d",
+        "committedFileSha256": "cd51e5d4afa9b07b3aa94097b2f6c27c421dc084018255a88c681cf05dce164d",
+        "gitBlob": "87190bfc5bf43f5f47563d9d3f6e1ac7a6521233"
+      }
+    ]
+  },
+  "integration": {
+    "main": "b97deb952e18526f50ce514f9047d7669e1cdf95",
+    "androidUnchanged": true,
+    "newHeadCi": "Required after submission; not run at this checkpoint"
+  },
+  "application": {
+    "package": "io.github.youxiangyu.keepsite",
+    "versionCode": 3,
+    "versionName": "0.1.0",
+    "origin": "https://keepsite.space",
+    "actualDexOriginVerified": true
+  },
+  "apks": [
+    {
+      "file": "app-debug.apk",
+      "package": "io.github.youxiangyu.keepsite",
+      "bytes": 56347061,
+      "sha256": "d15a6f24fcf467a9c0a820e668eea88ace3a8139f1949627187f4d46406f5e8a",
+      "certificateSha256": "256859f8bdb20ff0fe68d567435e099b7b6cfe1ffc2fc7bfaac4cbfaa5817dab"
+    },
+    {
+      "file": "app-debug-androidTest.apk",
+      "package": "io.github.youxiangyu.keepsite.test",
+      "bytes": 683966,
+      "sha256": "aacb6d82a71354028cc61e88b2843269cef84808e8b1adc22ba702b971bd4995",
+      "certificateSha256": "256859f8bdb20ff0fe68d567435e099b7b6cfe1ffc2fc7bfaac4cbfaa5817dab"
+    }
+  ],
+  "signing": {
+    "kind": "Android Debug",
+    "schemeVerified": "v2",
+    "signerCount": 1
+  },
+  "historicalChecks": {
+    "jvm": {
+      "suites": 12,
+      "tests": 78,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "lint": {
+      "Error": 0,
+      "Warning": 16,
+      "Fatal": 0
+    },
+    "applicationApkBuilt": true,
+    "instrumentationApkBuilt": true,
+    "instrumentationExecutedInThisBuild": false
+  },
+  "thisRound": {
+    "rebuiltApks": false,
+    "installedApks": false,
+    "deviceTestsRun": false,
+    "formalAppStarted": false,
+    "webRuntimeCheck": "PASS, 31 reachable modules"
+  },
+  "pendingAcceptance": [
+    "Proposed release APK identity at the final integrated commit",
+    "Formal App draft, saving and account-input installation guards",
+    "Return from cancelled system installation and retry",
+    "Same-signed higher-version release upgrade preserving login, tickets and media",
+    "Two physical Android devices"
+  ],
+  "historicalCi": [
+    "https://github.com/YouXiangyu/keepsite_network-coding/actions/runs/42564558104",
+    "https://github.com/YouXiangyu/keepsite_network-coding/actions/runs/42564558103"
+  ]
+}
