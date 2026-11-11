@@ -1,0 +1,183 @@
+{
+  "schemaVersion": 1,
+  "historicalCaptureDate": "2026-11-06",
+  "scope": "Historical local Chromium full-page screenshots with mocked API and synthetic media fixtures; not a new run of current main or production",
+  "source": {
+    "contentLaterCommittedAs": "e0e7e7ec5c5c839ae35e3ed2a5198cf8447484a3",
+    "originalProductCommit": "f435f4a5c45f461106d0a33ef777b5d91bae9dd7",
+    "reviewedProductSnapshot": "7bc81a2f886695fb490a0783d005f918516f0d6e96f26a2ca896022386a4a1fb",
+    "specSha256": "825644869db9c93b05acb4e24215f2ddf9ac86f19ecfbf322cc59515e346cd70",
+    "specGitBlob": "26acff262d9eca391d66d0d9128e55aa5f7ed82f",
+    "rawLocalReportSha256": "305e743cdfbe2c4749ee5267d296ef9cce4a2cdc7681df6148cd070c71f4c046",
+    "originalGeometrySha256": "46ad21bfbabb7d780841ca08cf23b64f820fad7cefa5708c32d1e0bf2ab72572"
+  },
+  "localTargetedRun": {
+    "passed": 6,
+    "failed": 0,
+    "skipped": 0,
+    "flaky": 0,
+    "attempts": 1,
+    "scope": "Five responsive-width cases and one complete-month navigation case; original report verified"
+  },
+  "exactHeadCi": {
+    "head": "e0e7e7ec5c5c839ae35e3ed2a5198cf8447484a3",
+    "application": {
+      "url": "https://github.com/YouXiangyu/keepsite_network-coding/actions/runs/42242385669",
+      "conclusion": "success"
+    },
+    "deploymentRecovery": {
+      "url": "https://github.com/YouXiangyu/keepsite_network-coding/actions/runs/42242385713",
+      "conclusion": "success"
+    }
+  },
+  "currentMainComparison": {
+    "commit": "b97deb952e18526f50ce514f9047d7669e1cdf95",
+    "originalTwelveChangedFilesHaveIdenticalGitBlobs": true,
+    "wholeDemoIsIdentical": false,
+    "otherDemoFileDifferences": 6,
+    "currentMainRerunPerformed": false
+  },
+  "screenshots": [
+    {
+      "file": "mine-390.png",
+      "route": "/mine",
+      "captureWidthCssPx": 390,
+      "fullPage": true,
+      "originalPngSha256": "634a1370cb8dec2706503ce52f26aa777b3022a20381b881868d3bf13ebb65fd"
+    },
+    {
+      "file": "months-390.png",
+      "route": "/months",
+      "captureWidthCssPx": 390,
+      "fullPage": true,
+      "originalPngSha256": "31c6bd84c2a8372000ef07dfacfb856da4831284a03929654a3b3ef09aea71b2"
+    },
+    {
+      "file": "month-detail-390.png",
+      "route": "/months/2026-01",
+      "captureWidthCssPx": 390,
+      "fullPage": true,
+      "originalPngSha256": "e7c5c0c78fa58f2ffecc44b10680f69df298ef2fb39803f0858f05621afc6e23"
+    },
+    {
+      "file": "mine-768.png",
+      "route": "/mine",
+      "captureWidthCssPx": 768,
+      "fullPage": true,
+      "originalPngSha256": "81fe016550923fc0b56dcb65412662023b6b86a0ce980fb1e25bea55760dd842"
+    },
+    {
+      "file": "month-detail-768.png",
+      "route": "/months/2026-01",
+      "captureWidthCssPx": 768,
+      "fullPage": true,
+      "originalPngSha256": "1f8b9d24c614dcbc5fcf1a768cfea39862fc5ad4091d5854428abfd468ab6a61"
+    },
+    {
+      "file": "mine-1440.png",
+      "route": "/mine",
+      "captureWidthCssPx": 1440,
+      "fullPage": true,
+      "originalPngSha256": "01c224e871728f5ed0a4f7f339c357d4a9ab352cd3bf3d586fd042aba07540f3"
+    }
+  ],
+  "geometry": [
+    {
+      "route": "/mine",
+      "width": 360,
+      "scrollWidth": 360,
+      "title": "我的 · keepsite"
+    },
+    {
+      "route": "/months",
+      "width": 360,
+      "scrollWidth": 360,
+      "title": "全部月份 · keepsite"
+    },
+    {
+      "route": "/months/2026-01",
+      "width": 360,
+      "scrollWidth": 360,
+      "title": "2026年1月 · keepsite"
+    },
+    {
+      "route": "/mine",
+      "width": 390,
+      "scrollWidth": 390,
+      "title": "我的 · keepsite"
+    },
+    {
+      "route": "/months",
+      "width": 390,
+      "scrollWidth": 390,
+      "title": "全部月份 · keepsite"
+    },
+    {
+      "route": "/months/2026-01",
+      "width": 390,
+      "scrollWidth": 390,
+      "title": "2026年1月 · keepsite"
+    },
+    {
+      "route": "/mine",
+      "width": 768,
+      "scrollWidth": 768,
+      "title": "我的 · keepsite"
+    },
+    {
+      "route": "/months",
+      "width": 768,
+      "scrollWidth": 768,
+      "title": "全部月份 · keepsite"
+    },
+    {
+      "route": "/months/2026-01",
+      "width": 768,
+      "scrollWidth": 768,
+      "title": "2026年1月 · keepsite"
+    },
+    {
+      "route": "/mine",
+      "width": 1280,
+      "scrollWidth": 1280,
+      "title": "我的 · keepsite"
+    },
+    {
+      "route": "/months",
+      "width": 1280,
+      "scrollWidth": 1280,
+      "title": "全部月份 · keepsite"
+    },
+    {
+      "route": "/months/2026-01",
+      "width": 1280,
+      "scrollWidth": 1280,
+      "title": "2026年1月 · keepsite"
+    },
+    {
+      "route": "/mine",
+      "width": 1440,
+      "scrollWidth": 1440,
+      "title": "我的 · keepsite"
+    },
+    {
+      "route": "/months",
+      "width": 1440,
+      "scrollWidth": 1440,
+      "title": "全部月份 · keepsite"
+    },
+    {
+      "route": "/months/2026-01",
+      "width": 1440,
+      "scrollWidth": 1440,
+      "title": "2026年1月 · keepsite"
+    }
+  ],
+  "limitations": [
+    "Full-page images are taller than the original viewport; fixed navigation remains at its original viewport position. These do not prove that all cards fit the current viewport or are unobscured.",
+    "Offscreen covers can remain lazy-loading placeholders; synthetic colors are test media, not production ticket photos.",
+    "Geometry contains only the originally collected width, document scrollWidth and document title. No viewport height, card rectangles, vertical clipping, keyboard or touch measurements were added.",
+    "Visible profile identifiers come from the versioned synthetic mock fixture, not real account data. No credentials are included.",
+    "No new test, build, browser, device, account or production run was performed for this export."
+  ]
+}
