@@ -1,0 +1,67 @@
+{
+  "historicalHead": "e0e7e7ec5c5c839ae35e3ed2a5198cf8447484a3",
+  "evidenceBranchBase": "b97deb952e18526f50ce514f9047d7669e1cdf95",
+  "scope": "Original twelve changed files only; whole-application equivalence and new runtime verification are not claimed",
+  "files": [
+    {
+      "path": "demo/browser/web-app.spec.ts",
+      "originalBlob": "26acff262d9eca391d66d0d9128e55aa5f7ed82f",
+      "currentBlob": "26acff262d9eca391d66d0d9128e55aa5f7ed82f"
+    },
+    {
+      "path": "demo/package.json",
+      "originalBlob": "1ca20044c9e49cbe6b4edc980fa3e64c3d2a7446",
+      "currentBlob": "1ca20044c9e49cbe6b4edc980fa3e64c3d2a7446"
+    },
+    {
+      "path": "demo/src/Prototype.tsx",
+      "originalBlob": "6aecfda82abe7c5fe8a4bb8fb2d0343ada74955e",
+      "currentBlob": "6aecfda82abe7c5fe8a4bb8fb2d0343ada74955e"
+    },
+    {
+      "path": "demo/src/app/routes.ts",
+      "originalBlob": "20598871cbd739522fcc8bb41164884fed09ae80",
+      "currentBlob": "20598871cbd739522fcc8bb41164884fed09ae80"
+    },
+    {
+      "path": "demo/src/data.ts",
+      "originalBlob": "2d737171945348df837375bb5093585b448a7409",
+      "currentBlob": "2d737171945348df837375bb5093585b448a7409"
+    },
+    {
+      "path": "demo/src/features/tickets/MinePage.tsx",
+      "originalBlob": "2d0a2f0b4b297c982441d62d3ff978ec46c11c80",
+      "currentBlob": "2d0a2f0b4b297c982441d62d3ff978ec46c11c80"
+    },
+    {
+      "path": "demo/src/features/tickets/TicketCard.tsx",
+      "originalBlob": "63e7e49ec1be88f96f6d0e7993519e2739cd103a",
+      "currentBlob": "63e7e49ec1be88f96f6d0e7993519e2739cd103a"
+    },
+    {
+      "path": "demo/src/features/tickets/TicketEditor.tsx",
+      "originalBlob": "943f51b3359ae199a5002b31da9c8e18b3b16a9b",
+      "currentBlob": "943f51b3359ae199a5002b31da9c8e18b3b16a9b"
+    },
+    {
+      "path": "demo/src/features/tickets/collections.ts",
+      "originalBlob": "e593f8003857468c24ae0343b8efbfbe0a36a7ac",
+      "currentBlob": "e593f8003857468c24ae0343b8efbfbe0a36a7ac"
+    },
+    {
+      "path": "demo/src/prototype.css",
+      "originalBlob": "86a2b7b4864bd35357151d5701bfbd441c4d71ef",
+      "currentBlob": "86a2b7b4864bd35357151d5701bfbd441c4d71ef"
+    },
+    {
+      "path": "demo/tests/collections.test.mjs",
+      "originalBlob": "1579362ac44defee65d5f8492331740487e9d127",
+      "currentBlob": "1579362ac44defee65d5f8492331740487e9d127"
+    },
+    {
+      "path": "demo/tests/routes.test.mjs",
+      "originalBlob": "378563e04883ad28c6650583d9f2be22b9d953d2",
+      "currentBlob": "378563e04883ad28c6650583d9f2be22b9d953d2"
+    }
+  ]
+}
