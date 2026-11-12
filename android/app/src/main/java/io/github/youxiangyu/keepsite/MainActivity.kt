@@ -3,10 +3,12 @@ package io.github.youxiangyu.keepsite
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import android.content.Intent
+import android.content.ClipData
 import android.content.res.ColorStateList
 import android.graphics.Rect
 import android.graphics.drawable.LayerDrawable
 import android.os.Bundle
+import android.provider.Settings
 import android.text.InputType
 import android.text.TextUtils
 import android.view.Gravity
@@ -35,6 +37,7 @@ import com.google.android.material.progressindicator.LinearProgressIndicator
 import com.google.android.material.switchmaterial.SwitchMaterial
 import io.github.youxiangyu.keepsite.core.*
 import io.github.youxiangyu.keepsite.databinding.ActivityMainBinding
+import io.github.youxiangyu.keepsite.updates.*
 import io.github.youxiangyu.keepsite.ui.*
 import io.github.youxiangyu.keepsite.ui.Design.Radius
 import io.github.youxiangyu.keepsite.ui.Design.Size
@@ -57,6 +60,16 @@ class MainActivity : AppCompatActivity() {
     private val imageExecutor = Executors.newFixedThreadPool(2)
     private val media = mutableListOf<MediaPresenter>()
     private var subscription: Closeable? = null
+    private var updateSubscription: Closeable? = null
+    private val updatePanels = mutableListOf<UpdatePanel>()
+    private var authInputs = listOf<EditText>()
+    private var resumedForUpdates = false
+    private var launchingUpdate: String? = null
+    private val updateResults by lazy { UpdateResultRequests(activityResultRegistry, model.updateRequests) { token, kind ->
+        if (launchingUpdate == token) launchingUpdate = null
+        if (kind == HandoffKind.PERMISSION) model.updates.permissionReturned(token, packageManager.canRequestPackageInstalls())
+        else model.updates.installerReturned(token)
+    } }
     private var active = false
     private var account: String? = null
     private var screenKey: Any? = null
@@ -79,11 +92,25 @@ class MainActivity : AppCompatActivity() {
     private val noticeSurface by lazy { rounded(R.color.mv_soft, Radius.CONTROL) }
     private val errorSurface by lazy { rounded(R.color.mv_error_soft, Radius.CONTROL) }
     private val picker = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        model.updatePickerOpen = false
         if (uri != null && controller.snapshot().draft != null) controller.selectPhoto(uri)
+        updateInstallGuard()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        model.updatePickerOpen = savedInstanceState?.getBoolean("updatePickerOpen") ?: model.updatePickerOpen
+        if (!model.updateRequestsRestored) {
+            model.updateRequestsRestored = true
+            savedInstanceState?.getStringArrayList("updateRequests")?.forEach { saved ->
+                try {
+                    val kind = HandoffKind.valueOf(saved.substringBefore(':')); val token = saved.substringAfter(':')
+                    if (kind in setOf(HandoffKind.PERMISSION, HandoffKind.INSTALL) && java.util.UUID.fromString(token).toString() == token)
+                        model.updateRequests[token] = kind
+                } catch (_: IllegalArgumentException) { }
+            }
+        }
+        updateResults.restore()
         WindowCompat.setDecorFitsSystemWindows(window, false)
         binding = ActivityMainBinding.inflate(layoutInflater)
         account = controller.snapshot().session?.userId
@@ -123,14 +150,29 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart(); active = true; controller.setForeground(true)
         subscription = controller.subscribe(::render); render(controller.snapshot())
+        updateSubscription = model.updates.subscribe(::renderUpdates)
+        model.updates.setForeground(true)
+    }
+    override fun onResume() { super.onResume(); resumedForUpdates = true; updateInstallGuard(); considerUpdateInstall() }
+    override fun onPause() { resumedForUpdates = false; updateInstallGuard(); super.onPause() }
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (::binding.isInitialized) { updateInstallGuard(); considerUpdateInstall() }
+    }
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("updatePickerOpen", model.updatePickerOpen)
+        outState.putStringArrayList("updateRequests", ArrayList(model.updateRequests.map { (token, kind) -> "${kind.name}:$token" }))
+        super.onSaveInstanceState(outState)
     }
     override fun onStop() {
+        model.updates.setForeground(false); updateSubscription?.close(); updateSubscription = null
         accountDialog?.dismiss(); accountDialog = null
         active = false; subscription?.close(); subscription = null
         releaseScreen(); screenKey = null; controller.setForeground(false); super.onStop()
     }
-    override fun onDestroy() { imageExecutor.shutdownNow(); super.onDestroy() }
+    override fun onDestroy() { updateResults.close(); imageExecutor.shutdownNow(); super.onDestroy() }
     private fun releaseScreen() {
+        updatePanels.clear(); authInputs = emptyList()
         editorNoticePlacement?.close(); editorNoticePlacement = null; editorLayout = null
         adapter?.close(); adapter = null; media.forEach { it.close() }; media.clear()
         editorPhoto = null; editorFields = emptyList(); editorDate = null
@@ -222,6 +264,7 @@ class MainActivity : AppCompatActivity() {
                     gravity = Gravity.CENTER
                     add(label("正在载入账号…", color = R.color.mv_muted).apply { gravity = Gravity.CENTER })
                     add(action("重试连接", clicked = controller::refresh), Space.L)
+                    addUpdatePanel(this)
                 }
                 !authenticated -> authScreen(state.session!!)
                 model.route == "editor" -> editorScreen(state)
@@ -240,6 +283,7 @@ class MainActivity : AppCompatActivity() {
             if (revealEditorError) editorLayout?.revealNotice()
         }
         if (model.route in listOf("library", "month") && authenticated) updateLibrary(state)
+        updateInstallGuard(); considerUpdateInstall()
     }
     private fun navigationItem(title: String, route: String, clicked: () -> Unit): LinearLayout = column().apply {
         tag = route; gravity = Gravity.CENTER; isClickable = true; isFocusable = true
@@ -294,6 +338,7 @@ class MainActivity : AppCompatActivity() {
     }
     private fun authScreen(session: Session) {
         val body = scrollColumn()
+        addUpdatePanel(body)
         val titles = mapOf("login" to "欢迎回来", "register" to "创建账号", "verify" to "验证邮箱", "forgot" to "找回密码", "reset" to "设置新密码")
         val hints = mapOf("login" to "登录后查看你的电影票", "register" to "用邮箱创建账号，开始记录每一次观影", "verify" to "输入邮件中的验证码完成验证",
             "forgot" to "输入注册邮箱，我们会发送重置码", "reset" to "输入重置码并设置新密码")
@@ -312,6 +357,10 @@ class MainActivity : AppCompatActivity() {
             importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
         }
         val code = input("邮箱验证码", 20)
+        authInputs = if (session.emailEnabled) listOfNotNull(email,
+            password.takeIf { model.authMode in listOf("login", "register", "reset") },
+            code.takeIf { model.authMode in listOf("verify", "reset") }) else emptyList()
+        authInputs.forEach { it.doAfterTextChanged { updateInstallGuard() } }
         if (session.emailEnabled) {
             body.add(email, Space.XL)
             if (model.authMode in listOf("verify", "reset")) body.add(code, Space.M)
@@ -564,7 +613,10 @@ class MainActivity : AppCompatActivity() {
         body.add(pageTitle(if (draft.ticketId == null) "录入电影票" else "编辑电影票"), Space.S)
         body.add(label("票面为必需，其他信息可稍后填写；自动识别不会覆盖你的手动修改。", color = R.color.mv_muted), Space.S)
         editorPhoto = picture(body, "待保存的票面", top = Space.XL)
-        editorPhotoButton = action("选择或替换票面") { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+        editorPhotoButton = action("选择或替换票面") {
+            model.updatePickerOpen = true; updateInstallGuard()
+            picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+        }
             .apply { setIconResource(R.drawable.ic_image); iconGravity = MaterialButton.ICON_GRAVITY_TEXT_START }.also { body.add(it, Space.M) }
         fun fieldName(name: String) = label(name, Type.Label, R.color.mv_muted)
         editorFields = listOf("电影名称", "影院", "影厅", "座位").mapIndexed { index, name ->
@@ -835,6 +887,7 @@ class MainActivity : AppCompatActivity() {
     }
     private fun aboutScreen() {
         val body = subPage("关于与隐私")
+        addUpdatePanel(body)
         body.add(sectionTitle("关于海报数据"), Space.XL)
         body.add(panel().apply {
             addView(ImageView(this@MainActivity).apply {
@@ -844,6 +897,65 @@ class MainActivity : AppCompatActivity() {
             add(label("This product uses the TMDB API but is not endorsed or certified by TMDB.", Type.Caption), Space.M)
             add(action("TMDB 数据与使用条款", ButtonKind.Text) { openUrl("https://www.themoviedb.org/api-terms-of-use") }, Space.S)
         }, Space.M)
+    }
+    private fun addUpdatePanel(body: LinearLayout) {
+        val panel = UpdatePanel(this) { action, identity ->
+            when (action) {
+                UpdateAction.CHECK -> model.updates.check()
+                UpdateAction.RETRY -> model.updates.retryFresh()
+                UpdateAction.CANCEL -> model.updates.cancel()
+                UpdateAction.MOBILE -> model.updates.retryFresh(metered = true, expectedIdentity = identity)
+                UpdateAction.INSTALL -> {
+                    if (!updateInstallGuard().allows(manual = true)) Toast.makeText(this, "请先完成当前编辑或账号输入，再安装更新。", Toast.LENGTH_SHORT).show()
+                    else model.updates.requestInstall(manual = true, sourceAllowed = packageManager.canRequestPackageInstalls())
+                }
+            }
+        }
+        updatePanels += panel; panel.render(model.updates.state); body.add(panel, Space.M)
+    }
+    private fun updateInstallGuard(): UpdateInstallGuard {
+        val state = controller.snapshot()
+        val value = UpdateInstallGuard(resumedForUpdates, ::binding.isInitialized && window.decorView.hasWindowFocus(), state.draft != null,
+            model.awaitingDraft, state.busy.isNotBlank(), model.route == "account" || accountDialog?.isShowing == true ||
+                UpdateInstallGuard.accountInputsActive(authInputs.map { it.isShown to it.text.isNotBlank() }),
+            model.updatePickerOpen, state.session?.authenticated == true)
+        model.updates.updateGuard(value); return value
+    }
+    private fun renderUpdates(state: UpdateUiState) {
+        updatePanels.forEach { it.render(state) }
+        val outgoing = state.command
+        if (outgoing != null && launchingUpdate != outgoing.token) {
+            launchingUpdate = outgoing.token
+            model.updates.issue(outgoing.token) { command ->
+                if (command == null) { if (launchingUpdate == outgoing.token) launchingUpdate = null; return@issue }
+                if (!updateInstallGuard().allows(command.manual)) {
+                    if (launchingUpdate == command.token) launchingUpdate = null
+                    model.updates.notLaunched(command.token); return@issue
+                }
+                try {
+                    if (command.kind == HandoffKind.PERMISSION) {
+                        updateResults.launch(command.token, command.kind, Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, "package:$packageName".toUri()))
+                    }
+                    else {
+                        val uri = command.contentUri.toUri()
+                        updateResults.launch(command.token, command.kind, Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
+                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION).apply { clipData = ClipData.newRawUri("应用更新", uri) })
+                    }
+                } catch (_: RuntimeException) {
+                    if (launchingUpdate == command.token) launchingUpdate = null
+                    updateResults.failed(command.token)
+                    model.updates.launchFailed(command.token)
+                }
+            }
+        } else considerUpdateInstall()
+    }
+    private fun considerUpdateInstall() {
+        if (!::binding.isInitialized) return
+        val update = model.updates.state
+        val explicitContinuation = update.continuePermission
+        if (updateInstallGuard().shouldRequest(update.status is UpdateStatus.Ready, update.busy, update.command != null,
+                update.automaticAllowed, explicitContinuation, update.error.isNotBlank()))
+            model.updates.requestInstall(manual = explicitContinuation, sourceAllowed = packageManager.canRequestPackageInstalls())
     }
     private fun accountPasswordDialog(mode: String, fixedEmail: String? = null) {
         val fields = column().apply { setPadding(dp(Space.L), dp(Space.S), dp(Space.L), 0) }
