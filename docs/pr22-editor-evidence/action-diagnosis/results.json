@@ -1,0 +1,107 @@
+{
+  "date": "2026-11-11",
+  "sourceBase": "bb5a6d4aa4f33d505e9ad6b79a5b136bbb1d2b0e",
+  "pendingMain": "b97deb952e18526f50ce514f9047d7669e1cdf95",
+  "sourceSnapshot": "1145b6447f6076a906dd96b916f961b5fc5e143b330dec9089ff8609df0f9504",
+  "sources": [
+    {
+      "path": "android/app/src/androidTest/java/io/github/youxiangyu/keepsite/ui/EditorLayoutInstrumentedTest.kt",
+      "workingCopySha256": "d02432131be987470f70f8de227c4db4253d35bb330d64f8a285da91a72c4349",
+      "repositoryLfSha256": "d02432131be987470f70f8de227c4db4253d35bb330d64f8a285da91a72c4349",
+      "gitBlob": "0f1ea93208db20681246cd0526008456ad192520"
+    },
+    {
+      "path": "android/app/src/debug/java/io/github/youxiangyu/keepsite/EditorLayoutHostActivity.kt",
+      "workingCopySha256": "c45eb191900a99aa15d773c665145362001aec72c04e7ec0123addf77b14f2bc",
+      "repositoryLfSha256": "c45eb191900a99aa15d773c665145362001aec72c04e7ec0123addf77b14f2bc",
+      "gitBlob": "c0e186265c2211183daa388297a569e0bdc458d1"
+    }
+  ],
+  "scope": "Debug Host with synthetic state and local callbacks; formal MainActivity not started",
+  "method": "fixedActionsWithRealKeyboardAndRecreation",
+  "attempts": 1,
+  "runnerDurationSeconds": 38.431,
+  "passed": 0,
+  "failed": 1,
+  "nativeExitCode": 0,
+  "failure": "landscape-seat-ime: original 20-second layout/IME condition not satisfied",
+  "oldClickCountFailure": "not reproduced in this single run; root cause unresolved",
+  "explicitScenarioRecreateReached": false,
+  "largeTextCaseRunThisRound": false,
+  "apks": [
+    {
+      "file": "apks/app-debug.apk",
+      "package": "io.github.youxiangyu.keepsite",
+      "sha256": "69abcad90851d416cff0f1e193a4b138823dbf9877dea8bae1ce64703f936acb",
+      "certificateSha256": "256859f8bdb20ff0fe68d567435e099b7b6cfe1ffc2fc7bfaac4cbfaa5817dab"
+    },
+    {
+      "file": "apks/app-debug-androidTest.apk",
+      "package": "io.github.youxiangyu.keepsite.test",
+      "sha256": "d9fc928fe2ad413f7d5d25f46fb836e7267bddeb7797d3007996a1dcc729c2e7",
+      "certificateSha256": "256859f8bdb20ff0fe68d567435e099b7b6cfe1ffc2fc7bfaac4cbfaa5817dab"
+    }
+  ],
+  "runtimeBefore": {
+    "api": "35",
+    "buildFingerprint": "google/sdk_gphone64_x86_64/emu64xa:15/AE3A.240806.043/12960925:userdebug/dev-keys",
+    "currentUser": "0",
+    "wmSize": "Physical size: 1080x1920",
+    "wmDensity": "Physical density: 420",
+    "rotationMode": "lock 0",
+    "fontScale": "1.0",
+    "accelerometerRotation": "0",
+    "userRotation": "0",
+    "defaultIme": "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME",
+    "enabledIme": "com.google.android.inputmethod.latin/com.android.inputmethod.latin.LatinIME;1594443099:com.google.android.tts/com.google.android.apps.speech.tts.googletts.settings.asr.voiceime.VoiceInputMethodService",
+    "showImeWithHardwareKeyboard": "1"
+  },
+  "runtimeAfterEqualsBefore": true,
+  "systemSettingsWritten": false,
+  "textEvidence": "Original text content with CRLF normalized to LF; PNG bytes unchanged",
+  "files": [
+    {
+      "file": "1-portrait-title-ime-o1-reached.json",
+      "originalSha256": "1107f2e9e4d8aab1a62e03eec1747d9885694723a54e17a7a2875015f957ac8d",
+      "publishedSha256": "1107f2e9e4d8aab1a62e03eec1747d9885694723a54e17a7a2875015f957ac8d",
+      "normalization": "CRLF to LF only"
+    },
+    {
+      "file": "1-portrait-title-ime-o1-reached.png",
+      "originalSha256": "48d02006e50d1747be328d7cc3a152eabe3107d4a0ebfed46cc97525e2691391",
+      "publishedSha256": "48d02006e50d1747be328d7cc3a152eabe3107d4a0ebfed46cc97525e2691391",
+      "normalization": "none"
+    },
+    {
+      "file": "2-portrait-seat-ime-o1-reached.json",
+      "originalSha256": "55af1b72796afe40845c78e4a8cf0598fbea02193f8d97c9dab920d009cd5ceb",
+      "publishedSha256": "55af1b72796afe40845c78e4a8cf0598fbea02193f8d97c9dab920d009cd5ceb",
+      "normalization": "CRLF to LF only"
+    },
+    {
+      "file": "2-portrait-seat-ime-o1-reached.png",
+      "originalSha256": "c3c8493ef06796c94bf7b3980bd6c943a2ab5d3f4ffe6d4f984cb54593aae853",
+      "publishedSha256": "c3c8493ef06796c94bf7b3980bd6c943a2ab5d3f4ffe6d4f984cb54593aae853",
+      "normalization": "none"
+    },
+    {
+      "file": "3-landscape-seat-ime-o2-failure.json",
+      "originalSha256": "2900fe433169b0d6777743080bb59133132ff0aac26c0354bba0f9250ccee441",
+      "publishedSha256": "2900fe433169b0d6777743080bb59133132ff0aac26c0354bba0f9250ccee441",
+      "normalization": "CRLF to LF only"
+    },
+    {
+      "file": "3-landscape-seat-ime-o2-failure.png",
+      "originalSha256": "a6867cbe292e784a2f2bbb65d78d43b2960564dd0150aaf739be6e6653e40ce5",
+      "publishedSha256": "a6867cbe292e784a2f2bbb65d78d43b2960564dd0150aaf739be6e6653e40ce5",
+      "normalization": "none"
+    },
+    {
+      "file": "instrumentation.txt",
+      "originalSha256": "4321f5c9c3c8780c7518fb2c9e3c619fa069cae0354e4dd2c7c2f3f702067319",
+      "publishedSha256": "e5704530d675f2f138cee9206dfea2e9dce57e6bcc94764812ebe3816e853c2e",
+      "normalization": "CRLF to LF only"
+    }
+  ],
+  "formalAcceptance": "Pending formal reproduction and administrator approval before production layout changes"
+}

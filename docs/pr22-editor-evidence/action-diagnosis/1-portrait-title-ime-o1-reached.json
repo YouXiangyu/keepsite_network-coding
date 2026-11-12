@@ -1,0 +1,342 @@
+{
+  "scene": "portrait-title-ime",
+  "scope": "Isolated layout Host; local controls, no business save",
+  "runId": "m2b-20261111-001501-3b6f2a4c",
+  "testName": "fixedActionsWithRealKeyboardAndRecreation",
+  "failed": false,
+  "wallMillis": 1794327394049,
+  "elapsedRealtimeMs": 88458,
+  "sourceBase": "bb5a6d4aa4f33d505e9ad6b79a5b136bbb1d2b0e",
+  "sourceSnapshot": "1145b6447f6076a906dd96b916f961b5fc5e143b330dec9089ff8609df0f9504",
+  "appApkSha256": "69abcad90851d416cff0f1e193a4b138823dbf9877dea8bae1ce64703f936acb",
+  "testApkSha256": "d9fc928fe2ad413f7d5d25f46fb836e7267bddeb7797d3007996a1dcc729c2e7",
+  "apiBaseUrl": "https:\/\/keepsite.space",
+  "sdk": 35,
+  "orientation": 1,
+  "fontScale": 1,
+  "density": 2.625,
+  "densityDpi": 420,
+  "windowFocus": true,
+  "lifecycle": "RESUMED",
+  "decor": {
+    "x": 0,
+    "y": 0,
+    "width": 1080,
+    "height": 1920,
+    "complete": true
+  },
+  "content": {
+    "x": 0,
+    "y": 176,
+    "width": 1080,
+    "height": 872,
+    "complete": true
+  },
+  "windowVisibleFrame": {
+    "left": 0,
+    "top": 63,
+    "right": 1080,
+    "bottom": 1048
+  },
+  "systemBarsInsets": {
+    "left": 0,
+    "top": 63,
+    "right": 0,
+    "bottom": 63
+  },
+  "imeInsets": {
+    "left": 0,
+    "top": 0,
+    "right": 0,
+    "bottom": 872
+  },
+  "focusedField": 0,
+  "fieldMetrics": [
+    {
+      "textSizePx": 39.375,
+      "inputType": 1,
+      "imeOptions": 268435456
+    },
+    {
+      "textSizePx": 39.375,
+      "inputType": 1,
+      "imeOptions": 268435456
+    },
+    {
+      "textSizePx": 39.375,
+      "inputType": 1,
+      "imeOptions": 268435456
+    },
+    {
+      "textSizePx": 39.375,
+      "inputType": 1,
+      "imeOptions": 268435456
+    }
+  ],
+  "editorFontScale": 1,
+  "imeVisible": true,
+  "scrollY": 643,
+  "scroll": {
+    "x": 0,
+    "y": 176,
+    "width": 1080,
+    "height": 715,
+    "complete": true
+  },
+  "body": {
+    "x": 0,
+    "y": -467,
+    "width": 1080,
+    "height": 2580,
+    "complete": false
+  },
+  "footer": {
+    "x": 0,
+    "y": 891,
+    "width": 1080,
+    "height": 157,
+    "complete": true
+  },
+  "root": {
+    "x": 0,
+    "y": 176,
+    "width": 1080,
+    "height": 872,
+    "complete": true
+  },
+  "status": {
+    "x": 52,
+    "y": 1984,
+    "width": 976,
+    "height": 45,
+    "complete": false
+  },
+  "notice": {
+    "x": 52,
+    "y": 84,
+    "width": 976,
+    "height": 92,
+    "complete": true
+  },
+  "noticeText": "保存未完成，草稿仍保留。",
+  "statusText": "选中：本地合成票面",
+  "noticeSource": "synthetic_error",
+  "busy": "",
+  "pending": false,
+  "progress": {
+    "x": 0,
+    "y": 0,
+    "width": 0,
+    "height": 0,
+    "complete": false
+  },
+  "progressVisibility": 8,
+  "noticeTextSizePx": 34.125,
+  "noticeOutsideEditor": true,
+  "save": {
+    "x": 391,
+    "y": 902,
+    "width": 637,
+    "height": 136,
+    "complete": true
+  },
+  "cancel": {
+    "x": 52,
+    "y": 907,
+    "width": 318,
+    "height": 126,
+    "complete": true
+  },
+  "date": {
+    "x": 52,
+    "y": 1785,
+    "width": 976,
+    "height": 136,
+    "complete": false
+  },
+  "saveLabel": "保存电影票",
+  "saveEnabled": true,
+  "cancelEnabled": true,
+  "dateEnabled": true,
+  "photoEnabled": true,
+  "fieldsEnabled": [
+    true,
+    true,
+    true,
+    true
+  ],
+  "fields": [
+    {
+      "x": 52,
+      "y": 755,
+      "width": 976,
+      "height": 136,
+      "complete": true
+    },
+    {
+      "x": 52,
+      "y": 1004,
+      "width": 976,
+      "height": 136,
+      "complete": false
+    },
+    {
+      "x": 52,
+      "y": 1253,
+      "width": 976,
+      "height": 136,
+      "complete": false
+    },
+    {
+      "x": 52,
+      "y": 1502,
+      "width": 976,
+      "height": 136,
+      "complete": false
+    }
+  ],
+  "saveClicks": 0,
+  "cancelClicks": 0,
+  "hostInstance": "662ff38d-9c69-46dc-9aaf-edfd0a41d069",
+  "touchCoordinateSpace": "raw=display screen; local=Activity.dispatchTouchEvent window coordinates; button bounds=display screen",
+  "touchRecordsEvicted": 0,
+  "touchRecordingErrors": 0,
+  "touchEvents": [
+    {
+      "phase": "before",
+      "action": "DOWN",
+      "downTime": 85454,
+      "eventTime": 85454,
+      "uptime": 85471,
+      "rawX": 539.5,
+      "rawY": 1459,
+      "localX": 539.5,
+      "localY": 1459,
+      "save": {
+        "x": 391,
+        "y": 1532,
+        "width": 637,
+        "height": 136,
+        "enabled": true,
+        "clicks": 0
+      },
+      "cancel": {
+        "x": 52,
+        "y": 1537,
+        "width": 318,
+        "height": 126,
+        "enabled": true,
+        "clicks": 0
+      },
+      "focusedField": -1,
+      "focusedClass": "android.widget.LinearLayout",
+      "imeVisible": false,
+      "imeBottom": 0,
+      "windowFocus": true,
+      "handled": null,
+      "dispatchFailure": null
+    },
+    {
+      "phase": "after",
+      "action": "DOWN",
+      "downTime": 85454,
+      "eventTime": 85454,
+      "uptime": 85487,
+      "rawX": 539.5,
+      "rawY": 1459,
+      "localX": 539.5,
+      "localY": 1459,
+      "save": {
+        "x": 391,
+        "y": 1532,
+        "width": 637,
+        "height": 136,
+        "enabled": true,
+        "clicks": 0
+      },
+      "cancel": {
+        "x": 52,
+        "y": 1537,
+        "width": 318,
+        "height": 126,
+        "enabled": true,
+        "clicks": 0
+      },
+      "focusedField": -1,
+      "focusedClass": "android.widget.LinearLayout",
+      "imeVisible": false,
+      "imeBottom": 0,
+      "windowFocus": true,
+      "handled": true,
+      "dispatchFailure": null
+    },
+    {
+      "phase": "before",
+      "action": "UP",
+      "downTime": 85454,
+      "eventTime": 85497,
+      "uptime": 85510,
+      "rawX": 539.5,
+      "rawY": 1459,
+      "localX": 539.5,
+      "localY": 1459,
+      "save": {
+        "x": 391,
+        "y": 1532,
+        "width": 637,
+        "height": 136,
+        "enabled": true,
+        "clicks": 0
+      },
+      "cancel": {
+        "x": 52,
+        "y": 1537,
+        "width": 318,
+        "height": 126,
+        "enabled": true,
+        "clicks": 0
+      },
+      "focusedField": -1,
+      "focusedClass": "android.widget.LinearLayout",
+      "imeVisible": false,
+      "imeBottom": 0,
+      "windowFocus": true,
+      "handled": null,
+      "dispatchFailure": null
+    },
+    {
+      "phase": "after",
+      "action": "UP",
+      "downTime": 85454,
+      "eventTime": 85497,
+      "uptime": 85800,
+      "rawX": 539.5,
+      "rawY": 1459,
+      "localX": 539.5,
+      "localY": 1459,
+      "save": {
+        "x": 391,
+        "y": 1532,
+        "width": 637,
+        "height": 136,
+        "enabled": true,
+        "clicks": 0
+      },
+      "cancel": {
+        "x": 52,
+        "y": 1537,
+        "width": 318,
+        "height": 126,
+        "enabled": true,
+        "clicks": 0
+      },
+      "focusedField": 0,
+      "focusedClass": "io.github.youxiangyu.keepsite.ui.FormInput",
+      "imeVisible": false,
+      "imeBottom": 0,
+      "windowFocus": true,
+      "handled": true,
+      "dispatchFailure": null
+    }
+  ]
+}
