@@ -73,6 +73,8 @@ class MainActivity : AppCompatActivity() {
     private var active = false
     private var account: String? = null
     private var screenKey: Any? = null
+    private var networkScreen: NetworkMonitorScreen? = null
+    private var networkExport: Closeable? = null
     private var adapter: TicketAdapter? = null
     private var libraryCount: TextView? = null
     private var libraryEmpty: TextView? = null
@@ -95,6 +97,21 @@ class MainActivity : AppCompatActivity() {
         model.updatePickerOpen = false
         if (uri != null && controller.snapshot().draft != null) controller.selectPhoto(uri)
         updateInstallGuard()
+    }
+    private val networkDocument = registerForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
+        val pending = model.pendingNetworkReport
+        model.pendingNetworkReport = null; model.networkDocumentRequested = false
+        if (uri != null) {
+            if (pending == null || !pending.first.current()) {
+                // This URI belongs only to the just-completed CreateDocument request.
+                imageExecutor.execute { runCatching { android.provider.DocumentsContract.deleteDocument(contentResolver, uri) } }
+            } else {
+                networkExport?.close()
+                networkExport = controller.saveNetworkReport(pending.first, pending.second, uri) { saved ->
+                    if (active && pending.first.current()) networkScreen?.takeIf { it.current() }?.message(if (saved) "诊断报告已保存。" else "未能保存报告，请重试。")
+                }
+            }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -172,6 +189,8 @@ class MainActivity : AppCompatActivity() {
     }
     override fun onDestroy() { updateResults.close(); imageExecutor.shutdownNow(); super.onDestroy() }
     private fun releaseScreen() {
+        networkExport?.close(); networkExport = null
+        networkScreen?.close(); networkScreen = null
         updatePanels.clear(); authInputs = emptyList()
         editorNoticePlacement?.close(); editorNoticePlacement = null; editorLayout = null
         adapter?.close(); adapter = null; media.forEach { it.close() }; media.clear()
@@ -184,6 +203,7 @@ class MainActivity : AppCompatActivity() {
         if (route == "account") controller.refreshAccountMethods()
     }
     private fun parentRoute(route: String): String = when (route) {
+        "network" -> "sync"
         "detail" -> model.detailFrom
         "month", "account", "sync", "about" -> "mine"
         else -> "library"
@@ -202,6 +222,7 @@ class MainActivity : AppCompatActivity() {
             model.libraryAccount = nextAccount; model.libraryQuery = ""; model.libraryOldestFirst = false
         }
         if (nextAccount != account) {
+            model.pendingNetworkReport = null; model.networkView.reset()
             accountDialog?.dismiss(); accountDialog = null
             account = nextAccount; model.route = "library"; model.detailId = null; model.detailFrom = "library"; model.month = null; model.mineScroll = 0
             model.awaitingDraft = false; model.editorWasOpen = false; screenKey = null; releaseScreen()
@@ -248,6 +269,7 @@ class MainActivity : AppCompatActivity() {
             model.route == "month" -> listOf("month", model.month)
             model.route == "account" -> listOf("account", state.session.email, state.session.emailEnabled, state.session.googleEnabled, state.accountMethods, state.accountPasswordEmail)
             model.route == "sync" -> listOf("sync", state.cache, state.peer)
+            model.route == "network" -> "network"
             model.route == "about" -> "about"
             else -> "library"
         }
@@ -273,6 +295,10 @@ class MainActivity : AppCompatActivity() {
                 model.route == "month" -> libraryScreen(model.month)
                 model.route == "account" -> accountScreen(state)
                 model.route == "sync" -> syncScreen(state)
+                model.route == "network" -> {
+                    val page = NetworkMonitorScreen(this, controller, model.networkView, { navigate("sync") }, ::exportNetwork)
+                    networkScreen = page; binding.content.addView(page.view, ViewGroup.LayoutParams(-1, -1))
+                }
                 model.route == "about" -> aboutScreen()
                 else -> libraryScreen()
             }
@@ -824,6 +850,7 @@ class MainActivity : AppCompatActivity() {
     }
     private fun syncScreen(state: AppState) {
         val body = subPage("同步与设备")
+        body.add(action("网络监控") { navigate("network") }, Space.L)
         body.add(sectionTitle("本机图片缓存"), Space.XL)
         body.add(panel().apply {
             setPadding(dp(Space.L), dp(Space.L), dp(Space.L), dp(Space.XS))
@@ -898,6 +925,27 @@ class MainActivity : AppCompatActivity() {
             add(action("TMDB 数据与使用条款", ButtonKind.Text) { openUrl("https://www.themoviedb.org/api-terms-of-use") }, Space.S)
         }, Space.M)
     }
+    private fun exportNetwork(page: NetworkMonitorScreen, report: NetworkReport, format: NetworkReportFormat, share: Boolean) {
+        if (!active || networkScreen !== page || !page.current() || !report.current()) return
+        if (!share) {
+            if (model.networkDocumentRequested) { page.message("请先完成或取消上一次文件选择。"); return }
+            model.pendingNetworkReport = report to format; model.networkDocumentRequested = true
+            runCatching { networkDocument.launch("keepsite-network-${System.currentTimeMillis()}.${format.extension}") }.onFailure {
+                model.pendingNetworkReport = null; model.networkDocumentRequested = false; page.message("当前设备无法选择保存位置。")
+            }
+            return
+        }
+        networkExport?.close(); page.message("正在生成报告…")
+        networkExport = controller.renderNetworkReport(report, format) { text ->
+            if (!active || isFinishing || isDestroyed || networkScreen !== page || !page.current() || !report.current()) return@renderNetworkReport
+            if (text == null) { page.message("报告已失效或暂不可用，请重新生成。"); return@renderNetworkReport }
+            if (text.length > 120 * 1024) { page.message("报告较大，请使用保存文件以保留完整内容。"); return@renderNetworkReport }
+            val intent = Intent(Intent.ACTION_SEND).apply { type = format.mime; putExtra(Intent.EXTRA_TEXT, text); putExtra(Intent.EXTRA_TITLE, "Keepsite 网络诊断") }
+            if (active && networkScreen === page && page.current() && report.current()) {
+                runCatching { startActivity(Intent.createChooser(intent, "分享诊断报告")) }.onFailure { page.message("当前设备没有可用的分享应用。") }
+            }
+        }
+    }
     private fun addUpdatePanel(body: LinearLayout) {
         val panel = UpdatePanel(this) { action, identity ->
             when (action) {
@@ -918,7 +966,8 @@ class MainActivity : AppCompatActivity() {
         val value = UpdateInstallGuard(resumedForUpdates, ::binding.isInitialized && window.decorView.hasWindowFocus(), state.draft != null,
             model.awaitingDraft, state.busy.isNotBlank(), model.route == "account" || accountDialog?.isShowing == true ||
                 UpdateInstallGuard.accountInputsActive(authInputs.map { it.isShown to it.text.isNotBlank() }),
-            model.updatePickerOpen, state.session?.authenticated == true)
+            model.updatePickerOpen, state.session?.authenticated == true,
+            diagnosticsInteraction = model.route == "network" || model.networkDocumentRequested)
         model.updates.updateGuard(value); return value
     }
     private fun renderUpdates(state: UpdateUiState) {

@@ -24,11 +24,18 @@ class AppRepository(context: Context) : AppController {
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
     private val mediaWorkers = Executors.newFixedThreadPool(4)
+    private val reportWorker = object : java.util.concurrent.ThreadPoolExecutor(1, 1, 0, java.util.concurrent.TimeUnit.MILLISECONDS,
+        java.util.concurrent.ArrayBlockingQueue(1), java.util.concurrent.ThreadPoolExecutor.AbortPolicy()) {
+        override fun terminated() { mediaWorkers.shutdown() } // Drain already-owned document cleanup, including an active writer's finally.
+    }
+    private val reportJobs = CopyOnWriteArrayList<Closeable>()
     private val photoImporter = PhotoImporter(this.context.contentResolver)
     private val listeners = CopyOnWriteArrayList<(AppState) -> Unit>()
     private val mediaJobs = CopyOnWriteArrayList<MediaJob>()
     private val secrets = SecretStore(context)
-    private val api = HttpApi(BuildConfig.API_BASE_URL, secrets)
+    private val diagnostics = NetworkDiagnostics()
+    @Volatile private var diagnosticAccount: NetworkMonitor.Account? = null
+    private val api = HttpApi(BuildConfig.API_BASE_URL, secrets, diagnostics)
     private val lock = Any()
     private val actionScope = ThreadLocal<Long>()
     @Volatile private var state = AppState()
@@ -43,6 +50,8 @@ class AppRepository(context: Context) : AppController {
     private var accountId: String? = null
     private var draft: Draft? = null
     private val syncing = AtomicBoolean()
+    private val serverTraceScheduled = AtomicBoolean()
+    private val pendingServerTrace = java.util.concurrent.atomic.AtomicReference<NetworkDiagnostics.ServerAction?>()
     private val pending = HashMap<String, Pair<String, JSONObject>>()
 
     private data class Draft(
@@ -65,6 +74,70 @@ class AppRepository(context: Context) : AppController {
         main.post { if (!closed && state === latest) listeners.forEach { it(latest) } }
     }
     override fun snapshot() = state
+    override fun openNetworkPage() = if (!closed && api.session?.authenticated == true) diagnostics.openPage() else null
+    override fun networkSnapshot(owner: NetworkPageOwner) = if (!closed && api.session?.authenticated == true) diagnostics.pageSnapshot(owner) else null
+    override fun networkDeviceNames(owner: NetworkPageOwner): List<String> = synchronized(lock) {
+        if (closed || !owner.current() || accountId == null || state.session?.userId != accountId || api.session?.userId != accountId) emptyList()
+        else state.peer.devices.take(8).map { it.label.ifBlank { "未命名设备" } }.takeIf { owner.current() } ?: emptyList()
+    }
+    override fun setNetworkDetailed(owner: NetworkPageOwner, enabled: Boolean) { if (!closed && api.session?.authenticated == true) diagnostics.pageDetailed(owner, enabled) }
+    override fun pauseNetworkHistory(owner: NetworkPageOwner, paused: Boolean) { if (!closed && api.session?.authenticated == true) diagnostics.pagePause(owner, paused) }
+    override fun clearNetworkHistory(owner: NetworkPageOwner) { if (!closed && api.session?.authenticated == true) diagnostics.pageClear(owner) }
+    override fun prepareNetworkReport(owner: NetworkPageOwner) = if (!closed && api.session?.authenticated == true)
+        diagnostics.prepareReport(owner, NetworkReportEnvironment(BuildConfig.API_BASE_URL, BuildConfig.VERSION_NAME, android.os.Build.VERSION.SDK_INT)) else null
+    override fun refreshServerTrace(owner: NetworkPageOwner, clearing: Boolean) {
+        if (closed || !foreground || api.session?.authenticated != true) return
+        val action = diagnostics.pageServerAction(owner, api.epoch(), clearing) ?: return
+        pendingServerTrace.set(action)
+        scheduleServerTrace()
+    }
+    private fun reportJob(rejected: () -> Unit, work: (AtomicBoolean) -> Unit): Closeable {
+        val cancelled = AtomicBoolean(false)
+        lateinit var job: Closeable
+        job = Closeable { cancelled.set(true); reportJobs.remove(job) }
+        if (closed) { job.close(); return job }
+        reportJobs.add(job)
+        try { reportWorker.execute { try { if (!cancelled.get()) work(cancelled) } finally { reportJobs.remove(job) } } }
+        catch (_: java.util.concurrent.RejectedExecutionException) { job.close(); main.post { if (!closed) rejected() } }
+        return job
+    }
+    override fun renderNetworkReport(report: NetworkReport, format: NetworkReportFormat, callback: (String?) -> Unit): Closeable {
+      if (closed || !report.current()) { main.post { callback(null) }; return Closeable { } }
+      return reportJob({ callback(null) }) { cancelled ->
+        val result = if (!closed && !cancelled.get() && report.current()) report.render(format) else null
+        main.post { if (!closed && !cancelled.get()) callback(result?.takeIf { report.current() }) }
+      }
+    }
+    override fun saveNetworkReport(report: NetworkReport, format: NetworkReportFormat, uri: Uri, callback: (Boolean) -> Unit): Closeable {
+        // The caller supplies only its just-created ACTION_CREATE_DOCUMENT URI.
+        lateinit var job: ReportFileJob
+        job = ReportFileJob(reportWorker, mediaWorkers, { !closed && report.current() },
+            { context.contentResolver.openOutputStream(uri, "wt") },
+            { android.provider.DocumentsContract.deleteDocument(context.contentResolver, uri); Unit },
+            { output, cancelled -> report.write(format, output, cancelled) },
+            { saved ->
+                reportJobs.remove(job)
+                main.post { if (!closed && !job.cancelled.get()) callback(saved && report.current()) }
+            }
+        )
+        reportJobs.add(job); job.start(); return job
+    }
+    private fun scheduleServerTrace() {
+        if (closed || pendingServerTrace.get() == null || !serverTraceScheduled.compareAndSet(false, true)) return
+        try {
+            worker.execute {
+                val action = pendingServerTrace.getAndSet(null)
+                try {
+                    if (action != null && action.current()) api.withScope(action.epoch) { api.diagnostics(action) }
+                } catch (_: CancellationException) { }
+                catch (failure: ApiFailure) { if (action != null && failure.status == 401) expire(action.epoch) }
+                catch (_: Exception) { action?.finished(MonitorError.UNKNOWN) }
+                finally { serverTraceScheduled.set(false); scheduleServerTrace() }
+            }
+        } catch (_: java.util.concurrent.RejectedExecutionException) {
+            serverTraceScheduled.set(false); pendingServerTrace.getAndSet(null)?.finished(MonitorError.CANCELLED)
+        }
+    }
     override fun subscribe(listener: (AppState) -> Unit): Closeable {
         listeners.add(listener); main.post { if (!closed && listener in listeners) listener(state) }
         return Closeable { listeners.remove(listener) }
@@ -106,9 +179,10 @@ class AppRepository(context: Context) : AppController {
             if (closed || this.foreground == foreground) return
             this.foreground = foreground
             if (!foreground) {
+                diagnostics.suspend(diagnosticAccount)
                 api.cancelRequests(); stopNetwork(); mediaJobs.forEach(MediaJob::close)
                 publish { it.copy(connected = false, busy = "", peer = it.peer.copy(registered = false, sending = 0, receiving = 0)) }
-            }
+            } else diagnosticAccount?.let { diagnostics.resume(it, api.epoch()) }
         }
         if (foreground) refresh()
     }
@@ -116,6 +190,9 @@ class AppRepository(context: Context) : AppController {
         peer?.close(); peer = null; events?.close(); events = null
     }
     private fun stopAccount() {
+        reportJobs.toList().forEach(Closeable::close)
+        pendingServerTrace.set(null)
+        diagnostics.closeAccount(diagnosticAccount); diagnosticAccount = null
         stopNetwork(); mediaJobs.forEach(MediaJob::close)
         cacheSubscription?.close(); cacheSubscription = null; cache?.close(); cache = null
         sync = null; accountId = null; draft = null; pending.clear()
@@ -137,7 +214,7 @@ class AppRepository(context: Context) : AppController {
         guard(it); install(session, it)
         if (session.authenticated && foreground) synchronize(it)
     }
-    private fun install(session: Session, expected: Long) {
+    private fun install(session: Session, expected: Long, freshSession: Boolean = false) {
         synchronized(lock) {
             guard(expected)
             if (session.userId != accountId) {
@@ -145,6 +222,7 @@ class AppRepository(context: Context) : AppController {
                 publish { AppState(session = session, busy = it.busy, peer = PeerView(enabled = peerWanted)) }
                 accountId = session.userId
                 if (session.userId != null) {
+                    diagnosticAccount = diagnostics.openAccount(expected)
                     val directory = File(context.cacheDir, "media-v1/${sha256(session.userId.toByteArray())}")
                     val created = FileCache(directory)
                     cache = created
@@ -152,6 +230,9 @@ class AppRepository(context: Context) : AppController {
                     sync = SyncEngine(session.userId) { path -> api.json(path) }
                     restoreDraft()
                 }
+            } else if (freshSession && session.userId != null) {
+                stopNetwork(); diagnostics.closeAccount(diagnosticAccount)
+                diagnosticAccount = diagnostics.openAccount(expected)
             }
             api.session = session
             publish { it.copy(session = session, error = "") }
@@ -170,7 +251,7 @@ class AppRepository(context: Context) : AppController {
             publish(expected, predicate = { owner.get() != null && events === owner.get() }) { it.copy(connected = connected) }
         }, authCheck = {
             owner.get()?.let { refresh(expected, it) }
-        })
+        }, diagnostics = diagnostics, diagnosticAccount = diagnosticAccount)
         owner.set(port)
         events = port
         if (peerWanted) peer = createPeer(userId, port, local, expected)
@@ -184,7 +265,8 @@ class AppRepository(context: Context) : AppController {
     private fun synchronize(expected: Long, receipt: Receipt? = null) {
         guard(expected)
         val engine = sync ?: throw ApiFailure(401, message = "请先登录。")
-        val value = engine.sync(receipt)
+        val observation = diagnostics.sync(diagnosticAccount, expected)
+        val value = api.withObservation(observation?.operation) { engine.sync(receipt, observation) }
         guard(expected)
         cache?.setRefs(value.tickets.flatMap { listOfNotNull(it.original, it.poster) })
         guard(expected)
@@ -199,7 +281,7 @@ class AppRepository(context: Context) : AppController {
     override fun login(email: String, password: String) = run("正在登录") { expected ->
         val session = Wire.session(api.json("/api/auth/login", "POST", JSONObject().put("email", email).put("password", password), false))
         if (!session.authenticated) Wire.invalid()
-        guard(expected); install(session, expected); if (foreground) synchronize(expected)
+        guard(expected); install(session, expected, freshSession = true); if (foreground) synchronize(expected)
     }
     override fun register(email: String, password: String) = authAction("正在注册", "/api/auth/register",
         JSONObject().put("email", email).put("password", password), "请查收验证邮件，并输入验证码。")
@@ -266,7 +348,7 @@ class AppRepository(context: Context) : AppController {
         }
         val session = Wire.session(result)
         if (!session.authenticated) Wire.invalid()
-        install(session, expected); if (foreground) synchronize(expected)
+        install(session, expected, freshSession = true); if (foreground) synchronize(expected)
     }
     private fun randomProof(): String = Base64.encodeToString(ByteArray(32).also(SecureRandom()::nextBytes), Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
     override fun logout() {
@@ -473,7 +555,7 @@ class AppRepository(context: Context) : AppController {
     }
     private fun createPeer(userId: String, port: SyncEvents, local: FileCache, expected: Long): NativePeer {
         val owner = java.util.concurrent.atomic.AtomicReference<NativePeer>()
-        return NativePeer(context, userId, port, local) { view ->
+        return NativePeer(context, userId, port, local, diagnostics, diagnosticAccount, expected) { view ->
             publish(expected, predicate = { owner.get() != null && peer === owner.get() && peerWanted }) { it.copy(peer = view) }
         }.also { owner.set(it) }
     }
@@ -490,33 +572,62 @@ class AppRepository(context: Context) : AppController {
         val local = cache
         if (local == null || !foreground) { job.emit(MediaLoad(status = "error", error = "图片引用已不可用。")); return job }
         val token = local.token()
+        val observationOwner = diagnosticAccount
         job.emit(MediaLoad(status = "loading"))
         mediaWorkers.execute {
+            val observation = diagnostics.media(observationOwner, job.expected, media.size)
             try {
                 job.check()
                 if (!local.live(media)) throw ApiFailure(message = "图片引用已不可用。")
-                local.file(media)?.let { cached -> job.check(); job.emit(MediaLoad(cached, "cached", "cache")); return@execute }
+                val cacheAttempt = observation?.attempt(MonitorRoute.CACHE, MonitorProtocol.CACHE)
+                val cached = try { local.file(media, cacheAttempt).also { if (it != null) cacheAttempt?.complete(verified = true) else cacheAttempt?.failed(MonitorError.UNAVAILABLE) } }
+                    catch (failure: Throwable) { cacheAttempt?.failed(mediaFailure(failure)); throw failure }
+                    finally { cacheAttempt?.close() }
+                if (cached != null) {
+                    job.check(); observation?.cacheValidated(); observation?.complete(cacheAttempt?.payloadBytes(), MonitorRoute.CACHE)
+                    job.emit(MediaLoad(cached, "cached", "cache")); return@execute
+                }
+                val peerReader = peer
+                val peerAttempt = peerReader?.let { observation?.attempt(MonitorRoute.P2P_UNKNOWN, MonitorProtocol.P2P) }
                 val accelerated = try {
-                    peer?.fetch(media) { job.cancelled.get() || !current(job.expected) || !foreground || !local.live(media) }
-                } catch (_: CancellationException) {
-                    job.check()
-                    if (!local.live(media)) throw CancellationException()
-                    null // Disabling only P2P preserves this foreground media request and its cloud fallback.
+                    val result = try {
+                        peerReader?.fetch(media, peerAttempt) { job.cancelled.get() || !current(job.expected) || !foreground || !local.live(media) }
+                    } catch (_: CancellationException) {
+                        peerAttempt?.failed(MonitorError.CANCELLED)
+                        job.check()
+                        if (!local.live(media)) throw CancellationException()
+                        null // Disabling only P2P preserves this foreground media request and its cloud fallback.
+                    }
+                    if (result != null) peerAttempt?.complete(verified = true, actualIfUnknown = result.bytes.size.toLong(), resumedBytes = result.resumedBytes)
+                    else peerAttempt?.failed(MonitorError.UNAVAILABLE)
+                    result
+                } catch (failure: Throwable) { peerAttempt?.failed(mediaFailure(failure)); throw failure }
+                  finally { peerAttempt?.close() }
+                job.check()
+                val (bytes, source) = accelerated?.let { it.bytes to "peer" } ?: api.withScope(job.expected) {
+                    api.withObservation(observation?.operation) { api.download(media, observation) }
                 }
                 job.check()
-                val (bytes, source) = accelerated?.let { it.bytes to "peer" } ?: api.withScope(job.expected) { api.download(media) }
-                job.check(); ImageFiles.validate(bytes, media)
-                if (local.commit(media, bytes, token)) {
+                if (observation != null) observation.validating { ImageFiles.validate(bytes, media) } else ImageFiles.validate(bytes, media)
+                val route = when (source) { "server" -> MonitorRoute.SERVER_PROXY; "s3" -> MonitorRoute.DIRECT_S3
+                    else -> when (accelerated?.route) { "direct" -> MonitorRoute.P2P_DIRECT; "relay" -> MonitorRoute.P2P_RELAY; "mixed" -> MonitorRoute.MIXED; else -> MonitorRoute.P2P_UNKNOWN } }
+                val write = observation?.attempt(MonitorRoute.CACHE, MonitorProtocol.CACHE, MonitorEvent.CACHE_WRITE)
+                val committed = try { local.commit(media, bytes, token).also { if (it) { write?.read(bytes.size); write?.complete(verified = true) } else write?.failed(MonitorError.UNAVAILABLE) } }
+                    finally { write?.close() }
+                if (committed) {
                     job.check(); val file = local.file(media) ?: throw ApiFailure(message = "本机图片已被回收，请重试。")
+                    observation?.complete(bytes.size.toLong(), route)
                     job.emit(MediaLoad(file, "cached", source))
                 } else {
                     job.check()
+                    observation?.complete(bytes.size.toLong(), route)
                     job.emit(MediaLoad(status = "temporary", source = source, error = "未写入本机缓存，可临时查看。", bytes = bytes))
                 }
-            } catch (_: CancellationException) { job.close() }
+            } catch (_: CancellationException) { observation?.failed(MonitorError.CANCELLED); job.close() }
             catch (failure: Exception) {
+                observation?.failed(mediaFailure(failure))
                 if (current(job.expected) && !job.cancelled.get()) job.emit(MediaLoad(status = "error", error = failure.message?.take(300) ?: "图片读取失败。"))
-            }
+            } finally { observation?.close() }
         }
         return job
     }
@@ -525,7 +636,7 @@ class AppRepository(context: Context) : AppController {
         synchronized(lock) {
             if (closed) return
             closed = true; foreground = false; api.cancelRequests(); stopAccount(); api.close()
-            worker.shutdownNow(); mediaWorkers.shutdownNow(); listeners.clear()
+            worker.shutdownNow(); reportWorker.shutdown(); listeners.clear()
         }
     }
 }

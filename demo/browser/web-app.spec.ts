@@ -171,7 +171,7 @@ test.describe('monthly review', () => {
     await info.attach('responsive-geometry', { body: JSON.stringify(geometry, null, 2), contentType: 'application/json' });
   });
 
-  test('account summary and complete history keep all months accessible', async ({ page }) => {
+  test('account summary and complete history keep all months accessible', async ({ page }, info) => {
     await prepareMonthlyLibrary(page);
     await page.goto('/tickets');
     await page.getByRole('navigation').getByRole('link', { name: '我的', exact: true }).click();
@@ -189,6 +189,24 @@ test.describe('monthly review', () => {
     await page.locator('.ticket-card').first().getByRole('link').click();
     await page.getByRole('link', { name: '返回2026年1月' }).click();
     await expect(page.getByRole('heading', { name: '2026年1月', exact: true })).toBeVisible();
+    for (const width of [390, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      await openDevices(page);
+      await page.getByRole('link', { name: '打开网络监控', exact: true }).click();
+      await expect(page).toHaveURL(/\/devices\/network$/);
+      await expect(page.getByRole('heading', { name: '网络监控', exact: true })).toBeVisible();
+      await expect(page).toHaveTitle('网络监控 · keepsite');
+      await expect(page.getByRole('navigation').getByRole('link', { name: '我的', exact: true })).toHaveAttribute('aria-current', 'page');
+      await page.getByRole('button', { name: '连接与传输', exact: true }).click();
+      await expect(page.getByRole('heading', { name: /当前活动HTTP/ })).toBeVisible();
+      await page.reload();
+      await expect(page.getByRole('heading', { name: '网络监控', exact: true })).toBeVisible();
+      await page.screenshot({ path: info.outputPath(`mine-network-${width}.png`), fullPage: true });
+      await page.getByRole('link', { name: '← 返回设备与状态', exact: true }).click();
+      await expect(page.getByRole('heading', { name: '设备与保存状态', exact: true })).toBeVisible();
+      await page.getByRole('navigation').getByRole('link', { name: '我的', exact: true }).click();
+      await expect(page.locator('.profile-stats dd')).toHaveText(['14 张', '7 个']);
+    }
   });
 
   test('filters stay local, do not move focus or history while typing, and survive detail edit cancel and refresh', async ({ page }) => {

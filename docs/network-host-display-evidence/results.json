@@ -1,0 +1,230 @@
+{
+  "scope": "Isolated API 35 emulator and synthetic shared-component tests; no formal application, online account or cross-device acceptance.",
+  "applicationBase": "8c16bb2e0a7eac69697f2659571e0517b83f9bed",
+  "integratedMain": "b97deb952e18526f50ce514f9047d7669e1cdf95",
+  "sourceWorkingCopySha256": {
+    "android/app/src/androidTest/network-host/build.gradle.kts": "360a4cfcc09f5811fe2d30ab28d34deb29010c95026ed5ee681c39e8f84738f7",
+    "android/app/src/androidTest/network-host/src/androidTest/java/io/github/youxiangyu/keepsite/networkfixture/NetworkHostInstrumentedTest.kt": "3aab9688305c0fb141644ff9f61f1c8bfd572271245136a6445587527bbfa7d0",
+    "android/app/src/androidTest/network-host/src/displayGuard/kotlin/io/github/youxiangyu/keepsite/networkfixture/DisplayStateRule.kt": "7fcabcc37186b958893dbd8b5305eef583bdcebfa7735441ef0003a195a2134e",
+    "android/app/src/androidTest/network-host/src/test/java/io/github/youxiangyu/keepsite/networkfixture/DisplayStateRuleTest.kt": "195fd5a9baa24e982bc7acfbd79163938e637e3cf0f0325253279d663b0edecd",
+    "scripts/run-network-host.py": "7342c0c3f095b7203b20f3afb899643b28890b0ee40857c940c7948435fe7b7b",
+    "scripts/tests/test_network_host_runner.py": "8d776ced2f7bb7e73b7fc19feceb6d2c4f4285aef152412407f5412810591cd2"
+  },
+  "repositorySources": {
+    "android/app/src/androidTest/network-host/build.gradle.kts": {
+      "gitBlob": "228463216c16bbd56de2d62a8f11a5c48c6ea1bb",
+      "sha256": "360a4cfcc09f5811fe2d30ab28d34deb29010c95026ed5ee681c39e8f84738f7"
+    },
+    "android/app/src/androidTest/network-host/src/androidTest/java/io/github/youxiangyu/keepsite/networkfixture/NetworkHostInstrumentedTest.kt": {
+      "gitBlob": "2340d74fb27ee08e1ed2a78306160fccbb930034",
+      "sha256": "3aab9688305c0fb141644ff9f61f1c8bfd572271245136a6445587527bbfa7d0"
+    },
+    "android/app/src/androidTest/network-host/src/displayGuard/kotlin/io/github/youxiangyu/keepsite/networkfixture/DisplayStateRule.kt": {
+      "gitBlob": "996779673ad12117b52cd213b95692c5df66f880",
+      "sha256": "7fcabcc37186b958893dbd8b5305eef583bdcebfa7735441ef0003a195a2134e"
+    },
+    "android/app/src/androidTest/network-host/src/test/java/io/github/youxiangyu/keepsite/networkfixture/DisplayStateRuleTest.kt": {
+      "gitBlob": "70ea2de13a09feff6f2f81b08be63df78119cb4c",
+      "sha256": "195fd5a9baa24e982bc7acfbd79163938e637e3cf0f0325253279d663b0edecd"
+    },
+    "scripts/run-network-host.py": {
+      "gitBlob": "aa0dcc9de59c3f7ffe78836edf12e8e808ed4411",
+      "sha256": "7342c0c3f095b7203b20f3afb899643b28890b0ee40857c940c7948435fe7b7b"
+    },
+    "scripts/tests/test_network_host_runner.py": {
+      "gitBlob": "d671491de0e07e4c69774c3c18392e67154023ba",
+      "sha256": "8d776ced2f7bb7e73b7fc19feceb6d2c4f4285aef152412407f5412810591cd2"
+    }
+  },
+  "build": {
+    "jvm": {
+      "tests": "13",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    "lint": {
+      "errors": 0,
+      "warnings": 55
+    },
+    "apks": [
+      {
+        "name": "verification-debug.apk",
+        "package": "io.github.youxiangyu.keepsite.networkverification",
+        "sha256": "d343b54b4dba12804cf8f0da98a07f9e5469684b2f546cccdab2573a5d5c734b",
+        "bytes": 56373380,
+        "certificateSha256": "256859f8bdb20ff0fe68d567435e099b7b6cfe1ffc2fc7bfaac4cbfaa5817dab"
+      },
+      {
+        "name": "verification-androidTest.apk",
+        "package": "io.github.youxiangyu.keepsite.networkverification.test",
+        "sha256": "b420d8e99b43ba3c220a57f169b7647c12e21197bab2394fbab85efecdb4943b",
+        "bytes": 630469,
+        "certificateSha256": "256859f8bdb20ff0fe68d567435e099b7b6cfe1ffc2fc7bfaac4cbfaa5817dab"
+      }
+    ]
+  },
+  "device": {
+    "api": 35,
+    "fingerprint": "google/sdk_gphone64_x86_64/emu64xa:15/AE3A.240806.043/12960925:userdebug/dev-keys",
+    "emulator": true
+  },
+  "normalRun": {
+    "runs": 1,
+    "passedTests": [
+      "largeFontTabletFiltersKeepInputAndExpandFullTraceAcrossClocksThenRotate",
+      "narrowOverviewDetailsConnectionsAndBackUseActualSharedViews",
+      "actualSafSaveLateAccountResultAndSystemChooserHaveOwnedOutputsOnly"
+    ],
+    "testSeconds": 51.597,
+    "runnerExit": 0,
+    "before": {
+      "size": {
+        "physical": "1080x1920",
+        "override": null
+      },
+      "density": {
+        "physical": "420",
+        "override": null
+      },
+      "rotation": "lock 0",
+      "user_rotation": "0",
+      "accelerometer_rotation": "0"
+    },
+    "after": {
+      "size": {
+        "physical": "1080x1920",
+        "override": null
+      },
+      "density": {
+        "physical": "420",
+        "override": null
+      },
+      "rotation": "lock 0",
+      "user_rotation": "0",
+      "accelerometer_rotation": "0"
+    },
+    "tests": "passed",
+    "restored": true,
+    "command_completion": "completed"
+  },
+  "controlledInterruption": {
+    "intentionalStop": true,
+    "spontaneousCrash": false,
+    "mutationObserved": {
+      "physical": "1080x1920",
+      "override": "1536x2048"
+    },
+    "runnerExit": 1,
+    "pending": {
+      "before": {
+        "size": {
+          "physical": "1080x1920",
+          "override": "900x1700"
+        },
+        "density": {
+          "physical": "420",
+          "override": "360"
+        },
+        "rotation": "lock 3",
+        "user_rotation": "3",
+        "accelerometer_rotation": "0"
+      },
+      "after": {
+        "size": {
+          "physical": "1080x1920",
+          "override": "900x1700"
+        },
+        "density": {
+          "physical": "420",
+          "override": "360"
+        },
+        "rotation": "lock 3",
+        "user_rotation": "3",
+        "accelerometer_rotation": "0"
+      },
+      "tests": "failed_or_interrupted",
+      "restored": false,
+      "command_completion": "unknown"
+    },
+    "explicitRecoveryExit": 0,
+    "recovered": {
+      "before": {
+        "size": {
+          "physical": "1080x1920",
+          "override": "900x1700"
+        },
+        "density": {
+          "physical": "420",
+          "override": "360"
+        },
+        "rotation": "lock 3",
+        "user_rotation": "3",
+        "accelerometer_rotation": "0"
+      },
+      "after": {
+        "size": {
+          "physical": "1080x1920",
+          "override": "900x1700"
+        },
+        "density": {
+          "physical": "420",
+          "override": "360"
+        },
+        "rotation": "lock 3",
+        "user_rotation": "3",
+        "accelerometer_rotation": "0"
+      },
+      "tests": "failed_or_interrupted",
+      "restored": true,
+      "command_completion": "explicit_recovery"
+    }
+  },
+  "genuineInitialDisplay": {
+    "size": {
+      "physical": "1080x1920",
+      "override": null
+    },
+    "density": {
+      "physical": "420",
+      "override": null
+    },
+    "rotation": "lock 0",
+    "user_rotation": "0",
+    "accelerometer_rotation": "0"
+  },
+  "genuineFinalDisplay": {
+    "size": {
+      "physical": "1080x1920",
+      "override": null
+    },
+    "density": {
+      "physical": "420",
+      "override": null
+    },
+    "rotation": "lock 0",
+    "user_rotation": "0",
+    "accelerometer_rotation": "0"
+  },
+  "timeoutProbe": {
+    "displayWrites": false,
+    "normalExit": 7,
+    "timeoutExit": 137,
+    "timeoutSeconds": 5.0728704000002836,
+    "result": "Three recorded processes shared one group, exited after timeout, and produced no delayed sentinel."
+  },
+  "selection": "Display/status values selected from original journals; local paths, AVD name and full process lists omitted. Log contents are preserved with CRLF normalized to LF under repository attributes. Working-copy and normalized repository source hashes are distinguished.",
+  "journalSha256": {
+    "normal": "75034a782c6146170f48d7e80227de60b34bad0de921868fb620d46a25c6faf4",
+    "pending": "36e0ac4b401cbe089e12fa216dd20e1149dc1bc97029bfa0c86b7828354f8260",
+    "recovered": "97b397e06deb9238c1b131120620e9d2df583a4595e35e2661713e403ac1af97"
+  },
+  "logSha256": {
+    "natural-instrumentation.txt": "6eac6fd15eb133ba6d7868f9ac171f0c08007fb8c5c160be4ad5ae6cc79783cf",
+    "interrupted-instrumentation.txt": "a702dd22db56a14783cd32613b3035d8f662b08c5802e786eb9d5c50eb09b562"
+  },
+  "originalLogSha256": {
+    "natural-instrumentation.txt": "0aa654ea969248da1c5578862516e6f2c3a79b00dd688831253b82f52b92edc2",
+    "interrupted-instrumentation.txt": "5bbc892da0d9706f72b836ee62259cd50d00bc7c2098b283e6ca0dcd14e121cc"
+  }
+}

@@ -25,10 +25,18 @@ export function MediaProvider({ accountId, ready, tickets, eventPort, deviceSync
   }, [cache, peer]);
   return <MediaContext.Provider value={cache}><PeerContext.Provider value={{ peer, wanted, setWanted }}>{children}</PeerContext.Provider></MediaContext.Provider>;
 }
-export function usePeerStatus() {
+export function usePeerStatus(refreshMs = 0) {
   const value = useContext(PeerContext); if (!value) throw new Error('设备状态必须在已登录账号内读取。');
-  const state = useSyncExternalStore(value.peer.subscribe, value.peer.snapshot);
-  return { ...state, wanted: value.wanted, setWanted: value.setWanted, refresh: value.peer.refreshPeers };
+  const subscribe = useMemo(() => (listener: () => void) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = value.peer.subscribe(() => {
+      if (!refreshMs) listener();
+      else if (!timer) timer = setTimeout(() => { timer = undefined; listener(); }, refreshMs);
+    });
+    return () => { unsubscribe(); if (timer) clearTimeout(timer); };
+  }, [value.peer, refreshMs]);
+  const state = useSyncExternalStore(subscribe, value.peer.snapshot);
+  return { ...state, wanted: value.wanted, setWanted: value.setWanted, refresh: value.peer.refreshPeers, deviceLabels: value.peer.deviceLabels() };
 }
 function useCache() {
   const cache = useContext(MediaContext);

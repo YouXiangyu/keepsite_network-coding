@@ -1,6 +1,6 @@
 import type { TicketOrder } from '../features/tickets/collections';
 
-export type Route = { type: 'tickets' | 'devices' | 'new' | 'mine' | 'months' | 'not-found' }
+export type Route = { type: 'tickets' | 'devices' | 'network' | 'new' | 'mine' | 'months' | 'not-found' }
   | { type: 'month'; month: string } | { type: 'detail' | 'edit'; id: string; from: string };
 export interface ListContext { path: string; search: string; sort: TicketOrder }
 const routeOrigin = 'https://keepsite.invalid';
@@ -69,6 +69,7 @@ export function parseRoute(path: string): Route {
   catch { return { type: 'not-found' }; }
   if (!parts.length || parts.length === 1 && parts[0] === 'tickets') return { type: 'tickets' };
   if (parts.length === 1 && parts[0] === 'devices') return { type: 'devices' };
+  if (parts.length === 2 && parts[0] === 'devices' && parts[1] === 'network') return { type: 'network' };
   if (url.pathname === '/mine') return { type: 'mine' };
   if (url.pathname === '/months') return { type: 'months' };
   if (url.pathname.startsWith('/months/') && parts.length === 2 && url.pathname.split('/').length === 3 && validMonth(parts[1])) return { type: 'month', month: parts[1] };

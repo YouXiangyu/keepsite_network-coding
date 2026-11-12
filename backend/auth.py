@@ -662,6 +662,7 @@ def install_auth(app: FastAPI, data_root: Path, on_authenticated=None, *, config
                     service.check_write(request, session)
                 await initialize(session)
                 request.state.user = session['user']
+                request.state.session_key = hashed(session['sid'])
                 response = await call_next(request)
             except (AuthError, sqlite3.Error) as error:
                 response = failure(error)

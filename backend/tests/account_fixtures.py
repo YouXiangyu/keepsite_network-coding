@@ -45,6 +45,7 @@ class FakeAuthFactory:
                     return JSONResponse({"detail": "请求校验失败。"}, status_code=403)
             await run_in_threadpool(on_authenticated, user)
             request.state.user = user.copy()
+            request.state.session_key = hashed(token)
             return await call_next(request)
         return self
 

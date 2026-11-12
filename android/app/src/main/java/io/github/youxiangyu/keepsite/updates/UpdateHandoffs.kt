@@ -10,8 +10,9 @@ import java.util.UUID
 
 data class UpdateInstallGuard(val resumed: Boolean = false, val focused: Boolean = false, val draft: Boolean = false,
                              val awaitingDraft: Boolean = false, val busy: Boolean = false, val accountInteraction: Boolean = false,
-                             val picker: Boolean = false, val authenticated: Boolean = false) {
-    fun allows(manual: Boolean) = resumed && focused && !draft && !awaitingDraft && !busy && !accountInteraction && !picker && (manual || authenticated)
+                             val picker: Boolean = false, val authenticated: Boolean = false,
+                             val diagnosticsInteraction: Boolean = false) {
+    fun allows(manual: Boolean) = resumed && focused && !draft && !awaitingDraft && !busy && !accountInteraction && !picker && !diagnosticsInteraction && (manual || authenticated)
     fun shouldRequest(ready: Boolean, working: Boolean, hasCommand: Boolean, automaticAllowed: Boolean, continuation: Boolean, failed: Boolean) =
         !working && !hasCommand && !failed && (ready || continuation) && (automaticAllowed || continuation) && allows(continuation)
     companion object {

@@ -49,61 +49,73 @@ class SyncEngine(private val userId: String, private val read: (String) -> JSONO
         return Synced(Wire.text(start, "serverId"), Wire.number(start, "cursor"), tickets.values.toList(), Wire.capabilities(Wire.obj(start, "capabilities")))
     }
 
-    fun sync(receipt: Receipt? = null): Synced {
+    fun sync(receipt: Receipt? = null, observation: SyncObservation? = null): Synced {
         var restarts = 0
-        while (true) {
-            try {
-                if (receipt != null && current?.serverId != receipt.serverId) current = null
-                val start = current ?: snapshot()
-                if (receipt != null && start.serverId != receipt.serverId) throw ApiFailure(message = "同步空间已变化，请核对操作结果。")
-                val tickets = LinkedHashMap(start.tickets.associateBy { it.id })
-                val versions = HashMap(start.tickets.associate { it.id to it.version })
-                var cursor = start.cursor
-                var capabilities = start.capabilities
-                var target = receipt?.committedCursor ?: cursor
-                var passes = 0
-                var more: Boolean
-                do {
-                    if (++passes > 256) throw ApiFailure(message = "同步积压较多，请重新检查。")
-                    val page = read("/api/sync/changes?limit=100&serverId=${URLEncoder.encode(start.serverId, "UTF-8")}&after=$cursor")
-                    identity(page, start.serverId)
-                    val changes = Wire.array(page, "changes")
-                    val head = Wire.number(page, "headCursor")
-                    val next = Wire.number(page, "nextCursor")
-                    more = Wire.bool(page, "hasMore")
-                    if (Wire.number(page, "fromCursor") != cursor || changes.length() > 200 || next != cursor + changes.length()
-                        || head < next || more != (next < head) || more && changes.length() == 0) gap()
-                    if (passes == 1) target = maxOf(target, head)
-                    for (i in 0 until changes.length()) {
-                        val change = changes.opt(i) as? JSONObject ?: Wire.invalid()
-                        if (Wire.number(change, "cursor") != cursor + 1) gap()
-                        val id: String
-                        val version: Long
-                        when (Wire.text(change, "type", 20)) {
-                            "upsert" -> {
-                                val ticket = Wire.ticket(Wire.obj(change, "ticket"))
-                                id = ticket.id; version = ticket.version
-                                tickets[id] = ticket
+        try {
+            while (true) {
+                try {
+                    if (receipt != null && current?.serverId != receipt.serverId) { current = null; observation?.rebuilding() }
+                    val hadSnapshot = current == null
+                    val start = current ?: snapshot()
+                    observation?.space(start.serverId)
+                    if (receipt != null && start.serverId != receipt.serverId) throw ApiFailure(message = "同步空间已变化，请核对操作结果。")
+                    val tickets = LinkedHashMap(start.tickets.associateBy { it.id })
+                    val versions = HashMap(start.tickets.associate { it.id to it.version })
+                    var cursor = start.cursor
+                    var capabilities = start.capabilities
+                    var target = receipt?.committedCursor ?: cursor
+                    var passes = 0
+                    var appliedChanges = 0L
+                    var more: Boolean
+                    do {
+                        if (++passes > 256) throw ApiFailure(message = "同步积压较多，请重新检查。")
+                        val page = read("/api/sync/changes?limit=100&serverId=${URLEncoder.encode(start.serverId, "UTF-8")}&after=$cursor")
+                        identity(page, start.serverId)
+                        val changes = Wire.array(page, "changes")
+                        val head = Wire.number(page, "headCursor")
+                        val next = Wire.number(page, "nextCursor")
+                        more = Wire.bool(page, "hasMore")
+                        if (Wire.number(page, "fromCursor") != cursor || changes.length() > 200 || next != cursor + changes.length()
+                            || head < next || more != (next < head) || more && changes.length() == 0) gap()
+                        observation?.watermark(start.serverId, head)
+                        if (passes == 1) target = maxOf(target, head)
+                        for (i in 0 until changes.length()) {
+                            val change = changes.opt(i) as? JSONObject ?: Wire.invalid()
+                            if (Wire.number(change, "cursor") != cursor + 1) gap()
+                            val id: String
+                            val version: Long
+                            when (Wire.text(change, "type", 20)) {
+                                "upsert" -> {
+                                    val ticket = Wire.ticket(Wire.obj(change, "ticket"))
+                                    id = ticket.id; version = ticket.version
+                                    tickets[id] = ticket
+                                }
+                                "delete" -> {
+                                    id = Wire.id(change, "id"); version = Wire.number(change, "version", 1)
+                                    Wire.number(change, "deletedAt"); tickets.remove(id)
+                                }
+                                else -> Wire.invalid()
                             }
-                            "delete" -> {
-                                id = Wire.id(change, "id"); version = Wire.number(change, "version", 1)
-                                Wire.number(change, "deletedAt"); tickets.remove(id)
-                            }
-                            else -> Wire.invalid()
+                            if (version < (versions[id] ?: 0)) gap()
+                            versions[id] = version
+                            cursor++
+                            appliedChanges++
                         }
-                        if (version < (versions[id] ?: 0)) gap()
-                        versions[id] = version
-                        cursor++
+                        capabilities = Wire.capabilities(Wire.obj(page, "capabilities"))
+                        if (cursor < target && !more) throw ApiFailure(message = "尚未追上已确认操作，请再次核对。")
+                    } while (more && cursor < target)
+                    return Synced(start.serverId, cursor, tickets.values.toList(), capabilities).also {
+                        current = it; observation?.applied(it, if (hadSnapshot) start.tickets.size.toLong() else null, appliedChanges)
                     }
-                    capabilities = Wire.capabilities(Wire.obj(page, "capabilities"))
-                    if (cursor < target && !more) throw ApiFailure(message = "尚未追上已确认操作，请再次核对。")
-                } while (more && cursor < target)
-                return Synced(start.serverId, cursor, tickets.values.toList(), capabilities).also { current = it }
-            } catch (failure: ApiFailure) {
-                if (failure.status == 410 && ++restarts <= 3) { current = null; continue }
-                throw failure
+                } catch (failure: ApiFailure) {
+                    if (failure.status == 410 && ++restarts <= 3) {
+                        current = null; observation?.rebuilding(); observation?.retry(); continue
+                    }
+                    throw failure
+                }
             }
-        }
+        } catch (failure: Throwable) { observation?.failed(failure); throw failure }
+        finally { observation?.close() }
     }
 
     private fun gap(code: String = "cursor_gap"): Nothing = throw ApiFailure(410, code, "同步记录不连续，正在重新校准。")

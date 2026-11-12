@@ -1,5 +1,6 @@
 import type { PeerAsset, PeerRoute } from './peerProtocol';
 import { bytesOf } from './peerProtocol';
+import { member, number, own } from '../network/schema';
 
 export const FRAME_LIMIT = 16 * 1024;
 export const FRAME_HEADER = 8;
@@ -11,6 +12,10 @@ export interface ChannelOptions {
   guard(): void;
   progress(): void;
   observe(payload: number, control: number, discarded: number): void;
+  position?(offset: number, resumedFrom?: number): void;
+}
+function position(options: ChannelOptions, offset: number, resumedFrom?: number) {
+  try { options.position?.(offset, resumedFrom); } catch { /* Observation cannot change frame acceptance or acknowledgement. */ }
 }
 const cancelled = () => new DOMException('设备传输已取消。', 'AbortError');
 function check(options: ChannelOptions) { if (options.signal.aborted) throw cancelled(); options.guard(); }
@@ -71,7 +76,7 @@ export function receiveFile(channel: RTCDataChannel, media: PeerAsset, maxSize: 
     const abort = () => fail(cancelled());
     const open = () => {
       if (opened) return; opened = true;
-      try { check(options); control(channel, { v: 1, type: 'get', assetId: media.assetId, offset: prefix.offset }, options); } catch (error) { fail(error); }
+      try { check(options); position(options, prefix.offset, prefix.offset); control(channel, { v: 1, type: 'get', assetId: media.assetId, offset: prefix.offset }, options); } catch (error) { fail(error); }
     };
     const message = (event: MessageEvent) => {
       try {
@@ -82,7 +87,7 @@ export function receiveFile(channel: RTCDataChannel, media: PeerAsset, maxSize: 
           let chunk: ArrayBuffer;
           try { chunk = decodeChunk(event.data, prefix.offset, media.size, limit); }
           catch (error) { options.observe(0, 0, Math.max(0, event.data.byteLength - FRAME_HEADER)); throw error; }
-          prefix.chunks.push(chunk); prefix.offset += chunk.byteLength; options.progress();
+          prefix.chunks.push(chunk); prefix.offset += chunk.byteLength; options.progress(); position(options, prefix.offset);
           control(channel, { v: 1, type: 'ack', offset: prefix.offset }, options);
           return;
         }
@@ -128,10 +133,10 @@ export function sendFile(channel: RTCDataChannel, media: PeerAsset, blob: Blob, 
       try {
         check(options); const value = parseControl(event.data, options);
         if (value.type === 'get' && !sending && value.assetId === media.assetId && Number.isSafeInteger(value.offset) && Number(value.offset) >= 0 && Number(value.offset) <= media.size) {
-          sending = true; void send(Number(value.offset)).catch(fail); return;
+          sending = true; position(options, Number(value.offset), Number(value.offset)); void send(Number(value.offset)).catch(fail); return;
         }
         if (value.type === 'ack' && sending && Number.isSafeInteger(value.offset) && Number(value.offset) > acknowledged && Number(value.offset) <= sent) {
-          acknowledged = Number(value.offset); options.progress(); return;
+          acknowledged = Number(value.offset); options.progress(); position(options, acknowledged); return;
         }
         if (value.type === 'verified' && ended && acknowledged === media.size && value.size === media.size) {
           options.progress(); settled = true; cleanup(); resolve(); return;
@@ -152,20 +157,52 @@ export function mergeRoute(previous: PeerRoute | undefined, next: Exclude<PeerRo
   if (!previous || previous === 'unknown') return next;
   return previous === next ? previous : 'mixed';
 }
-export async function selectedRoute(connection: RTCPeerConnection, signal?: AbortSignal): Promise<Exclude<PeerRoute, 'mixed'>> {
+const candidateTypes = ['host', 'srflx', 'prflx', 'relay'] as const;
+const dtlsStates = ['new', 'connecting', 'connected', 'closed', 'failed'] as const;
+export interface ConnectionSample {
+  route: Exclude<PeerRoute, 'mixed'>; localType: typeof candidateTypes[number] | null; remoteType: typeof candidateTypes[number] | null;
+  dtlsState: typeof dtlsStates[number] | null; roundTripMs: number | null; channelBytesSent: number | null; channelBytesReceived: number | null;
+}
+const unknownSample = (): ConnectionSample => ({ route: 'unknown', localType: null, remoteType: null, dtlsState: null,
+  roundTripMs: null, channelBytesSent: null, channelBytesReceived: null });
+export async function selectedConnectionSample(connection: RTCPeerConnection, channel?: RTCDataChannel, signal?: AbortSignal): Promise<ConnectionSample> {
   let timer: ReturnType<typeof setTimeout> | undefined, abort = () => {};
   try {
-    if (signal?.aborted) return 'unknown';
+    if (signal?.aborted) return unknownSample();
     const deadline = new Promise<null>(resolve => { abort = () => resolve(null); timer = setTimeout(abort, 1000); signal?.addEventListener('abort', abort, { once: true }); });
-    const stats = await Promise.race([connection.getStats(), deadline]); if (!stats) return 'unknown';
-    let pair: RTCStats | undefined;
-    stats.forEach(report => { if (report.type === 'transport' && report.selectedCandidatePairId) pair = stats.get(report.selectedCandidatePairId); });
-    const candidatePair = pair as (RTCStats & { localCandidateId?: string; remoteCandidateId?: string }) | undefined;
-    const local = candidatePair?.localCandidateId && stats.get(candidatePair.localCandidateId);
-    const remote = candidatePair?.remoteCandidateId && stats.get(candidatePair.remoteCandidateId);
-    if (local?.candidateType === 'relay' || remote?.candidateType === 'relay') return 'relay';
-    if (local?.candidateType && remote?.candidateType) return 'direct';
+    const stats = await Promise.race([connection.getStats(), deadline]); if (!stats || signal?.aborted || stats.size > 1024) return unknownSample();
+    const result = unknownSample(); let transport: unknown, selected: string | undefined, ambiguous = false;
+    let matchedChannel: unknown, channelMatches = 0;
+    stats.forEach(report => {
+      if (own(report, 'type') === 'transport') {
+        const id = own(report, 'selectedCandidatePairId');
+        if (typeof id === 'string') { if (selected !== undefined && selected !== id) ambiguous = true; selected = id; transport = report; }
+      }
+      if (channel && own(report, 'type') === 'data-channel') {
+        const id = channel.id, matched = number(id, true) ? own(report, 'dataChannelIdentifier') === id : own(report, 'label') === channel.label;
+        if (matched) { matchedChannel = report; channelMatches++; }
+      }
+    });
+    const dtls = own(transport, 'dtlsState'); if (!ambiguous && member(dtls, dtlsStates)) result.dtlsState = dtls;
+    if (channelMatches === 1) {
+      const sent = own(matchedChannel, 'bytesSent'), received = own(matchedChannel, 'bytesReceived');
+      if (number(sent, true)) result.channelBytesSent = sent; if (number(received, true)) result.channelBytesReceived = received;
+    }
+    const pair = !ambiguous && selected ? stats.get(selected) : undefined;
+    if (own(pair, 'type') !== 'candidate-pair' || own(pair, 'state') !== 'succeeded') return result;
+    const localId = own(pair, 'localCandidateId'), remoteId = own(pair, 'remoteCandidateId');
+    const local = typeof localId === 'string' ? stats.get(localId) : undefined, remote = typeof remoteId === 'string' ? stats.get(remoteId) : undefined;
+    const localType = own(local, 'candidateType'), remoteType = own(remote, 'candidateType');
+    if (own(local, 'type') === 'local-candidate' && member(localType, candidateTypes)) result.localType = localType;
+    if (own(remote, 'type') === 'remote-candidate' && member(remoteType, candidateTypes)) result.remoteType = remoteType;
+    if (result.localType && result.remoteType) result.route = result.localType === 'relay' || result.remoteType === 'relay' ? 'relay' : 'direct';
+    const seconds = own(pair, 'currentRoundTripTime');
+    if (number(seconds) && number(seconds * 1000)) result.roundTripMs = seconds * 1000;
+    return result;
   } catch { /* A closed connection may no longer expose statistics. */ }
   finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
-  return 'unknown';
+  return unknownSample();
+}
+export async function selectedRoute(connection: RTCPeerConnection, signal?: AbortSignal): Promise<Exclude<PeerRoute, 'mixed'>> {
+  return (await selectedConnectionSample(connection, undefined, signal)).route;
 }

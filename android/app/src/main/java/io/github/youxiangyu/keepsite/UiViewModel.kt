@@ -4,6 +4,9 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import io.github.youxiangyu.keepsite.core.AppController
 import io.github.youxiangyu.keepsite.core.AppRepository
+import io.github.youxiangyu.keepsite.core.NetworkReport
+import io.github.youxiangyu.keepsite.core.NetworkReportFormat
+import io.github.youxiangyu.keepsite.ui.NetworkViewState
 import io.github.youxiangyu.keepsite.updates.AndroidUpdateRuntime
 import io.github.youxiangyu.keepsite.updates.HandoffKind
 
@@ -23,6 +26,9 @@ class UiViewModel(application: Application) : AndroidViewModel(application) {
     var libraryAccount: String? = null
     var libraryQuery = ""
     var libraryOldestFirst = false
+    val networkView = NetworkViewState()
+    var pendingNetworkReport: Pair<NetworkReport, NetworkReportFormat>? = null
+    var networkDocumentRequested = false
     var updatePickerOpen = false
     val updateRequests = mutableMapOf<String, HandoffKind>()
     var updateRequestsRestored = false

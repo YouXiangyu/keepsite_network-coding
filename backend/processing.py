@@ -20,6 +20,7 @@ from .media import MAX_IMAGE_BYTES, image_info
 from .object_storage import S3ObjectStore, StorageError
 from .store import now_ms
 from .ticket_recognition import RecognitionError, validate_fields
+from .diagnostics import safe, span, using
 
 log = logging.getLogger(__name__)
 RECOGNITION_TIMEOUT_SECONDS = 45
@@ -220,8 +221,11 @@ class ProcessingWorker:
         for identifier in repository.due_jobs(self.store):
             if self.stopping.is_set():
                 break
-            self.queue.publish(identifier)
-            repository.mark_enqueued(self.store, identifier)
+            ref = safe(self.store.diagnostics.recall_job, identifier)
+            with using(ref):
+                with span("redis.stream.publish"):
+                    self.queue.publish(identifier)
+                repository.mark_enqueued(self.store, identifier)
 
     def run_once(self):
         if self.stopping.is_set():
@@ -231,6 +235,7 @@ class ProcessingWorker:
         if self.queue is None:
             return False
         self.reconcile()
+        received_at = time.monotonic_ns()
         message = self.queue.receive()
         if message is None:
             return False
@@ -239,9 +244,20 @@ class ProcessingWorker:
         if job is None:
             self.queue.acknowledge(message_id)
             return True
+        ref = safe(self.store.diagnostics.recall, "job", job["user_id"], identifier)
+        if ref is not None:
+            safe(self.store.diagnostics.record, ref, "redis.stream.receive", "completed", span_id=uuid.uuid4().hex,
+                 started=received_at / 1_000_000, duration_ms=(time.monotonic_ns() - received_at) / 1_000_000,
+                 attempt=job["attempts"])
+        with using(ref):
+            return self._run_claimed(job, message_id)
+
+    def _run_claimed(self, job, message_id):
         completed = False
+        prepared = None
         try:
-            prepared = self._prepare(job)
+            with span("worker.prepare", attempt=job["attempts"], outcome=lambda: "cancelled" if prepared is False else "completed"):
+                prepared = self._prepare(job)
             if prepared is False:
                 completed = repository.fail(self.store, job, interrupted=True)
             else:
@@ -249,7 +265,8 @@ class ProcessingWorker:
                 # durable, and a later lease can independently verify and publish.
                 for attempt in range(3):
                     try:
-                        completed = repository.finish(self.store, job, prepared)
+                        with span("worker.publish", attempt=job["attempts"], outcome=lambda: "completed" if completed else "cancelled"):
+                            completed = repository.finish(self.store, job, prepared)
                         break
                     except sqlite3.Error:
                         if attempt == 2:
@@ -272,7 +289,8 @@ class ProcessingWorker:
             # log their raw messages, URLs or decoded ticket text.
             completed = repository.fail(self.store, job)
         if completed:
-            self.queue.acknowledge(message_id)
+            with span("redis.stream.ack"):
+                self.queue.acknowledge(message_id)
         return True
 
     def _prepare(self, job):
@@ -293,7 +311,8 @@ class ProcessingWorker:
         if job["ocr_fields"] is None:
             raw = self._original(job, stopping)
             check()
-            candidates = self.recognition_runner(raw, stopping=stopping, timeout=min(RECOGNITION_TIMEOUT_SECONDS, max(0.1, deadline - time.monotonic())))
+            with span("worker.ocr", attempt=job["attempts"]):
+                candidates = self.recognition_runner(raw, stopping=stopping, timeout=min(RECOGNITION_TIMEOUT_SECONDS, max(0.1, deadline - time.monotonic())))
             check()
             fields = repository.save_ocr(self.store, job, candidates)
             if fields is None:
@@ -303,7 +322,8 @@ class ProcessingWorker:
         check()
         if not fields or not fields["title"]:
             return None
-        candidate = self.provider.find(fields["title"], fields["showtime"], stopping=stopping)
+        with span("worker.poster", attempt=job["attempts"]):
+            candidate = self.provider.find(fields["title"], fields["showtime"], stopping=stopping)
         check()
         if candidate is None:
             return None

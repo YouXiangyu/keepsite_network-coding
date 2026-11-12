@@ -15,6 +15,7 @@ from .auth import AuthError
 from .peer_contracts import LIMITS, MAX_CONTROL_BYTES, MAX_FRAME_BYTES, PeerProtocolError, parse_message, strict_json, token
 from .peer_registry import PeerActor, PeerRegistry, RegistryError
 from .store import StoreError
+from .diagnostics import observed, safe, span, using
 
 ERROR_CODES = {"invalid", "not_found", "expired", "conflict", "capacity", "rate_limited", "unavailable", "unauthorized"}
 TRANSFER_EVENTS = {"peer.request", "peer.authorized", "peer.signal", "peer.lease", "peer.pending"}
@@ -257,8 +258,11 @@ class PeerService:
         raw = json.dumps(message, ensure_ascii=False, separators=(",", ":"))
         if len(raw.encode()) > MAX_FRAME_BYTES + 2048:
             raise RegistryError("invalid")
-        if self.client is None or self.client.publish(self.channel_prefix + target["processId"], raw) < 1:
+        if self.client is None:
             raise RegistryError("unavailable")
+        with span("redis.pubsub.publish"):
+            if self.client.publish(self.channel_prefix + target["processId"], raw) < 1:
+                raise RegistryError("unavailable")
 
     def _cancel(self, connection, record, reason, request_id=None):
         try:
@@ -303,7 +307,11 @@ class PeerService:
             raise RegistryError("invalid")
         try:
             connection.check_rate(command["type"] in {"peer.find", "peer.open"})
-            await self._run(self._execute, connection, command, connection=connection)
+            diagnostic = command.get("diagnostics", {})
+            ref = safe(self.store.diagnostics.begin, connection.subscription.user_id, connection.subscription.session_key,
+                       diagnostic.get("captureId"), diagnostic.get("traceId"))
+            with using(ref):
+                await self._run(self._execute, connection, command, connection=connection)
         except AuthError:
             raise
         except StoreError:
@@ -321,6 +329,7 @@ class PeerService:
             self._emit(connection, "peer.error", command["requestId"], code=code,
                        **({"transferId": command["transferId"]} if "transferId" in command else {}))
 
+    @observed("p2p.signaling")
     def _execute(self, connection, body):
         if connection.closed:
             return

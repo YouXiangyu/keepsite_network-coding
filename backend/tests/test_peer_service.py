@@ -42,7 +42,9 @@ def socket(client, name="alice"):
     with client.websocket_connect("/api/sync/events", headers=headers) as ws:
         first = ws.receive_json()
         assert first["type"] == "sync.ready"
-        assert set(first) == {"v", "type", "serverId", "userId", "cursor"}
+        assert set(first) == {"v", "type", "serverId", "userId", "cursor", "heartbeatMs", "diagnosticsVersion"}
+        assert first["heartbeatMs"] == round(client.app.state.sync_hub.heartbeat_seconds * 1000)
+        assert first["diagnosticsVersion"] == 1
         yield ws
 
 

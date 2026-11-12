@@ -2,8 +2,10 @@
 import asyncio
 import json
 import threading
+import uuid
 
 from redis.exceptions import RedisError
+from .diagnostics import safe, span, using
 
 HEARTBEAT_SECONDS = 15
 MAX_CONNECTIONS = 64
@@ -16,11 +18,21 @@ class Subscription:
     def __init__(self, user_id, session_key):
         self.user_id, self.session_key = user_id, session_key
         self.cursor, self.close_code = 0, None
+        self.pending = self.coalesced = self.trace_unknown = False
         self.changed = asyncio.Event()
 
-    def hint(self, cursor):
+    def hint(self, cursor, *, coalesced=False, trace_unknown=False):
+        if cursor > self.cursor or self.pending:
+            self.coalesced = self.coalesced or coalesced or self.pending and cursor != self.cursor
+            self.trace_unknown = self.trace_unknown or trace_unknown
+            self.pending = True
         self.cursor = max(self.cursor, cursor)
         self.changed.set()
+
+    def take_hint(self):
+        result = self.cursor, self.coalesced, self.trace_unknown
+        self.pending = self.coalesced = self.trace_unknown = False
+        return result
 
     def close(self, code):
         self.close_code = code
@@ -36,6 +48,8 @@ class SyncNotificationHub:
         self.handshakes = 0
         self._lock = threading.Lock()
         self._local, self._publish, self._revoked = {}, {}, set()
+        self._publish_coalesced = set()
+        self._local_coalesced, self._local_trace_unknown = set(), set()
         self._scheduled = self._revoke_all = False
         self._stopping = threading.Event()
         self._publish_wake = threading.Event()
@@ -81,7 +95,10 @@ class SyncNotificationHub:
         self._threads.clear()
         with self._lock:
             self._local.clear()
+            self._local_coalesced.clear()
+            self._local_trace_unknown.clear()
             self._publish.clear()
+            self._publish_coalesced.clear()
             self._revoked.clear()
             self._scheduled = self._revoke_all = False
         self._loop = None
@@ -114,18 +131,37 @@ class SyncNotificationHub:
 
     @staticmethod
     def _merge(pending, user_id, cursor):
+        evicted = None
         if user_id not in pending and len(pending) >= MAX_PENDING_ACCOUNTS:
-            pending.pop(next(iter(pending)))  # SQL calibration recovers discarded hints.
+            evicted = next(iter(pending))
+            pending.pop(evicted)  # SQL calibration recovers discarded hints.
         pending[user_id] = max(pending.get(user_id, 0), cursor)
+        return evicted
+
+    def _merge_local(self, user_id, cursor, *, coalesced=False, trace_unknown=False):
+        previous = self._local.get(user_id)
+        if coalesced or previous is not None and previous != cursor:
+            self._local_coalesced.add(user_id)
+        if trace_unknown:
+            self._local_trace_unknown.add(user_id)
+        evicted = self._merge(self._local, user_id, cursor)
+        if evicted is not None:
+            self._local_coalesced.discard(evicted)
+            self._local_trace_unknown.discard(evicted)
 
     def _committed(self, user_id, cursor):
         # SQL is already committed and closed. No network or per-event task allocation.
         with self._lock:
             if self._stopping.is_set():
                 return
-            self._merge(self._local, user_id, cursor)
+            self._merge_local(user_id, cursor)
             if self.client is not None:
-                self._merge(self._publish, user_id, cursor)
+                previous = self._publish.get(user_id)
+                if previous is not None and previous != cursor:
+                    self._publish_coalesced.add(user_id)
+                evicted = self._merge(self._publish, user_id, cursor)
+                if evicted is not None:
+                    self._publish_coalesced.discard(evicted)
                 self._publish_wake.set()
             self._schedule_locked()
 
@@ -142,13 +178,16 @@ class SyncNotificationHub:
     def _drain(self):
         with self._lock:
             local, revoked, revoke_all = self._local, self._revoked, self._revoke_all
+            coalesced, unknown = self._local_coalesced, self._local_trace_unknown
+            self._local_coalesced, self._local_trace_unknown = set(), set()
             self._local, self._revoked = {}, set()
             self._scheduled = self._revoke_all = False
         for subscription in tuple(self.connections):
             if revoke_all or subscription.session_key in revoked:
                 subscription.close(1008)
             elif subscription.user_id in local:
-                subscription.hint(local[subscription.user_id])
+                subscription.hint(local[subscription.user_id], coalesced=subscription.user_id in coalesced,
+                                  trace_unknown=subscription.user_id in unknown)
 
     def _publisher(self):
         while not self._stopping.is_set():
@@ -156,12 +195,18 @@ class SyncNotificationHub:
             self._publish_wake.clear()
             with self._lock:
                 pending, self._publish = self._publish, {}
+                coalesced, self._publish_coalesced = self._publish_coalesced, set()
             for user_id, cursor in pending.items():
                 if self._stopping.is_set():
                     return
                 try:
-                    self.client.publish(self.channel, json.dumps({"serverId": self.server_id,
-                        "userId": user_id, "cursor": cursor}, separators=(",", ":")))
+                    ref = safe(self.store.diagnostics.recall, "cursor", user_id, cursor)
+                    combined = user_id in coalesced
+                    payload = {"serverId": self.server_id, "userId": user_id, "cursor": cursor}
+                    if ref is not None:
+                        payload["diagnosticsCoalesced"] = combined
+                    with using(ref), span("redis.pubsub.publish", coalesced=combined):
+                        self.client.publish(self.channel, json.dumps(payload, separators=(",", ":")))
                 except (RedisError, OSError):
                     break  # No retries on a write response; periodic SQL calibration follows.
 
@@ -176,8 +221,14 @@ class SyncNotificationHub:
                 return
         except (ValueError, UnicodeError, RecursionError):
             return
+        flag = value.get("diagnosticsCoalesced")
+        known = type(flag) is bool
+        ref = safe(self.store.diagnostics.recall, "cursor", value["userId"], value["cursor"]) if known else None
+        if ref is not None:
+            safe(self.store.diagnostics.record, ref, "redis.pubsub.receive", "completed", span_id=uuid.uuid4().hex,
+                 coalesced=flag)
         with self._lock:
-            self._merge(self._local, value["userId"], value["cursor"])
+            self._merge_local(value["userId"], value["cursor"], coalesced=flag is True, trace_unknown=not known)
             self._schedule_locked()
 
     def _subscriber(self):

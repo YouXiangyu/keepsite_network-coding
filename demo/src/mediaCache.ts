@@ -1,6 +1,9 @@
 import { assertSessionEpoch, downloadMedia, errorMessage, sessionAccountId, sessionEpoch } from './api';
 import type { MediaRef } from './data';
 import type { PeerAsset, PeerMediaPort } from './media/peerProtocol';
+import { attemptBytes, finishAttempt, finishMedia, mediaFallback, mediaScope, mediaVerification, publishAttempt, retireMedia, startAttempt, startMedia,
+  type MediaAttempt, type MediaObservation } from './network/mediaRuntime';
+import type { MonitorScope } from './network/monitor';
 
 export const CACHE_LIMIT = 128 * 1024 * 1024;
 export const CACHE_DATABASE = 'keepsite-media-cache-v1';
@@ -161,7 +164,8 @@ export class AccountMediaCache {
   private cleanupError = '';
   private clearError = '';
   private summary: CacheSummary = { count: 0, bytes: 0, state: 'checking', clearing: false, cleanupPending: false, message: '' };
-  constructor(accountId: string) { this.accountId = accountId; this.epoch = sessionEpoch(); }
+  private observationScope?: MonitorScope;
+  constructor(accountId: string) { this.accountId = accountId; this.epoch = sessionEpoch(); this.observationScope = mediaScope(); }
   setPeer(peer: PeerMediaPort) { this.peer = peer; }
   subscribeInventory = (listener: () => void) => { this.inventoryListeners.add(listener); return () => { this.inventoryListeners.delete(listener); }; };
   private inventoryChanged() { for (const listener of this.inventoryListeners) listener(); }
@@ -315,34 +319,51 @@ export class AccountMediaCache {
     const signal = resource.controller.signal;
     const generation = this.generation;
     const media = resource.media;
+    let observation: MediaObservation | undefined, cacheAttempt: MediaAttempt | undefined, cloudAttempt: MediaAttempt | undefined;
     const guard = () => {
       this.guard(signal, generation);
       if (!this.live.has(media.sha256) || this.resources.get(media.sha256) !== resource) throw abortError();
     };
     try {
       guard();
+      observation = startMedia(this.observationScope, media.size, signal);
+      cacheAttempt = startAttempt(observation, 'cache', 'cache');
       let cached: CachedMedia | undefined;
       try { cached = await readCached(this.accountId, media.sha256, signal, guard); } catch { guard(); }
       if (cached) {
+        let verified = false;
         try {
           if (cached.accountId !== this.accountId || cached.sha256 !== media.sha256) throw new Error('缓存归属异常。');
+          if (cached.blob instanceof Blob) attemptBytes(cacheAttempt, cached.blob.size);
           await verifyMediaBlob(cached.blob, media, guard);
+          verified = true; mediaVerification(observation, 'completed');
           guard();
           try { const removed = await writeCached(this.accountId, media, cached.blob, new Set(this.resources.keys()), signal, guard); for (const hash of removed) this.knownStored.delete(hash); this.peer?.invalidate(removed); this.invalidStored.delete(media.assetId); this.knownStored.add(media.assetId); this.inventoryChanged(); } catch { guard(); }
           guard();
           this.update(resource, { status: 'cached', url: URL.createObjectURL(cached.blob), message: '本机缓存可用 · 已校验', source: 'cache' });
           this.peer?.recordCache(cached.blob.size);
+          finishAttempt(cacheAttempt, 'completed', undefined, true); finishMedia(observation, 'completed', undefined, undefined, cached.blob.size);
           return;
         } catch {
           guard();
+          if (!verified) mediaVerification(observation, 'failed');
+          finishAttempt(cacheAttempt, 'failed', verified ? 'unknown' : 'integrity'); mediaFallback(observation, verified ? 'unknown' : 'integrity', 'cache');
           this.invalidStored.add(media.sha256); this.knownStored.delete(media.sha256); this.peer?.invalidate([media.sha256]);
           try { await deleteCached(this.accountId, media.sha256, signal, guard); this.inventoryChanged(); await this.refreshSummary(signal); } catch { guard(); }
         }
       }
-      const peerResult = await this.peer?.tryDownload(media, signal); guard();
-      const result = peerResult ?? await downloadMedia(media, signal, observation => this.peer?.recordCloud(observation.id, observation.transport, observation.event, observation.bytes));
+      else { finishAttempt(cacheAttempt, 'failed', 'unavailable'); mediaFallback(observation, 'unavailable', 'cache'); }
+      const peerResult = await this.peer?.tryDownload(media, signal, observation); guard();
+      const result = peerResult ?? await downloadMedia(media, signal, event => {
+        this.peer?.recordCloud(event.id, event.transport, event.event, event.bytes);
+        if (event.event === 'start') cloudAttempt = startAttempt(observation, event.transport === 's3' ? 's3' : 'http', event.transport === 's3' ? 'direct_s3' : 'server_proxy');
+        else if (event.event === 'bytes') { attemptBytes(cloudAttempt, event.bytes ?? 0); publishAttempt(cloudAttempt); }
+        else { finishAttempt(cloudAttempt, signal.aborted ? 'cancelled' : 'failed', signal.aborted ? 'aborted' : 'unknown'); if (!signal.aborted) mediaFallback(observation, 'unknown', event.transport === 's3' ? 's3' : 'http'); }
+      }, observation?.operation);
       try { await verifyMediaBlob(result.blob, media, guard); }
-      catch (error) { if ('downloadId' in result) this.peer?.recordCloud(result.downloadId, result.transport, 'failed'); throw error; }
+      catch (error) { mediaVerification(observation, 'failed'); finishAttempt(cloudAttempt, 'failed', 'integrity'); if ('downloadId' in result) this.peer?.recordCloud(result.downloadId, result.transport, 'failed'); throw error; }
+      mediaVerification(observation, 'completed');
+      finishAttempt(cloudAttempt, 'completed', undefined, true);
       if ('downloadId' in result) this.peer?.recordCloud(result.downloadId, result.transport, 'complete');
       let status: MediaView['status'] = 'cached';
       let message = '已校验并保存到本机缓存';
@@ -356,16 +377,18 @@ export class AccountMediaCache {
       }
       guard();
       this.update(resource, { status, url: URL.createObjectURL(result.blob), message: (result.transport === 'peer' ? '来自本人在线页面 · ' : '') + message, source: result.transport });
+      finishMedia(observation, 'completed', undefined, result.transport === 'peer' ? 'p2p_unknown' : undefined, result.blob.size);
       await this.refreshSummary(signal);
       if (status === 'quota') { this.summary = { ...this.summary, state: 'quota', message }; this.notify(); }
     } catch (error) {
       if (signal.aborted || generation !== this.generation) return;
       try { guard(); } catch { return; }
       this.update(resource, { status: 'error', message: errorMessage(error) });
-    }
+    } finally { finishMedia(observation, signal.aborted ? 'cancelled' : 'failed', signal.aborted ? 'aborted' : 'unknown'); }
   }
   async clear() {
     if (this.summary.clearing) return;
+    this.observationScope = retireMedia(this.observationScope);
     this.peer?.invalidate(); this.knownStored.clear();
     for (const resource of this.resources.values()) resource.controller.abort();
     for (const controller of this.maintenance) controller.abort();
@@ -391,6 +414,7 @@ export class AccountMediaCache {
     } finally { this.maintenance.delete(controller); this.notify(); }
   }
   dispose() {
+    retireMedia(this.observationScope); this.observationScope = undefined;
     this.generation++;
     this.peer?.invalidate(); this.knownStored.clear();
     this.queue = [];

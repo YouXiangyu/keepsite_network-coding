@@ -35,6 +35,12 @@ class UpdateHandoffsTest {
         val visibleCode = UpdateInstallGuard.accountInputsActive(listOf(true to true))
         assertFalse(safe.copy(accountInteraction = visibleCode).allows(manual = true))
         assertFalse(safe.copy(busy = true, picker = true).allows(manual = true))
+        val diagnostics = safe.copy(diagnosticsInteraction = true)
+        assertFalse(diagnostics.allows(manual = true))
+        assertFalse(diagnostics.shouldRequest(ready = true, working = false, hasCommand = false,
+            automaticAllowed = true, continuation = false, failed = false))
+        assertTrue(diagnostics.copy(diagnosticsInteraction = false).shouldRequest(ready = true, working = false,
+            hasCommand = false, automaticAllowed = true, continuation = false, failed = false))
     }
 
     @Test fun readyObserverDoesNotResubmitAutomaticWorkerAfterPromptButManualAndNewCandidateCanContinue() {

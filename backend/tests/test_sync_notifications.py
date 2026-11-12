@@ -12,10 +12,12 @@ import pytest
 from backend.auth import AuthError
 from backend.shared_state import RedisSharedState
 from backend.sync_notifications import SyncNotificationHub, MAX_PENDING_ACCOUNTS
+from backend.diagnostics import TraceHub
 
 
 class HintStore:
     def __init__(self, server_id=None):
+        self.diagnostics = TraceHub()
         self.server_id = server_id or str(uuid.uuid4())
         self.values = {"alice": 0, "bob": 0}
         self.listeners = set()

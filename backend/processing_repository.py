@@ -41,6 +41,8 @@ def enqueue(store, db, user_id, ticket_id):
                (identifier, user_id, ticket_id, row["input_version"], row["original_asset_id"], stamp, stamp + LIFETIME_MS, stamp, stamp))
     db.execute("INSERT INTO ticket_processing VALUES (?,?,?) ON CONFLICT(user_id,ticket_id) DO UPDATE SET job_id=excluded.job_id",
                (user_id, ticket_id, identifier))
+    if len(db.trace_jobs) < 32:
+        db.trace_jobs[identifier] = user_id
     return identifier
 
 
@@ -171,6 +173,8 @@ def fail(store, job, *, interrupted=False, retryable=True):
             db.execute("UPDATE processing_jobs SET status='cancelled',lease_until=0,updated_at=? WHERE id=?", (now_ms(), job["id"]))
             return True
         retry = retryable and persisted["attempts"] < MAX_ATTEMPTS and persisted["deadline_at"] > now_ms()
+        if retry and len(db.trace_events) < 32:
+            db.trace_events.append(("worker.retry", "retrying", persisted["attempts"]))
         message = "处理暂时失败，正在有限重试；原票已保留。" if retry else "处理失败，原票已保留，请手动重试。"
         if interrupted and retry:
             message = "处理已中断，服务恢复后继续；原票已保留。"

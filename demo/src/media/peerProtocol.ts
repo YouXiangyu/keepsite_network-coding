@@ -1,4 +1,6 @@
 import type { MediaRef } from '../data';
+import type { MediaObservation } from '../network/mediaRuntime';
+import type { OperationHandle } from '../network/monitor';
 
 export type PeerAsset = Pick<MediaRef, 'assetId' | 'sha256' | 'size' | 'mimeType'>;
 export interface PeerIdentity { peerId: string; name: string }
@@ -15,14 +17,23 @@ export interface PeerMessage {
   media?: PeerAsset; fromPeerId?: string; kind?: SignalKind; payload?: SignalPayload; code?: string; message?: string;
 }
 export interface ClientPeerMessage { v: 1; type: string; requestId: string; [key: string]: unknown }
-export interface EventConnectionState { connected: boolean; serverId: string; generation: number }
+export interface PeerSendObservation { operation?: OperationHandle; onBytes?(bytes: number): void }
+export interface EventConnectionState { connected: boolean; serverId: string; generation: number; diagnosticsVersion?: 1 }
 export interface AccountEventPort {
   eventState(): EventConnectionState;
   subscribeConnection(listener: () => void): () => void;
   subscribeEvents(listener: (message: PeerMessage) => void): () => void;
-  sendEvent(message: ClientPeerMessage): boolean;
+  sendEvent(message: ClientPeerMessage, observation?: PeerSendObservation): boolean;
 }
 export type PeerRoute = 'direct' | 'relay' | 'unknown' | 'mixed';
+export interface ActivePeerTransfer {
+  alias: string; deviceAlias: string | null; direction: 'receive' | 'send'; expectedBytes: number | null;
+  payloadBytes: number | null; controlBytes: number | null; discardedBytes: number | null; localVerifiedBytes: number | null; sourceConfirmed: boolean;
+  progressBytes: number | null; resumeOffset: number | null; durationMs: number | null; payloadBytesPerSecond: number | null; bufferedAmount: number | null;
+  pcState: RTCPeerConnectionState | null; iceState: RTCIceConnectionState | null; dtlsState: RTCDtlsTransportState | null; channelState: RTCDataChannelState | null;
+  localType: 'host' | 'srflx' | 'prflx' | 'relay' | null; remoteType: 'host' | 'srflx' | 'prflx' | 'relay' | null;
+  route: PeerRoute; roundTripMs: number | null; channelBytesSent: number | null; channelBytesReceived: number | null;
+}
 export interface TransferRecord {
   id: string; direction: 'receive' | 'send'; path: 'peer' | 's3' | 'server' | 'cache'; route?: PeerRoute;
   status: 'active' | 'complete' | 'failed' | 'cancelled'; bytes: number; controlBytes: number; discardedBytes: number; milliseconds: number; reason: string;
@@ -33,6 +44,7 @@ export interface PeerView {
   wanted: boolean; connected: boolean; enabled: boolean; peerId: string | null; reason: string;
   peers: PeerIdentity[]; inventoryCount: number; receiving: number; sending: number;
   recent: TransferRecord[]; totals: { peer: number; direct: number; relay: number; unknown: number; mixed: number; s3: number; server: number; cache: number; discarded: number; control: number };
+  active: readonly Readonly<ActivePeerTransfer>[];
 }
 export interface PeerCachePort {
   listShareable(signal: AbortSignal): Promise<PeerAsset[]>;
@@ -41,7 +53,7 @@ export interface PeerCachePort {
   subscribeInventory(listener: () => void): () => void;
 }
 export interface PeerMediaPort {
-  tryDownload(media: MediaRef, signal: AbortSignal): Promise<{ blob: Blob; transport: 'peer' } | null>;
+  tryDownload(media: MediaRef, signal: AbortSignal, observation?: MediaObservation): Promise<{ blob: Blob; transport: 'peer' } | null>;
   invalidate(assetIds?: readonly string[]): void;
   recordCloud(id: string, path: 's3' | 'server', event: 'start' | 'bytes' | 'complete' | 'failed', bytes?: number): void;
   recordCache(bytes: number): void;

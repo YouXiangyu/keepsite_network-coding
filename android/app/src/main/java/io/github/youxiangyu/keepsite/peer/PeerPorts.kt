@@ -1,17 +1,19 @@
 package io.github.youxiangyu.keepsite.peer
 
 import io.github.youxiangyu.keepsite.core.MediaRef
+import io.github.youxiangyu.keepsite.core.PeerCommand
 import org.json.JSONObject
 import java.io.Closeable
 
-data class EventState(val connected: Boolean, val serverId: String, val generation: Long)
+data class EventState(val connected: Boolean, val serverId: String, val generation: Long,
+                      val heartbeatMs: Long? = null, val diagnosticsVersion: Int? = null)
 
 /** Messages have already passed the session/user/server envelope guard. */
 interface EventPort {
     fun state(): EventState
     fun subscribeConnection(listener: () -> Unit): Closeable
     fun subscribeMessages(listener: (JSONObject) -> Unit): Closeable
-    fun send(message: JSONObject): Boolean
+    fun send(message: JSONObject, observation: PeerCommand? = null): Boolean
 }
 
 /** Inventory contains only live refs with validated files; read revalidates the actual file. */
