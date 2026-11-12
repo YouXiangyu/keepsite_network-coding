@@ -1,0 +1,51 @@
+[
+  {
+    "elapsedMs": 100,
+    "draftExists": true,
+    "pending": false,
+    "uploadPending": false,
+    "handoff": null
+  },
+  {
+    "elapsedMs": 304,
+    "draftExists": true,
+    "pending": false,
+    "uploadPending": false,
+    "handoff": null
+  },
+  {
+    "elapsedMs": 502,
+    "draftExists": true,
+    "pending": false,
+    "uploadPending": true,
+    "handoff": null
+  },
+  {
+    "elapsedMs": 700,
+    "draftExists": true,
+    "pending": false,
+    "uploadPending": true,
+    "handoff": null
+  },
+  {
+    "elapsedMs": 902,
+    "draftExists": true,
+    "pending": true,
+    "uploadPending": false,
+    "handoff": null
+  },
+  {
+    "elapsedMs": 1117,
+    "draftExists": false,
+    "pending": false,
+    "uploadPending": false,
+    "handoff": null
+  },
+  {
+    "elapsedMs": 1330,
+    "draftExists": false,
+    "pending": false,
+    "uploadPending": false,
+    "handoff": "INSTALL"
+  }
+]
