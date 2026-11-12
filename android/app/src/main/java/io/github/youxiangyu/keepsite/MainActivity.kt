@@ -70,6 +70,8 @@ class MainActivity : AppCompatActivity() {
     private var editorPhotoButton: Button? = null
     private var editorSave: Button? = null
     private var editorStatus: TextView? = null
+    private var editorLayout: TicketEditorLayout? = null
+    private var editorNoticePlacement: Closeable? = null
     private var updatingFields = false
     private var keyboardVisible = false
     private var accountDialog: androidx.appcompat.app.AlertDialog? = null
@@ -129,6 +131,7 @@ class MainActivity : AppCompatActivity() {
     }
     override fun onDestroy() { imageExecutor.shutdownNow(); super.onDestroy() }
     private fun releaseScreen() {
+        editorNoticePlacement?.close(); editorNoticePlacement = null; editorLayout = null
         adapter?.close(); adapter = null; media.forEach { it.close() }; media.clear()
         editorPhoto = null; editorFields = emptyList(); editorDate = null
         editorSave = null; editorStatus = null; editorPhotoButton = null
@@ -167,6 +170,7 @@ class MainActivity : AppCompatActivity() {
             model.route = model.afterDraftRoute; model.afterDraftRoute = "library"; model.editorWasOpen = false; screenKey = null
         }
         binding.progress.visibility = if (state.busy.isNotBlank() || state.session == null && state.error.isBlank()) View.VISIBLE else View.GONE
+        val revealEditorError = state.error.isNotBlank() && binding.notice.text.toString() != state.error
         binding.notice.text = state.error.ifBlank { state.busy.ifBlank { state.message } }
         binding.notice.visibility = if (binding.notice.text.isBlank()) View.GONE else View.VISIBLE
         binding.notice.setTextColor(getColor(if (state.error.isBlank()) R.color.mv_muted else R.color.mv_error))
@@ -231,7 +235,10 @@ class MainActivity : AppCompatActivity() {
             }
             restoreScroll?.let { y -> (binding.content.getChildAt(0) as? ScrollView)?.let { scroll -> scroll.post { scroll.scrollTo(0, y) } } }
         }
-        if (model.route == "editor" && authenticated) updateEditor(state)
+        if (model.route == "editor" && authenticated) {
+            updateEditor(state)
+            if (revealEditorError) editorLayout?.revealNotice()
+        }
         if (model.route in listOf("library", "month") && authenticated) updateLibrary(state)
     }
     private fun navigationItem(title: String, route: String, clicked: () -> Unit): LinearLayout = column().apply {
@@ -550,7 +557,8 @@ class MainActivity : AppCompatActivity() {
         }, Space.M)
     }
     private fun editorScreen(state: AppState) {
-        val layout = TicketEditorLayout(this)
+        val layout = TicketEditorLayout(this).also { editorLayout = it }
+        editorNoticePlacement = layout.attachNotice(binding.notice)
         binding.content.addView(layout.root, ViewGroup.LayoutParams(-1, -1))
         val body = layout.body; val draft = state.draft ?: run { body.add(label("正在准备录入…", color = R.color.mv_muted), Space.XL); return }
         body.add(pageTitle(if (draft.ticketId == null) "录入电影票" else "编辑电影票"), Space.S)

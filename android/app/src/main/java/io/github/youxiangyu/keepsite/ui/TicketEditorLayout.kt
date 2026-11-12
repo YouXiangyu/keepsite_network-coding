@@ -3,11 +3,13 @@ package io.github.youxiangyu.keepsite.ui
 import android.content.Context
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import io.github.youxiangyu.keepsite.ui.Design.Size
 import io.github.youxiangyu.keepsite.ui.Design.Space
+import java.io.Closeable
 
 class TicketEditorLayout(context: Context) {
     val body = BoundedColumn(context).apply {
@@ -30,6 +32,25 @@ class TicketEditorLayout(context: Context) {
     val root: View = context.column().apply {
         addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         addView(footer, LinearLayout.LayoutParams(-1, -2))
+    }
+
+    /** Share the existing live region; return it to the page chrome when the editor closes. */
+    fun attachNotice(notice: View): Closeable {
+        val parent = notice.parent as ViewGroup
+        val index = parent.indexOfChild(notice)
+        val params = notice.layoutParams
+        parent.removeView(notice)
+        body.addView(notice, 0, LinearLayout.LayoutParams(-1, -2))
+        return Closeable {
+            if (notice.parent === body) {
+                body.removeView(notice)
+                parent.addView(notice, index, params)
+            }
+        }
+    }
+
+    fun revealNotice() {
+        scroll.post { if (root.isAttachedToWindow) scroll.scrollTo(0, 0) }
     }
 
     fun addActions(save: View, cancel: View) {

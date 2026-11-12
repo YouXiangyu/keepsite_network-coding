@@ -1,0 +1,110 @@
+{
+  "date": "2026-11-12",
+  "base": "594c5a331d6e2e80ed0128ceb84a46abda0b5c6a",
+  "scope": "Portrait Android per user decision D-085; screenshots with private ticket content retained only locally",
+  "sources": [
+    {
+      "path": "android/app/src/main/java/io/github/youxiangyu/keepsite/MainActivity.kt",
+      "sha256": "431fb7ce1021362c4f827e228d508633ab4098e320a2e88ac8dbfbabfe7a3590",
+      "gitBlob": "3f18759b14fd935c8d4ab04d3f62d00a6ee29021"
+    },
+    {
+      "path": "android/app/src/main/java/io/github/youxiangyu/keepsite/ui/TicketEditorLayout.kt",
+      "sha256": "349607ab749e22a5bd3c39cff33bfc72737fb15b3077528229874d39eed671aa",
+      "gitBlob": "b9f6551915d7a15365517d211b320f96cd0b734c"
+    },
+    {
+      "path": "android/app/src/debug/java/io/github/youxiangyu/keepsite/EditorLayoutHostActivity.kt",
+      "sha256": "b92c77587121ce3c052034efebc54fc2a9412dbbe4c1dd8699e4f6ee7b7c3995",
+      "gitBlob": "96fe025755349e87c1e3d7078fd0d790a9fe2c4a"
+    },
+    {
+      "path": "android/app/src/androidTest/java/io/github/youxiangyu/keepsite/ui/EditorLayoutInstrumentedTest.kt",
+      "sha256": "c0dff8857917f62fc81895e4a76459cd49ff2ed05d176a3591fb32dca08dbca5",
+      "gitBlob": "e2b4f737b8078aacc8218dcd02fd59a8bdefecfd"
+    }
+  ],
+  "build": {
+    "jvmTests": 57,
+    "jvmFailures": 0,
+    "lintErrors": 0,
+    "lintWarnings": 14,
+    "apkSha256": "ddd85053974a7eef15b07103fe402dfb6e7eba8992331ef55ebc67331a43b268",
+    "testApkSha256": "4467af2ae3b15721c22da1c872534318a4373c9028e025d2367d984a9c6abea0",
+    "package": "io.github.youxiangyu.keepsite",
+    "versionCode": 3,
+    "versionName": "0.1.0",
+    "origin": "https://keepsite.space",
+    "certificateSha256": "a13e743fd6754fddbe15c96e602d6bec10c6ba85019ea3c73488df25a802ca04"
+  },
+  "instrumentation": [
+    {
+      "device": "23090RA98C",
+      "api": 36,
+      "tests": 3,
+      "failures": 0,
+      "log": "phone-api36.txt",
+      "sha256": "49b8ddbdc02e708789bdf1276947a6d77b491cef8b78c2c12bd16655bdb8cb68"
+    },
+    {
+      "device": "24122RKC7C",
+      "api": 37,
+      "tests": 3,
+      "failures": 0,
+      "log": "phone-api37.txt",
+      "sha256": "661f29572ea2a2d2b34fb8bacc1bb2ac811649341c6d4cab892323ea22f8326d"
+    }
+  ],
+  "formal": [
+    {
+      "device": "phone1",
+      "api": 36,
+      "scenario": "Production MainActivity, existing ticket, unchanged fields, save rejected locally; real keyboard open in portrait",
+      "geometry": [
+        {
+          "kind": "android.widget.ScrollView",
+          "bounds": "[0,122][1220,1488]"
+        },
+        {
+          "kind": "android.widget.TextView",
+          "bounds": "[60,146][1160,247]"
+        },
+        {
+          "kind": "android.widget.Button",
+          "bounds": "[60,1507][418,1651]"
+        },
+        {
+          "kind": "android.widget.Button",
+          "bounds": "[442,1501][1160,1657]"
+        }
+      ],
+      "localXmlSha256": "41d607e8a72ddc9bad31c0b6e8f9104c4c6252c8d7db02157ea377eb4593cbb8",
+      "localScreenshotSha256": "b31cf04f24a8b8efe04d30605f8d8693cb9515fddd572a92f1e4cfe288d98817"
+    },
+    {
+      "device": "phone2",
+      "api": 37,
+      "scenario": "Production MainActivity, existing ticket, unchanged fields, save rejected locally; real keyboard open in portrait",
+      "geometry": [
+        {
+          "kind": "android.widget.ScrollView",
+          "bounds": "[0,161][1440,1748]"
+        },
+        {
+          "kind": "android.widget.TextView",
+          "bounds": "[75,191][1365,316]"
+        },
+        {
+          "kind": "android.widget.Button",
+          "bounds": "[75,1771][495,1951]"
+        },
+        {
+          "kind": "android.widget.Button",
+          "bounds": "[525,1764][1365,1959]"
+        }
+      ],
+      "localXmlSha256": "7e2f9f2079859a178a32237c42eccde871abdcbb3bd3eb8de45ef408b54e34a0",
+      "localScreenshotSha256": "1398c60a064735b0e35dc64887f13a9ab4204943da6bf8bba3b9c939969132a8"
+    }
+  ]
+}

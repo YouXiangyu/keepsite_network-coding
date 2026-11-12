@@ -128,7 +128,7 @@ class EditorLayoutInstrumentedTest {
                 .put("busy", activity.busyState).put("pending", activity.pendingState)
                 .put("progress", box(activity.progress)).put("progressVisibility", activity.progress.visibility)
                 .put("noticeTextSizePx", activity.notice.textSize)
-                .put("noticeOutsideEditor", activity.notice.parent === activity.editor.root.parent?.parent)
+                .put("noticeInsideScroll", activity.notice.parent === activity.editor.body)
                 .put("save", box(activity.save)).put("cancel", box(activity.cancel)).put("date", box(activity.date))
                 .put("saveLabel", activity.save.text).put("saveEnabled", activity.save.isEnabled).put("cancelEnabled", activity.cancel.isEnabled)
                 .put("dateEnabled", activity.date.isEnabled).put("photoEnabled", activity.photo.isEnabled)
@@ -148,8 +148,17 @@ class EditorLayoutInstrumentedTest {
         finally { screenshot.recycle() }
     }
     private fun portrait(scenario: ActivityScenario<EditorLayoutHostActivity>) {
-        scenario.onActivity { it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT }
-        await(scenario) { it.resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT && it.hasWindowFocus() && it.editor.scroll.height > 0 }
+        var previousHost = ""
+        var recreated = false
+        scenario.onActivity {
+            previousHost = it.diagnosticHostId
+            recreated = it.resources.configuration.orientation != Configuration.ORIENTATION_PORTRAIT
+            it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+        await(scenario) {
+            it.resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT && it.hasWindowFocus() &&
+                it.editor.scroll.height > 0 && (!recreated || it.diagnosticHostId != previousHost)
+        }
     }
 
     private fun bounds(view: View): Rect {
@@ -173,9 +182,9 @@ class EditorLayoutInstrumentedTest {
             assertEquals(0, button.layout.getEllipsisCount(button.layout.lineCount - 1))
         }
         if (activity.notice.visibility == View.VISIBLE) {
-            assertSame(activity.editor.root.parent?.parent, activity.notice.parent)
-            assertTrue("Top feedback must remain fully visible", complete(activity.notice))
-            assertTrue(bounds(activity.notice).bottom <= bounds(activity.editor.root).top)
+            assertSame(activity.editor.body, activity.notice.parent)
+            assertEquals(0, activity.editor.body.indexOfChild(activity.notice))
+            assertNull("Error text must not be truncated", activity.notice.ellipsize)
         }
     }
     private fun checkState(activity: EditorLayoutHostActivity, busy: Boolean, pending: Boolean) {
@@ -259,6 +268,23 @@ class EditorLayoutInstrumentedTest {
             onView(withText("取消")).perform(click())
             scenario.onActivity { assertEquals(1, it.saveClicks); assertEquals(1, it.cancelClicks) }
             capture(scenario, "local-actions")
+            scenario.onActivity { it.renderState(error = "保存未完成，草稿仍保留。") }
+            await(scenario) { complete(it.notice) && complete(it.save) && complete(it.cancel) }
+            capture(scenario, "save-error-revealed")
+            scenario.onActivity { activity ->
+                val parent = activity.editor.root.parent as ViewGroup
+                val notice = android.widget.TextView(activity)
+                parent.addView(notice, ViewGroup.LayoutParams(1, 1))
+                val params = notice.layoutParams
+                val index = parent.indexOfChild(notice)
+                val placement = activity.editor.attachNotice(notice)
+                assertSame(activity.editor.body, notice.parent)
+                placement.close(); placement.close()
+                assertSame(parent, notice.parent)
+                assertSame(params, notice.layoutParams)
+                assertEquals(index, parent.indexOfChild(notice))
+                parent.removeView(notice)
+            }
         }
     }
 
@@ -266,12 +292,9 @@ class EditorLayoutInstrumentedTest {
         launch().use { scenario ->
             portrait(scenario)
             scenario.onActivity { it.renderState(error = "保存未完成，草稿仍保留。") }
+            await(scenario) { !it.notice.isLayoutRequested && complete(it.notice) && it.editor.scroll.scrollY == 0 }
             field(scenario, "电影名称", "portrait-title-ime")
             field(scenario, "座位", "portrait-seat-ime")
-            scenario.onActivity { it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE }
-            await(scenario) { it.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE && it.hasWindowFocus() }
-            field(scenario, "座位", "landscape-seat-ime")
-            portrait(scenario)
             scenario.recreate()
             await(scenario) { it.hasWindowFocus() && it.editor.scroll.height > 0 }
             scenario.onActivity { checkLayout(it); assertEquals("保存未完成，草稿仍保留。", it.notice.text.toString()) }
@@ -282,6 +305,8 @@ class EditorLayoutInstrumentedTest {
     @Test fun largeEditorTextAndLongHintRemainReachable() {
         launch(largeText = true, longHint = true).use { scenario ->
             portrait(scenario)
+            await(scenario) { complete(it.notice) }
+            capture(scenario, "large-error-readable")
             scenario.onActivity { assertEquals(2f, it.fields.first().resources.configuration.fontScale, 0.01f); checkLayout(it); it.editor.scroll.fullScroll(View.FOCUS_DOWN) }
             await(scenario) { complete(it.status) && complete(it.date) }
             capture(scenario, "large-text-long-hint")
@@ -298,11 +323,9 @@ class EditorLayoutInstrumentedTest {
             capture(scenario, "large-busy-action")
             onView(withText("取消")).perform(click())
             scenario.onActivity { assertEquals(1, it.cancelClicks); it.renderState(error = failedSave); checkState(it, busy = false, pending = false) }
+            await(scenario) { !it.notice.isLayoutRequested && complete(it.notice) && it.editor.scroll.scrollY == 0 }
             field(scenario, "电影名称", "large-portrait-title-ime")
-            scenario.onActivity { it.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE }
-            await(scenario) { it.resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE && it.hasWindowFocus() }
-            field(scenario, "座位", "large-landscape-seat-ime")
-            portrait(scenario)
+            field(scenario, "座位", "large-portrait-seat-ime")
         }
     }
 }

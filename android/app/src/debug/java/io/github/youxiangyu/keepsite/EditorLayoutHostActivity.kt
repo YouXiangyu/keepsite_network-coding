@@ -47,6 +47,7 @@ class EditorLayoutHostActivity : AppCompatActivity() {
     var cancelClicks = 0; private set
     private var keyboardVisible = false
     private var feedbackError = ""
+    private var noticePlacement: java.io.Closeable? = null
     val diagnosticHostId: String = java.util.UUID.randomUUID().toString()
     data class TouchButton(val x: Int, val y: Int, val width: Int, val height: Int, val enabled: Boolean, val clicks: Int)
     data class TouchFact(
@@ -141,6 +142,7 @@ class EditorLayoutHostActivity : AppCompatActivity() {
 
     private fun buildEditor(binding: ActivityMainBinding, context: Context) = with(context) {
         editor = TicketEditorLayout(this)
+        noticePlacement = editor.attachNotice(notice)
         binding.content.addView(editor.root, ViewGroup.LayoutParams(-1, -1))
         val body = editor.body
         body.add(label("录入电影票", Type.Display, heading = true), Space.S)
@@ -175,6 +177,7 @@ class EditorLayoutHostActivity : AppCompatActivity() {
     /** Mirrors MainActivity.render/updateEditor without a repository, account or network. */
     fun renderState(error: String = feedbackError, busy: String = "", message: String = "",
                     pending: Boolean = false, hasPhoto: Boolean = true, ticketId: String? = null) {
+        val revealError = error.isNotBlank() && notice.text.toString() != error
         feedbackError = error
         busyState = busy; pendingState = pending
         noticeSource = when { error.isNotBlank() -> "synthetic_error"; busy.isNotBlank() -> "busy"; message.isNotBlank() -> "message"; else -> "none" }
@@ -194,6 +197,12 @@ class EditorLayoutHostActivity : AppCompatActivity() {
             ticketId != null -> "保留原始票面"
             else -> "请先选择一张票面"
         }
+        if (revealError) editor.revealNotice()
+    }
+
+    override fun onDestroy() {
+        noticePlacement?.close()
+        super.onDestroy()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
