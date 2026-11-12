@@ -1,0 +1,148 @@
+{
+  "date": "2026-11-12",
+  "scope": "Portrait; current real MainActivity against keepsite.space; CI paused by user",
+  "sources": [
+    {
+      "path": "android/app/build.gradle.kts",
+      "gitBlob": "8634e2a1e1754bd1664c0f8f9adc01ef53fdd8b5",
+      "sha256": "25e5612cbb0cef63c3a41c3b7a180f9624a3ed2a06f2d20926956d0965300476",
+      "localSha256": "25e5612cbb0cef63c3a41c3b7a180f9624a3ed2a06f2d20926956d0965300476"
+    },
+    {
+      "path": "android/app/src/main/java/io/github/youxiangyu/keepsite/MainActivity.kt",
+      "gitBlob": "2969eea9129a352ed1488179ba1970bfb1cb0e95",
+      "sha256": "a906b7a8c25413a497b59343846a4c43e408f521a5cecb63c9c5f0967c5fb717",
+      "localSha256": "a906b7a8c25413a497b59343846a4c43e408f521a5cecb63c9c5f0967c5fb717"
+    },
+    {
+      "path": "android/app/src/main/java/io/github/youxiangyu/keepsite/updates/UpdateController.kt",
+      "gitBlob": "7088d86a28323540f82bb09c27fa55134a6f8475",
+      "sha256": "4e208fcf5c34d18795ec276eccf813f7d837c3c2ac5be9d5d91c058441831384",
+      "localSha256": "4e208fcf5c34d18795ec276eccf813f7d837c3c2ac5be9d5d91c058441831384"
+    },
+    {
+      "path": "android/app/src/main/java/io/github/youxiangyu/keepsite/updates/UpdateHandoffs.kt",
+      "gitBlob": "3ed49ec9305bb27ff32f3c5ba24fb72340214105",
+      "sha256": "46e40fdab036ef8f2346a251bea975924e493cb9c56296cce625980977731af2",
+      "localSha256": "46e40fdab036ef8f2346a251bea975924e493cb9c56296cce625980977731af2"
+    },
+    {
+      "path": "android/app/src/main/java/io/github/youxiangyu/keepsite/updates/AndroidUpdateRuntime.kt",
+      "gitBlob": "a545a74523500d29c73dbc07b4b0432803dd8927",
+      "sha256": "bc392150189ac73e21b682a7a227552494e477d85265fd460e363267765179b1",
+      "localSha256": "bc392150189ac73e21b682a7a227552494e477d85265fd460e363267765179b1"
+    }
+  ],
+  "artifact": {
+    "package": "io.github.youxiangyu.keepsite",
+    "versionCode": 4,
+    "versionName": "0.1.1",
+    "origin": "https://keepsite.space",
+    "certificateSha256": "a13e743fd6754fddbe15c96e602d6bec10c6ba85019ea3c73488df25a802ca04",
+    "sha256": "47b49cc361ed73715174ca9697dc4f88c95511b58a5cdd864fa68f0e4fb673c0"
+  },
+  "driver": {
+    "baseCommit": "31b6c57",
+    "versionCode": 2,
+    "versionName": "0.1.1",
+    "differenceFromCandidate": "Only versionCode=2 instead of 4 in app/build.gradle.kts; all app/src Kotlin/XML bytes identical",
+    "sha256": "76cc25717d035abdbae586666d4023a2e790680a6ddeab6086c7ba7849ee8075",
+    "installedOn": "Owned API36 emulator only"
+  },
+  "build": {
+    "jvmTests": 78,
+    "failures": 0,
+    "lintErrors": 0,
+    "lintWarnings": 23
+  },
+  "phones": [
+    {
+      "model": "23090RA98C",
+      "api": 36,
+      "fromCode": 3,
+      "toCode": 4,
+      "retention": {
+        "beforeFiles": 9,
+        "identicalFiles": 9,
+        "changedOrMissing": 0
+      },
+      "ui": {
+        "loggedInLibrary": true,
+        "draftRestored": true,
+        "visibleTicketLinks": 4
+      },
+      "callbackTests": 2,
+      "callbackFailures": 0,
+      "log": "phone1-callbacks.txt",
+      "logSha256": "b2cf6867558882392712f5c7b481f4636b3523f5255c35ba34b78a3fa359ed5e"
+    },
+    {
+      "model": "24122RKC7C",
+      "api": 37,
+      "fromCode": 3,
+      "toCode": 4,
+      "retention": {
+        "beforeFiles": 13,
+        "identicalFiles": 13,
+        "changedOrMissing": 0
+      },
+      "ui": {
+        "loggedInLibrary": true,
+        "draftRestored": true,
+        "visibleTicketLinks": 4
+      },
+      "callbackTests": 2,
+      "callbackFailures": 0,
+      "log": "phone2-callbacks.txt",
+      "logSha256": "0f4c3849ccad74e0b44e3dfdd152407f7c021423e1724f54942942bd4399caa8"
+    }
+  ],
+  "officialFlow": {
+    "source": "GitHub latest Release v0.1",
+    "targetCode": 3,
+    "apkSha256": "2a7dcedff63017eb10b7e24a440e16a930721ac337d9045f42d5951d1cfb1262",
+    "draftBlocked": true,
+    "accountInputBlocked": true,
+    "permissionDeclineReturned": true,
+    "installerCancelRetry": true,
+    "systemInstallComplete": true,
+    "installRetention": {
+      "systemInstalledCode": 3,
+      "loggedInLibrary": null,
+      "mediaFilesBefore": 8,
+      "identicalMediaFiles": 8,
+      "uiCapture": "First capture after opening v3 had no accessibility root; login checked after v4 reconciliation."
+    },
+    "reconciliationAfterV4": {
+      "downloadEntryCleared": true,
+      "handoffCleared": true,
+      "protectedFiles": 0,
+      "loggedInAfterV4": true
+    }
+  },
+  "saveGuard": {
+    "timeline": "save-guard-timeline.json",
+    "samples": 7,
+    "savingSamples": 3,
+    "handoffWhileSaving": false,
+    "testTicket": "PR27-verification-20261112",
+    "cleanup": {
+      "successMessage": true,
+      "testLinkAbsent": true
+    }
+  },
+  "screenshots": [
+    {
+      "path": "system-install-confirm.png",
+      "sha256": "04d24d1a87badc7c24330d1900ae8708144a97d84832fa3f9c973cd944d6bb4c"
+    },
+    {
+      "path": "system-update-complete.png",
+      "sha256": "b079057c88f24c98bf8f6b08e8d9883cd8862e134c8fb6fe8447c62412ecd275"
+    },
+    {
+      "path": "account-input-blocked.png",
+      "sha256": "fa943434a07411aaa3d126623cc29e088cd266726fbbd0d3fa463dc1661b1741"
+    }
+  ]
+}

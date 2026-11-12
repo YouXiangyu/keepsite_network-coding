@@ -7,9 +7,12 @@ import io.github.youxiangyu.keepsite.core.AppRepository
 import io.github.youxiangyu.keepsite.core.NetworkReport
 import io.github.youxiangyu.keepsite.core.NetworkReportFormat
 import io.github.youxiangyu.keepsite.ui.NetworkViewState
+import io.github.youxiangyu.keepsite.updates.AndroidUpdateRuntime
+import io.github.youxiangyu.keepsite.updates.HandoffKind
 
 class UiViewModel(application: Application) : AndroidViewModel(application) {
     val controller: AppController = AppRepository(application)
+    val updates = AndroidUpdateRuntime(application)
     var route = "library"
     var detailId: String? = null
     var detailFrom = "library"
@@ -26,5 +29,8 @@ class UiViewModel(application: Application) : AndroidViewModel(application) {
     val networkView = NetworkViewState()
     var pendingNetworkReport: Pair<NetworkReport, NetworkReportFormat>? = null
     var networkDocumentRequested = false
-    override fun onCleared() { controller.close() }
+    var updatePickerOpen = false
+    val updateRequests = mutableMapOf<String, HandoffKind>()
+    var updateRequestsRestored = false
+    override fun onCleared() { updates.close(); controller.close() }
 }

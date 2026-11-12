@@ -1,8 +1,18 @@
 # 网络诊断隔离组件验证
 
+## 2026-11-12 主分支集成检查
+
+本轮将 main `3d46e5c` 合入 PR #28，处理 `MainActivity` 与 `UiViewModel` 的冲突，保留网络监控、自动更新和编辑器通知的状态及资源释放。网络页或报告文件选择进行中统一阻止安装交接，离开后恢复更新；在原安装保护用例中补充阻止及恢复断言。
+
+本地 Android 164 项 JVM 测试通过，无失败或跳过；Lint 0 错误、67 警告，应用与测试 APK 构建通过。Web 220 项单元测试、运行时契约、类型检查和生产构建通过；本机 Chrome 使用构建产物及原 API 夹具运行既有两项浏览器用例，覆盖月份/网络页导航刷新、编辑器错误可见性、忙态与单次提交，均通过。独立代码复审确认两侧功能和安装保护接线完整。
+
+CI 按用户决定保持暂停。本轮是冲突解决与集成回归，不代替下方声明的正式跨端、设备传输及观测非干扰验收，也未重跑独立 Host 设备用例。
+
+## 隔离组件范围
+
 `android/app/src/androidTest/network-host` 是独立Gradle工程，复用真实诊断Screen、core和theme，以合成状态及受控controller验证页面、旋转、报告和系统文件交付。辅助包为 `io.github.youxiangyu.keepsite.networkverification`，测试包为其 `.test`；辅助清单移除INTERNET且不声明正式MainActivity。
 
-这项验证不启动正式App、不登录、不发业务请求，不代表MainActivity/AppRepository整链、线上跨设备同步、真实Native RTC、TURN/S3或两台物理手机验收。当前Android CI只编译正式app及其仪器测试并运行JVM/Lint，没有构建这个独立工程，也没有执行这些Host仪器用例。
+这项验证不启动正式App、不登录、不发业务请求，不代表MainActivity/AppRepository整链、线上跨设备同步、真实Native RTC、TURN/S3或两台物理手机验收。此前Android CI只编译正式app及其仪器测试并运行JVM/Lint，没有构建这个独立工程，也没有执行这些Host仪器用例；自动CI现已暂停。
 
 ## 独立构建与准备
 
