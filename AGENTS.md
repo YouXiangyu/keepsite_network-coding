@@ -2,6 +2,13 @@
 
 更新日期：2026-10-27。
 
+## 2026-11-11 CI 暂停约定（优先适用）
+
+- 用户明确暂停 GitHub 自动 CI。`Application CI` 与 `Deployment recovery` 工作流已手动禁用，恢复须用户明确要求。
+- 暂停期间，合并前后不要求等待上述工作流或四项 CI 检查；本条取代本文及项目技能中的对应等待门禁。仍须完成与改动相称的本地验证、独立审查、用户合并授权及 GitHub 代码所有者审查，实际失败和未验证项如实报告。
+- 暂停包含 `Application CI` 中的制品发布步骤。合并后核对远端提交，部署状态另行核验；不得将禁用工作流记为检查通过。
+- 本次 GitHub 核验：main 分支保护及活动 ruleset 均无必需状态检查，保留一位 CODEOWNER 批准、对话解决及已有推送保护。环境记录见项目技能的 `references/project-context.md`。
+
 在本仓库进行修改、修复、小版本交付、阶段收尾或服务器维护时，先读取并使用项目技能 [.agents/skills/keepsite-delivery/SKILL.md](.agents/skills/keepsite-delivery/SKILL.md)。关键环境信息集中在该技能的 `references/project-context.md`，操作前核实实时状态。
 
 ## 用户通用要求
