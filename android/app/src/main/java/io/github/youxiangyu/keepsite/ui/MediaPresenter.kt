@@ -46,10 +46,10 @@ class MediaPresenter(
         close(); bind(ref)
     }
     fun local(file: File?) {
-        if (file == null) { close(); status("尚未选择票面"); return }
+        if (file == null) { close(); status("尚未选择原票照片"); return }
         if (key == file.absolutePath) return
         close(); key = file.absolutePath
-        status("已选择票面，尚未保存")
+        status("已选择原票照片，尚未保存")
         showFile(file, generation)
     }
     private fun showFile(file: File, expected: Int) {

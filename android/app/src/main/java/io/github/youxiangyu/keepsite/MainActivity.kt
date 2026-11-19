@@ -307,7 +307,7 @@ class MainActivity : AppCompatActivity() {
     }
     private fun styleChrome() {
         binding.brand.apply {
-            style(Type.Subtitle); setTextColor(getColor(R.color.mv_ink)); ViewCompat.setAccessibilityHeading(this, true)
+            text = "keepsite"; style(Type.Subtitle); setTextColor(getColor(R.color.mv_ink)); ViewCompat.setAccessibilityHeading(this, true)
             setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_ticket, 0, 0, 0); compoundDrawablePadding = dp(Space.S)
             setPadding(dp(Space.PAGE), dp(Space.L), dp(Space.PAGE), dp(Space.S))
         }
@@ -338,69 +338,68 @@ class MainActivity : AppCompatActivity() {
     }
     private fun authScreen(session: Session) {
         val body = scrollColumn()
-        addUpdatePanel(body)
         val titles = mapOf("login" to "欢迎回来", "register" to "创建账号", "verify" to "验证邮箱", "forgot" to "找回密码", "reset" to "设置新密码")
-        val hints = mapOf("login" to "登录后查看你的电影票", "register" to "用邮箱创建账号，开始记录每一次观影", "verify" to "输入邮件中的验证码完成验证",
-            "forgot" to "输入注册邮箱，我们会发送重置码", "reset" to "输入重置码并设置新密码")
+        val hints = mapOf("login" to "登录后继续整理你的电影票。", "register" to "用邮箱创建账号，开始记录每一次观影。", "verify" to "输入邮件中的验证码，完成账户验证。",
+            "forgot" to "填写注册邮箱，我们会发送密码重置验证码。", "reset" to "输入邮件验证码和新密码，重新登录你的票夹。")
         body.add(pageTitle(titles[model.authMode] ?: "登录"), Space.L)
         if (!session.configured) {
             body.add(label("服务器尚未配置身份验证，请稍后重试。", color = R.color.mv_muted), Space.S)
             body.add(action("重新连接", clicked = controller::refresh), Space.XL); return
         }
         body.add(label(hints[model.authMode].orEmpty(), color = R.color.mv_muted), Space.S)
-        val email = input("邮箱", 254).apply {
+        if (session.googleEnabled && model.authMode in listOf("login", "register")) {
+            body.add(action("使用 Google 继续") { controller.startGoogle(::openUrl) }, Space.XL)
+            if (session.emailEnabled) body.add(row().apply {
+                addView(divider(), LinearLayout.LayoutParams(0, 1, 1f))
+                addView(label("或使用邮箱", Type.Caption, R.color.mv_muted).apply { setPadding(dp(Space.M), 0, dp(Space.M), 0) })
+                addView(divider(), LinearLayout.LayoutParams(0, 1, 1f))
+            }, Space.L)
+        }
+        val email = input("邮箱地址", 254).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
             setText(model.authEmail); doAfterTextChanged { model.authEmail = it.toString() }
         }
-        val password = input(if (model.authMode == "reset") "新密码" else "密码", 256).apply {
+        val password = input(if (model.authMode == "reset") "设置密码" else "密码", 256).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
         }
-        val code = input("邮箱验证码", 20)
+        val code = input("邮件验证码", 20)
         authInputs = if (session.emailEnabled) listOfNotNull(email,
             password.takeIf { model.authMode in listOf("login", "register", "reset") },
             code.takeIf { model.authMode in listOf("verify", "reset") }) else emptyList()
         authInputs.forEach { it.doAfterTextChanged { updateInstallGuard() } }
         if (session.emailEnabled) {
-            body.add(email, Space.XL)
+            body.add(email, if (session.googleEnabled && model.authMode in listOf("login", "register")) Space.L else Space.XL)
             if (model.authMode in listOf("verify", "reset")) body.add(code, Space.M)
             if (model.authMode in listOf("login", "register", "reset")) body.add(password, Space.M)
             if (model.authMode in listOf("register", "reset")) body.add(label("密码需为 8–128 个字符，不限制字符组合。", Type.Caption), Space.S)
-            body.add(action(when (model.authMode) { "register" -> "注册"; "verify" -> "验证邮箱"; "forgot" -> "发送重置码"; "reset" -> "更新密码"; else -> "登录" }, ButtonKind.Primary) {
+            if (model.authMode == "login") body.addWrapped(action("忘记密码？", ButtonKind.Quiet) { model.authMode = "forgot"; redraw() }, gravity = Gravity.END)
+            body.add(action(when (model.authMode) { "register" -> "创建账户"; "verify" -> "验证邮箱"; "forgot" -> "发送重置验证码"; "reset" -> "更新密码"; else -> "登录" }, ButtonKind.Primary) {
                 if (controller.snapshot().busy.isNotBlank()) return@action
                 val address = email.text.toString().trim()
                 if (address.isBlank()) { email.error = "请输入邮箱"; return@action }
                 when (model.authMode) {
-                    "register" -> controller.register(address, password.text.toString())
+                    "register" -> { controller.register(address, password.text.toString()); model.authMode = "verify"; redraw() }
                     "verify" -> controller.confirmEmail(address, code.text.toString().trim())
-                    "forgot" -> controller.resetPassword(address)
+                    "forgot" -> { controller.resetPassword(address); model.authMode = "reset"; redraw() }
                     "reset" -> controller.confirmPassword(address, code.text.toString().trim(), password.text.toString())
                     else -> controller.login(address, password.text.toString())
                 }
             }, Space.XL)
             if (model.authMode == "verify") body.add(action("重新发送验证码", ButtonKind.Text) { controller.resendEmail(email.text.toString().trim()) }, Space.S)
-        }
-        if (session.googleEnabled) {
-            if (session.emailEnabled) body.add(row().apply {
-                addView(divider(), LinearLayout.LayoutParams(0, 1, 1f))
-                addView(label("或", Type.Caption, R.color.mv_muted).apply { setPadding(dp(Space.M), 0, dp(Space.M), 0) })
-                addView(divider(), LinearLayout.LayoutParams(0, 1, 1f))
-            }, Space.XL)
-            body.add(action("使用 Google 登录") { controller.startGoogle(::openUrl) }, Space.XL)
-        }
-        if (session.emailEnabled) {
-            val links = listOf("登录" to "login", "注册账号" to "register", "忘记密码" to "forgot", "已有验证码" to "verify", "已有重置码" to "reset")
-                .filter { it.second != model.authMode }
-            links.chunked(2).forEachIndexed { index, pair ->
-                body.add(row().apply {
-                    pair.forEach { (text, mode) ->
-                        addView(action(text, ButtonKind.Quiet) { model.authMode = mode; redraw() },
-                            LinearLayout.LayoutParams(0, -2, 1f))
-                    }
-                    if (pair.size == 1) addView(View(this@MainActivity), LinearLayout.LayoutParams(0, 0, 1f))
-                }, if (index == 0) Space.L else 0)
+            when (model.authMode) {
+                "login" -> {
+                    body.addWrapped(action("还没有账户？注册账户", ButtonKind.Quiet) { model.authMode = "register"; redraw() }, Space.L, Gravity.CENTER_HORIZONTAL)
+                    body.addWrapped(action("已有验证码", ButtonKind.Quiet) { model.authMode = "verify"; redraw() }, Gravity.CENTER_HORIZONTAL)
+                }
+                "register" -> body.addWrapped(action("已经有账户？登录", ButtonKind.Quiet) { model.authMode = "login"; redraw() }, Space.L, Gravity.CENTER_HORIZONTAL)
+                "forgot" -> body.addWrapped(action("已有重置码", ButtonKind.Quiet) { model.authMode = "reset"; redraw() }, Space.L, Gravity.CENTER_HORIZONTAL)
+                else -> body.addWrapped(action("返回登录", ButtonKind.Quiet) { model.authMode = "login"; redraw() }, Space.L, Gravity.CENTER_HORIZONTAL)
             }
+        } else if (session.googleEnabled && model.authMode !in listOf("login", "register")) {
+            body.add(action("使用 Google 继续") { controller.startGoogle(::openUrl) }, Space.XL)
         }
+        body.add(label("登录后，你的电影票只在自己的账户中保存与管理。", Type.Caption, R.color.mv_muted).apply { gravity = Gravity.CENTER_HORIZONTAL }, Space.XL)
     }
     private fun libraryScreen(month: String? = null) {
         val box = column().apply { setPadding(dp(Space.PAGE), dp(Space.S), dp(Space.PAGE), 0) }
@@ -474,7 +473,7 @@ class MainActivity : AppCompatActivity() {
             text = when {
                 !state.ready -> "正在同步票夹…"
                 month != null -> "这个月份没有电影票"
-                state.tickets.isEmpty() -> "还没有电影票。选择一张票面，记录这次观影。"
+                state.tickets.isEmpty() -> "还没有电影票。选择一张原票照片，记录这次观影。"
                 else -> "没有匹配的电影票"
             }
         }
@@ -509,7 +508,7 @@ class MainActivity : AppCompatActivity() {
         }
         override fun onBindViewHolder(holder: Holder, position: Int) {
             val ticket = tickets[position]; bound.add(holder)
-            holder.title.text = ticket.fields.title.ifBlank { "未命名电影票" }
+            holder.title.text = ticket.fields.title.ifBlank { "待补充片名" }
             holder.image.contentDescription = "${holder.title.text}封面"
             (holder.image as TicketCoverView).setRatio(ticket.cover.width, ticket.cover.height)
             holder.date.text = ticket.fields.showtime.take(10).replace('-', '.').ifBlank { "日期待补充" }
@@ -573,9 +572,9 @@ class MainActivity : AppCompatActivity() {
         body.addWrapped(backAction(routeTitle(model.detailFrom), model.detailFrom))
         val ticket = state.tickets.find { it.id == model.detailId }
         if (ticket == null) { body.add(label("这张电影票已不存在。", color = R.color.mv_muted), Space.XL); return }
-        body.add(pageTitle(ticket.fields.title.ifBlank { "未命名电影票" }), Space.XS)
+        body.add(pageTitle(ticket.fields.title.ifBlank { "待补充片名" }), Space.XS)
         picture(body, "电影封面", ticket.cover)
-        infoPanel(body, "票面信息", listOf("电影", "影院", "影厅", "座位", "放映时间").zip(ticket.fields.copy(showtime = ticket.fields.showtime.replace('T', ' ')).values()))
+        infoPanel(body, "电影票信息", listOf("片名", "影院", "影厅", "座位", "放映时间").zip(ticket.fields.copy(showtime = ticket.fields.showtime.replace('T', ' ')).values()))
         val saved = infoPanel(body, "保存状态", listOfNotNull("自动处理" to Presentation.processing(ticket.processingStatus),
             "原票" to Presentation.cloud(ticket.original.cloudStatus), ticket.poster?.let { "海报" to Presentation.cloud(it.cloudStatus) }))
         ticket.processingError?.takeIf { it.isNotBlank() }?.let { saved.addDivider(); saved.add(label(it, color = R.color.mv_error).apply { setPadding(0, dp(Space.M), 0, dp(Space.M)) }) }
@@ -593,10 +592,12 @@ class MainActivity : AppCompatActivity() {
         }
         if (ticket.poster != null) {
             val original = column(); original.visibility = View.GONE; var presenter: MediaPresenter? = null
-            body.add(action("展开 / 收起原始票面") {
-                if (original.isVisible) { original.visibility = View.GONE; presenter?.close() }
-                else { original.visibility = View.VISIBLE; if (presenter == null) presenter = picture(original, "原始票面", top = Space.M, size = ticket.original); presenter?.bind(ticket.original) }
-            }, Space.XL); body.add(original)
+            val toggle = action("查看原票照片", ButtonKind.Text) {}
+            toggle.setOnClickListener {
+                if (original.isVisible) { original.visibility = View.GONE; presenter?.close(); toggle.text = "查看原票照片" }
+                else { original.visibility = View.VISIBLE; if (presenter == null) presenter = picture(original, "原票照片", top = Space.M, size = ticket.original); presenter?.bind(ticket.original); toggle.text = "收起原票照片" }
+            }
+            body.add(toggle, Space.XL); body.add(original)
         }
         body.add(action("编辑电影票", ButtonKind.Primary) { model.awaitingDraft = true; controller.editDraft(ticket.id) }, Space.XL)
         if (ticket.processingStatus in listOf("failed", "no_match")) body.add(action("重试自动处理") { controller.retryProcessing(ticket.id) }, Space.M)
@@ -611,15 +612,15 @@ class MainActivity : AppCompatActivity() {
         binding.content.addView(layout.root, ViewGroup.LayoutParams(-1, -1))
         val body = layout.body; val draft = state.draft ?: run { body.add(label("正在准备录入…", color = R.color.mv_muted), Space.XL); return }
         body.add(pageTitle(if (draft.ticketId == null) "录入电影票" else "编辑电影票"), Space.S)
-        body.add(label("票面为必需，其他信息可稍后填写；自动识别不会覆盖你的手动修改。", color = R.color.mv_muted), Space.S)
-        editorPhoto = picture(body, "待保存的票面", top = Space.XL)
-        editorPhotoButton = action("选择或替换票面") {
+        body.add(label("原票照片为必需，其他信息可稍后填写；自动识别不会覆盖你的手动修改。", color = R.color.mv_muted), Space.S)
+        editorPhoto = picture(body, "待保存的原票照片", top = Space.XL)
+        editorPhotoButton = action("选择或替换原票照片") {
             model.updatePickerOpen = true; updateInstallGuard()
             picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
         }
             .apply { setIconResource(R.drawable.ic_image); iconGravity = MaterialButton.ICON_GRAVITY_TEXT_START }.also { body.add(it, Space.M) }
         fun fieldName(name: String) = label(name, Type.Label, R.color.mv_muted)
-        editorFields = listOf("电影名称", "影院", "影厅", "座位").mapIndexed { index, name ->
+        editorFields = listOf("片名", "影院", "影厅", "座位").mapIndexed { index, name ->
             body.add(fieldName(name), if (index == 0) Space.XL else Space.L)
             input(name, if (index == 0) 120 else 200).also { field -> body.add(field, Space.S); field.doAfterTextChanged { if (!updatingFields) saveFields() } }
         }
@@ -656,8 +657,8 @@ class MainActivity : AppCompatActivity() {
         editorStatus?.text = when {
             draft.pendingConfirmation -> "保存结果尚未确认。请核对后重试，系统会先检查之前的提交，避免重复保存。"
             draft.hasPhoto -> "选中：${draft.photoName}"
-            draft.ticketId != null -> "保留原始票面"
-            else -> "请先选择一张票面"
+            draft.ticketId != null -> "保留原票照片"
+            else -> "请先选择一张原票照片"
         }
         if (draft.previewFile != null) editorPhoto?.local(draft.previewFile)
         else {
@@ -681,7 +682,7 @@ class MainActivity : AppCompatActivity() {
             MaterialAlertDialogBuilder(this).setTitle("请先核对保存结果").setMessage("上次提交可能已经保存。请使用“核对并重试保存”，确认结果后再离开。").setPositiveButton("继续核对", null).show()
             return
         }
-        MaterialAlertDialogBuilder(this).setTitle("放弃未保存的修改？").setMessage("返回后，本次选择的票面和填写内容将被丢弃。").setNegativeButton("继续编辑", null)
+        MaterialAlertDialogBuilder(this).setTitle("放弃未保存的修改？").setMessage("返回后，本次选择的原票照片和填写内容将被丢弃。").setNegativeButton("继续编辑", null)
             .setPositiveButton("放弃") { _, _ -> model.afterDraftRoute = destination; controller.discardDraft() }.show()
     }
     private fun mineScreen(state: AppState) {
@@ -744,7 +745,7 @@ class MainActivity : AppCompatActivity() {
         media.add(MediaPresenter(controller, imageExecutor, image, caption, compact = true, maxEdge = THUMBNAIL_EDGE).also { it.bind(ticket.cover) })
     }
     private fun recentCard(ticket: Ticket): LinearLayout = column().apply {
-        val title = ticket.fields.title.ifBlank { "未命名电影票" }
+        val title = ticket.fields.title.ifBlank { "待补充片名" }
         isClickable = true; isFocusable = true; foreground = ripple(); contentDescription = "打开${title}详情"
         setOnClickListener { openDetail(ticket, "mine") }
         val image = TicketCoverView(this@MainActivity).apply {

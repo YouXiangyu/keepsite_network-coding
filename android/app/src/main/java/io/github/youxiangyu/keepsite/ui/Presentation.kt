@@ -16,10 +16,10 @@ object Presentation {
     fun processing(status: String): String = when (status) {
         "not_started" -> "尚未开始自动处理"
         "queued" -> "等待处理"
-        "ocr" -> "正在识别票面"
+        "ocr" -> "正在识别原票"
         "poster" -> "正在查找海报"
         "ready" -> "处理完成"
-        "no_match" -> "未找到匹配海报，保留票面"
+        "no_match" -> "未找到匹配海报，保留原票照片"
         "failed" -> "处理失败，可重试"
         else -> "处理状态：$status"
     }

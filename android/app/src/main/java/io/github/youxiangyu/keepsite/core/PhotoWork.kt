@@ -74,7 +74,7 @@ internal class PhotoWork(private val timeoutMs: Long = 20_000) : Closeable {
     fun <T> execute(block: (Scope) -> T): T {
         val job = synchronized(lock) {
             if (closed) throw CancellationException()
-            if (active != null) throw ApiFailure(message = "上一张照片仍在结束读取，请稍后重新选择；也可以先编辑票根。")
+            if (active != null) throw ApiFailure(message = "上一张照片仍在结束读取，请稍后重新选择；也可以先编辑电影票。")
             Job(block).also {
                 active = it
                 try { worker.execute(it.future) }

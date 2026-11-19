@@ -336,7 +336,7 @@ class AppRepository(context: Context) : AppController {
     }
     override fun editDraft(ticketId: String) = run {
         if (draft != null) { publish { it.copy(message = "请先完成或放弃当前草稿。") }; return@run }
-        val ticket = state.tickets.find { it.id == ticketId } ?: throw ApiFailure(message = "该票根已不可用。")
+        val ticket = state.tickets.find { it.id == ticketId } ?: throw ApiFailure(message = "该电影票已不可用。")
         setDraft(Draft(ticket.id, ticket.id, ticket.fields, ticket.fields, UUID.randomUUID().toString(), UUID.randomUUID().toString()))
     }
     override fun setDraftFields(fields: TicketFields) = run {
@@ -345,7 +345,7 @@ class AppRepository(context: Context) : AppController {
         setDraft(active.copy(fields = fields))
     }
     override fun selectPhoto(uri: Uri) = run("正在读取照片") { expected ->
-        val active = draft ?: throw ApiFailure(message = "请先新建或编辑票根。")
+        val active = draft ?: throw ApiFailure(message = "请先新建或编辑电影票。")
         if (active.awaitingConfirmation) throw ApiFailure(message = "请先核对上次提交结果。")
         val prepared = photoImporter.read(uri)
         val bytes = prepared.bytes
@@ -439,7 +439,7 @@ class AppRepository(context: Context) : AppController {
         publish { it.copy(message = "当前草稿已关闭。") }
     }
     private fun ticketAction(ticketId: String, kind: String) = run(if (kind == "delete") "正在删除" else "正在重新处理") { expected ->
-        if (state.tickets.none { it.id == ticketId }) throw ApiFailure(message = "该票根已不可用。")
+        if (state.tickets.none { it.id == ticketId }) throw ApiFailure(message = "该电影票已不可用。")
         val key = "$kind:$ticketId"
         val request = pending.getOrPut(key) { UUID.randomUUID().toString().let { it to JSONObject().put("operationId", it) } }
         val receipt = applied(request.first) ?: Wire.receipt(api.json("/api/tickets/$ticketId" + if (kind == "process") "/process" else "",
