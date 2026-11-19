@@ -140,6 +140,34 @@ async function openDevices(page: Page) {
 }
 async function login(page: Page, email = 'a@example.test') { await page.getByLabel('邮箱地址', { exact: true }).fill(email); await page.getByLabel('密码', { exact: true }).fill(password); await page.getByRole('button', { name: '登录', exact: true }).click(); }
 
+test('main navigation selects the devices page according to the visible layout', async ({ page }) => {
+  await mockApi(page, { user: 'a' });
+  const nav = page.getByRole('navigation', { name: '主导航' });
+  const current = nav.locator('a[aria-current="page"]');
+  const devices = nav.getByRole('link', { name: '设备与状态' });
+
+  await page.goto('/tickets');
+  await expect(current).toHaveText(['票夹']);
+  await nav.getByRole('link', { name: '我的', exact: true }).click();
+  await expect(current).toHaveText(['我的']);
+  await devices.click();
+  await expect(current).toHaveText(['设备与状态']);
+  await page.reload();
+  await expect(current).toHaveText(['设备与状态']);
+  await page.goBack();
+  await expect(current).toHaveText(['我的']);
+
+  await page.setViewportSize({ width: 760, height: 900 });
+  await expect(devices).toBeHidden();
+  await page.getByRole('main').getByRole('link', { name: '设备与状态' }).click();
+  await expect(page.getByRole('heading', { name: '设备与保存状态' })).toBeVisible();
+  await expect(current).toHaveText(['我的']);
+  await page.setViewportSize({ width: 761, height: 900 });
+  await expect(current).toHaveText(['设备与状态']);
+  await page.setViewportSize({ width: 390, height: 900 });
+  await expect(current).toHaveText(['我的']);
+});
+
 test.describe('monthly review', () => {
   test.use({ timezoneId: 'Asia/Macau' });
 
