@@ -134,9 +134,9 @@ async function mockApi(page: Page, options: { user?: string; configured?: boolea
   return Object.assign(server, { hint });
 }
 async function openDevices(page: Page) {
-  const shortcut = page.locator('.app-header').getByRole('link', { name: '设备与状态', exact: true });
+  const shortcut = page.locator('.app-header').getByRole('link', { name: '账户与设备', exact: true });
   if (await shortcut.isVisible()) await shortcut.click();
-  else { await page.getByRole('navigation').getByRole('link', { name: '我的', exact: true }).click(); await page.locator('.mine-settings').click(); }
+  else { await page.getByRole('navigation').getByRole('link', { name: '我的', exact: true }).click(); await page.locator('.mine-settings').getByRole('link', { name: '账户与设备' }).click(); }
 }
 async function login(page: Page, email = 'a@example.test') { await page.getByLabel('邮箱地址', { exact: true }).fill(email); await page.getByLabel('密码', { exact: true }).fill(password); await page.getByRole('button', { name: '登录', exact: true }).click(); }
 
@@ -144,26 +144,26 @@ test('main navigation selects the devices page according to the visible layout',
   await mockApi(page, { user: 'a' });
   const nav = page.getByRole('navigation', { name: '主导航' });
   const current = nav.locator('a[aria-current="page"]');
-  const devices = nav.getByRole('link', { name: '设备与状态' });
+  const devices = nav.getByRole('link', { name: '账户与设备' });
 
   await page.goto('/tickets');
   await expect(current).toHaveText(['票夹']);
   await nav.getByRole('link', { name: '我的', exact: true }).click();
   await expect(current).toHaveText(['我的']);
   await devices.click();
-  await expect(current).toHaveText(['设备与状态']);
+  await expect(current).toHaveText(['账户与设备']);
   await page.reload();
-  await expect(current).toHaveText(['设备与状态']);
+  await expect(current).toHaveText(['账户与设备']);
   await page.goBack();
   await expect(current).toHaveText(['我的']);
 
   await page.setViewportSize({ width: 760, height: 900 });
   await expect(devices).toBeHidden();
-  await page.getByRole('main').getByRole('link', { name: '设备与状态' }).click();
-  await expect(page.getByRole('heading', { name: '设备与保存状态' })).toBeVisible();
+  await page.getByRole('main').getByRole('link', { name: '账户与设备' }).click();
+  await expect(page.getByRole('heading', { name: '账户与设备' })).toBeVisible();
   await expect(current).toHaveText(['我的']);
   await page.setViewportSize({ width: 761, height: 900 });
-  await expect(current).toHaveText(['设备与状态']);
+  await expect(current).toHaveText(['账户与设备']);
   await page.setViewportSize({ width: 390, height: 900 });
   await expect(current).toHaveText(['我的']);
 });
@@ -204,13 +204,13 @@ test.describe('monthly review', () => {
     await page.goto('/tickets');
     await page.getByRole('navigation').getByRole('link', { name: '我的', exact: true }).click();
     await expect(page.getByRole('heading', { name: '我的', exact: true })).toBeVisible();
-    await expect(page.locator('.profile-stats dd')).toHaveText(['14 张', '7 个']);
+    await expect(page.locator('.profile-stats')).toHaveText('14 张电影票 · 7 个观影月份');
     await expect(page.locator('.recent-tickets > li')).toHaveCount(10);
     await expect(page.locator('.recent-tickets h3').first()).toHaveText('观影记忆 13');
     await expect(page.locator('.month-card')).toHaveCount(6);
     await expect(page.locator('.month-card h3').first()).toHaveText('2026年7月');
     await expect(page.locator('.month-card a button,.recent-tickets a button')).toHaveCount(0);
-    await page.getByRole('link', { name: '查看全部月份' }).click();
+    await page.getByRole('link', { name: '按月回看' }).click();
     await expect(page.locator('.month-card')).toHaveCount(7);
     await page.locator('.month-card').filter({ hasText: '2026年1月' }).click();
     await expect(page.locator('.ticket-card')).toHaveCount(2);
@@ -234,14 +234,14 @@ test.describe('monthly review', () => {
     await page.getByRole('combobox', { name: '电影票排序' }).selectOption('oldest');
     await page.locator('.ticket-card').first().getByRole('link').click();
     await page.reload();
-    await page.getByRole('link', { name: '编辑票根', exact: true }).click();
+    await page.getByRole('link', { name: '编辑电影票', exact: true }).click();
     await page.getByRole('link', { name: '取消', exact: true }).click();
     await page.getByRole('link', { name: '返回2026年7月' }).click();
     await expect(page.getByRole('heading', { name: '2026年7月', exact: true })).toBeVisible();
     await expect(page.getByRole('searchbox')).toHaveValue('记忆');
     await expect(page.getByRole('combobox', { name: '电影票排序' })).toHaveValue('oldest');
     await page.locator('.ticket-card').first().getByRole('link').click();
-    await page.getByRole('link', { name: '编辑票根', exact: true }).click();
+    await page.getByRole('link', { name: '编辑电影票', exact: true }).click();
     await page.getByRole('link', { name: '返回2026年7月' }).click();
     await expect(page.getByRole('searchbox')).toHaveValue('记忆');
     await page.locator('.ticket-card').first().getByRole('link').click();
@@ -256,7 +256,7 @@ test.describe('monthly review', () => {
     await page.getByRole('searchbox').fill('影院 1');
     await page.getByRole('combobox', { name: '电影票排序' }).selectOption('oldest');
     await page.locator('.ticket-card').first().getByRole('link').click();
-    await page.getByRole('link', { name: '编辑票根', exact: true }).click();
+    await page.getByRole('link', { name: '编辑电影票', exact: true }).click();
     await page.getByRole('link', { name: '取消', exact: true }).click();
     await page.getByRole('link', { name: '返回票夹' }).click();
     await expect(page.getByRole('searchbox')).toHaveValue('影院 1');
@@ -287,9 +287,9 @@ test.describe('monthly review', () => {
     first.createdAt = second.createdAt = Date.parse('2026-09-30T20:00:00Z');
     api.data.set('a', { tickets: [first, second] }); await page.goto('/months/2026-10');
     await page.locator('.ticket-card').first().getByRole('link').click();
-    await page.getByRole('link', { name: '编辑票根', exact: true }).click();
+    await page.getByRole('link', { name: '编辑电影票', exact: true }).click();
     await page.getByLabel('放映时间').fill('2026-12-15T19:30');
-    await page.getByRole('button', { name: '保存票根', exact: true }).click();
+    await page.getByRole('button', { name: '保存电影票', exact: true }).click();
     await page.getByRole('link', { name: '返回2026年10月' }).click();
     await expect(page.getByText('这个月份没有电影票', { exact: true })).toBeVisible();
     await page.getByRole('link', { name: '返回我的' }).click();
@@ -297,14 +297,14 @@ test.describe('monthly review', () => {
     first.fields.showtime = ''; first.version++; api.revision++;
     await expect(page.locator('.month-card h3')).toHaveText(['2026年11月', '2026年10月']);
     const third = sampleItem('remote'); third.fields.showtime = '2027-01-01T00:00'; api.data.get('a')!.tickets.push(third); api.revision++;
-    await expect(page.locator('.profile-stats dd')).toHaveText(['3 张', '3 个']);
+    await expect(page.locator('.profile-stats')).toHaveText('3 张电影票 · 3 个观影月份');
     await page.locator('.month-card').filter({ hasText: '2027年1月' }).click();
     await page.locator('.ticket-card').getByRole('link').click();
-    await page.getByRole('button', { name: '删除票根', exact: true }).click();
+    await page.getByRole('button', { name: '删除电影票', exact: true }).click();
     await page.getByRole('button', { name: '确认删除', exact: true }).click();
     await expect(page.getByText('这个月份没有电影票', { exact: true })).toBeVisible();
     await page.getByRole('link', { name: '返回我的' }).click();
-    await expect(page.locator('.profile-stats dd')).toHaveText(['2 张', '2 个']);
+    await expect(page.locator('.profile-stats')).toHaveText('2 张电影票 · 2 个观影月份');
     expect(first.fields.showtime).toBe('');
   });
 
@@ -322,7 +322,7 @@ test.describe('monthly review', () => {
     await page.locator('.month-card').click();
     await page.getByRole('searchbox').fill('无匹配');
     await expect(page.getByText('没有找到匹配的电影票', { exact: true })).toBeVisible();
-    await expect(page.locator('.collection-count')).toHaveText('1件');
+    await expect(page.locator('.collection-count')).toHaveText('1 张');
     await page.getByRole('button', { name: '清除搜索' }).click();
     await page.locator('.ticket-card').getByRole('link').click();
     await expect(page.getByRole('heading', { name: ticket.fields.title, exact: true })).toBeVisible();
@@ -334,7 +334,7 @@ test.describe('monthly review', () => {
     await expect(page.locator('.recent-tickets [data-media-status="cached"]').first()).toBeVisible();
     const snapshots = api.requests.filter(request => request.path === '/api/sync/snapshot').length;
     const downloads = api.requests.filter(request => request.path.endsWith('/download')).length;
-    await page.getByRole('link', { name: '查看全部月份' }).click();
+    await page.getByRole('link', { name: '按月回看' }).click();
     await page.locator('.month-card').first().click();
     await expect(page.locator('.ticket-card img').first()).toBeVisible();
     await page.getByRole('link', { name: '返回我的' }).click();
@@ -345,7 +345,7 @@ test.describe('monthly review', () => {
     await page.getByRole('button', { name: '退出登录' }).click(); await login(page, 'b@example.test');
     await page.getByRole('navigation').getByRole('link', { name: '我的', exact: true }).click();
     await expect(page.locator('.profile-summary')).toContainText('b@example.test');
-    await expect(page.locator('.profile-stats dd')).toHaveText(['0 张', '0 个']);
+    await expect(page.locator('.profile-stats')).toHaveText('0 张电影票 · 0 个观影月份');
     await expect(page.locator('.month-card,.recent-tickets')).toHaveCount(0);
     await expect(page.getByText('观影记忆 13', { exact: true })).toHaveCount(0);
   });
@@ -355,10 +355,10 @@ test.describe('monthly review', () => {
     const user = 'LongName'.repeat(10), api = await mockApi(page, { user });
     const tickets = monthlyTickets(); tickets[0].fields.title = '长电影名称'.repeat(20); api.data.set(user, { tickets });
     await page.goto('/mine');
-    await page.addStyleTag({ content: '.mine-page h1{font-size:64px}.profile-summary h2{font-size:44px}.profile-summary p{font-size:28px}.profile-stats dd{font-size:56px}.section-heading h2{font-size:40px}.month-card h3{font-size:32px}.recent-tickets h3{font-size:30px}' });
+    await page.addStyleTag({ content: '.mine-page h1{font-size:64px}.profile-summary h2{font-size:44px}.profile-summary p{font-size:28px}.profile-stats{font-size:28px}.section-heading{font-size:40px}.month-card h3{font-size:32px}.recent-tickets h3{font-size:30px}' });
     await expect(page.locator('.profile-summary')).toContainText(user);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.getByRole('link', { name: '查看全部月份' }).focus();
+    await page.getByRole('link', { name: '按月回看' }).focus();
     await page.keyboard.press('Enter');
     await expect(page.getByRole('heading', { name: '全部月份', exact: true })).toBeVisible();
     await page.locator('.month-card').last().focus(); await page.keyboard.press('Enter');
@@ -477,7 +477,7 @@ test('a remote tombstone preserves edited fields and the selected photo while di
   await expect(page.getByRole('alert')).toContainText('已被删除');
   await expect(page.getByLabel('片名')).toHaveValue('尚未提交的本地草稿');
   await expect(page.getByAltText('原票预览')).toHaveAttribute('src', preview!);
-  await expect(page.getByRole('button', { name: '保存票根' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '保存电影票' })).toBeDisabled();
   expect(api.requests.filter(request => request.method === 'PATCH')).toHaveLength(0);
 });
 
@@ -548,7 +548,7 @@ test('new account starts empty and obsolete business routes are not mounted', as
   const api = await mockApi(page, { empty: true }); await page.goto('/login'); await login(page);
   await expect(page.getByRole('heading', { name: '你的第一张电影票' })).toBeVisible();
   await expect(page.locator('.phone-device,.keyboard-dock,.mobile-scroll')).toHaveCount(0);
-  await page.goto('/explore'); await expect(page.getByRole('heading', { name: '票根或页面不存在' })).toBeVisible();
+  await page.goto('/explore'); await expect(page.getByRole('heading', { name: '电影票或页面不存在' })).toBeVisible();
   expect(api.requests.some(request => /community|shares|bootstrap|models/.test(request.path))).toBeFalsy();
 });
 test('registration verifies email and keeps invalid-code input for correction', async ({ page }) => {
@@ -604,7 +604,7 @@ test('unverified login routes to verification without exposing the collection', 
 test('Cognito logout leaves an anonymous document before redirect and returns signed out', async ({ page }) => {
   const api = await mockApi(page, { user: 'a' });
   await page.goto('/tickets');
-  await expect(page.getByRole('heading', { name: '我的票夹', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '电影', exact: true })).toBeVisible();
   const origin = new URL(page.url()).origin;
   const provider = 'https://keepsite.auth.ap-northeast-3.amazoncognito.com';
   api.logoutUrl = provider + '/logout?' + new URLSearchParams({ client_id: 'testclient123', logout_uri: origin + '/' });
@@ -631,7 +631,7 @@ test('an unsafe logout URL stays on the signed-out local page', async ({ page })
   const api = await mockApi(page, { user: 'a' });
   api.logoutUrl = 'https://evil.example/logout';
   await page.goto('/tickets');
-  await expect(page.getByRole('heading', { name: '我的票夹', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '电影', exact: true })).toBeVisible();
   const origin = new URL(page.url()).origin;
   const externalNavigations: string[] = [];
   await page.route('https://evil.example/**', async route => { externalNavigations.push(route.request().url()); await route.abort(); });
@@ -664,7 +664,7 @@ test('Google callback failure shows a fixed message and removes the error query'
 test('returning to a browser tab rechecks a session ended elsewhere', async ({ page }) => {
   const api = await mockApi(page, { user: 'a' });
   await page.goto('/tickets');
-  await expect(page.getByRole('heading', { name: '我的票夹', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '电影', exact: true })).toBeVisible();
   api.user = '';
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(page.getByRole('heading', { name: '欢迎回来' })).toBeVisible();
@@ -690,7 +690,7 @@ test('mobile collection preserves image proportions, searches and keeps its bott
   await expect(page.getByRole('heading', { name: '没有找到匹配的电影票' })).toBeVisible();
   await page.getByRole('button', { name: '清除搜索' }).click();
   await expect(page.locator('.ticket-card')).toHaveCount(2);
-  await page.getByRole('navigation').getByRole('link', { name: '上传电影票' }).click();
+  await page.getByRole('navigation').getByRole('link', { name: '录入电影票' }).click();
   await expect(page.getByLabel('片名')).toBeVisible();
   await page.getByRole('navigation').getByRole('link', { name: '票夹', exact: true }).click();
   await expect(page.locator('.ticket-card')).toHaveCount(2);
@@ -699,9 +699,9 @@ test('mobile collection preserves image proportions, searches and keeps its bott
   const lastBottom = await page.locator('.ticket-card').evaluateAll(nodes => Math.max(...nodes.map(node => node.getBoundingClientRect().bottom)));
   const navTop = (await page.getByRole('navigation').boundingBox())!.y;
   expect(lastBottom).toBeLessThanOrEqual(navTop);
-  await page.getByRole('navigation').getByRole('link', { name: '上传电影票' }).click();
-  await page.getByRole('button', { name: '保存票根', exact: true }).scrollIntoViewIfNeeded();
-  const saveBox = (await page.getByRole('button', { name: '保存票根', exact: true }).boundingBox())!;
+  await page.getByRole('navigation').getByRole('link', { name: '录入电影票' }).click();
+  await page.getByRole('button', { name: '保存电影票', exact: true }).scrollIntoViewIfNeeded();
+  const saveBox = (await page.getByRole('button', { name: '保存电影票', exact: true }).boundingBox())!;
   expect(saveBox.y + saveBox.height).toBeLessThanOrEqual((await page.getByRole('navigation').boundingBox())!.y);
 });
 
@@ -764,11 +764,11 @@ test('authorized reference covers render in the real mobile collection', async (
 for (const width of [360, 390, 768, 1280, 1440]) {
   test(`ticket library and native editor fit ${width}px`, async ({ page }, info) => {
     await mockApi(page, { user: 'a' }); await page.setViewportSize({ width, height: 900 }); await page.goto('/tickets');
-    await expect(page.getByRole('heading', { name: width <= 760 ? '电影' : '我的票夹', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '电影', exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
     if (width >= 768) await expect(page.getByRole('navigation', { name: '主导航' })).not.toHaveCSS('position', 'fixed');
     await page.screenshot({ path: info.outputPath(`tickets-${width}.png`), fullPage: true });
-    await page.getByRole('link', { name: '上传电影票', exact: true }).click();
+    await page.getByRole('link', { name: '录入电影票', exact: true }).click();
     await expect(page.getByLabel('片名')).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
     await expect(page.locator('.keyboard-dock,.phone-device')).toHaveCount(0);
@@ -782,7 +782,7 @@ test('direct links, refresh, back and cloud status remain accurate', async ({ pa
   await expect(page.getByText('原票已保存到当前服务器，尚未云存')).toBeVisible();
   await expect(page.getByText('本机可用情况以图片下方的校验与缓存状态为准。')).toBeVisible();
   await page.reload(); await expect(page.getByRole('heading', { name: 'A 的电影票' })).toBeVisible();
-  await page.getByRole('link', { name: '编辑票根' }).click(); await page.goBack();
+  await page.getByRole('link', { name: '编辑电影票' }).click(); await page.goBack();
   await expect(page.getByRole('heading', { name: 'A 的电影票' })).toBeVisible();
   await openDevices(page);
   await expect(page.getByText('当前服务器未配置云存储。当前保存不具备云端恢复保障。')).toBeVisible();
@@ -790,15 +790,15 @@ test('direct links, refresh, back and cloud status remain accurate', async ({ pa
 test('upload with empty fields, field-only correction and deletion use the new contract', async ({ page }) => {
   const api = await mockApi(page, { user: 'a', empty: true }); await page.goto('/tickets/new');
   await page.getByLabel('选择原票照片').setInputFiles({ name: 'ticket.png', mimeType: 'image/png', buffer: png });
-  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await page.getByRole('button', { name: '保存电影票', exact: true }).click();
   await expect(page.getByRole('heading', { name: '待补充片名' })).toBeVisible();
   const create = api.requests.find(request => request.path === '/api/tickets' && request.method === 'POST')!;
   expect(create.body.fields).toEqual({}); expect(create.body.operationId).toBeTruthy();
-  await page.getByRole('link', { name: '编辑票根' }).click(); await page.getByLabel('片名').fill('新片名');
-  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await page.getByRole('link', { name: '编辑电影票' }).click(); await page.getByLabel('片名').fill('新片名');
+  await page.getByRole('button', { name: '保存电影票', exact: true }).click();
   await expect(page.getByRole('heading', { name: '新片名' })).toBeVisible();
   expect(api.requests.find(request => request.method === 'PATCH')?.body.fields).toEqual({ title: '新片名' });
-  await page.getByRole('button', { name: '删除票根', exact: true }).click();
+  await page.getByRole('button', { name: '删除电影票', exact: true }).click();
   await expect(page.getByRole('dialog')).toBeVisible(); await page.getByRole('button', { name: '确认删除' }).click();
   await expect(page.getByRole('heading', { name: '你的第一张电影票' })).toBeVisible();
   expect(api.requests.find(request => request.method === 'DELETE')?.body.operationId).toBeTruthy();
@@ -809,7 +809,7 @@ test('same-account session renewal retains the draft and attaches the new CSRF t
   api.csrfToken = 'renewed'; await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect.poll(() => api.requests.filter(request => request.path === '/api/auth/session').length).toBeGreaterThan(1);
   await expect(page.getByLabel('影院')).toHaveValue('会话刷新后保留的影院');
-  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await page.getByRole('button', { name: '保存电影票', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'A 的电影票' })).toBeVisible();
   expect(api.requests.find(request => request.method === 'PATCH')?.headers['x-csrf-token']).toBe('renewed');
 });
@@ -831,7 +831,7 @@ test('temporary photo URLs are released on replacement, navigation and logout', 
   const select = () => page.getByLabel('选择原票照片').setInputFiles({ name: 'ticket.png', mimeType: 'image/png', buffer: png });
   await select(); await select(); await page.getByRole('link', { name: '取消', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__revoked.filter((url: string) => (window as any).__draftUrls.includes(url)).length)).toBe(2);
-  await page.getByRole('link', { name: '上传电影票', exact: true }).click(); await select();
+  await page.getByRole('link', { name: '录入电影票', exact: true }).click(); await select();
   await page.getByRole('button', { name: '退出登录' }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__revoked.filter((url: string) => (window as any).__draftUrls.includes(url)).length)).toBe(3);
 });
@@ -849,7 +849,7 @@ test('an old in-flight delta cannot restore a deleted ticket', async ({ page }) 
   let release!: () => void; api.holdChanges = new Promise<void>(resolve => { release = resolve; });
   const before = api.requests.filter(request => request.path === '/api/sync/changes').length;
   await page.evaluate(() => window.dispatchEvent(new Event('focus'))); await expect.poll(() => api.requests.filter(request => request.path === '/api/sync/changes').length).toBeGreaterThan(before);
-  await page.getByRole('button', { name: '删除票根', exact: true }).click(); await page.getByRole('button', { name: '确认删除' }).click();
+  await page.getByRole('button', { name: '删除电影票', exact: true }).click(); await page.getByRole('button', { name: '确认删除' }).click();
   release(); await expect(page.getByRole('heading', { name: '你的第一张电影票' })).toBeVisible();
   await expect(page.getByText('A 的电影票', { exact: true })).toHaveCount(0);
 });
@@ -913,7 +913,7 @@ test('quota exhaustion still displays the verified cloud image without claiming 
   await page.goto('/tickets/new');
   await page.getByLabel('选择原票照片').setInputFiles({ name: 'quota.png', mimeType: 'image/png', buffer: png });
   await page.getByLabel('片名').fill('缓存不足也能保存');
-  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await page.getByRole('button', { name: '保存电影票', exact: true }).click();
   await expect(page.getByRole('heading', { name: '缓存不足也能保存' })).toBeVisible();
   await expect(page.getByText('原票已保存到云端', { exact: true })).toBeVisible();
   await expect(page.locator('.media-availability')).toContainText('本机缓存空间不足');
@@ -958,9 +958,9 @@ test('deletion prunes only unreferenced account images and retains shared origin
   const api = await mockApi(page, { user: 'a' }); const first = sampleItem('first'), second = sampleItem('second');
   api.data.set('a', { tickets: [first, second] }); await page.goto('/tickets');
   await expect(page.locator('.media-availability').first()).toContainText('已校验'); expect(await cacheEntries(page)).toHaveLength(1);
-  await page.goto('/tickets/first'); await page.getByRole('button', { name: '删除票根', exact: true }).click(); await page.getByRole('button', { name: '确认删除' }).click();
+  await page.goto('/tickets/first'); await page.getByRole('button', { name: '删除电影票', exact: true }).click(); await page.getByRole('button', { name: '确认删除' }).click();
   await expect(page.locator('.ticket-card')).toHaveCount(1); expect(await cacheEntries(page)).toHaveLength(1);
-  await page.goto('/tickets/second'); await page.getByRole('button', { name: '删除票根', exact: true }).click(); await page.getByRole('button', { name: '确认删除' }).click();
+  await page.goto('/tickets/second'); await page.getByRole('button', { name: '删除电影票', exact: true }).click(); await page.getByRole('button', { name: '确认删除' }).click();
   await expect(page.getByRole('heading', { name: '你的第一张电影票' })).toBeVisible();
   await expect.poll(() => cacheEntries(page)).toEqual([]);
 });
@@ -1038,7 +1038,7 @@ test('disabled processing reports configuration readiness while retaining manual
   const api = await mockApi(page, { user: 'a' }); await page.goto('/tickets/item-1');
   await expect(page.getByRole('region', { name: '自动处理' })).toContainText('处理配置未就绪');
   await expect(page.getByRole('button', { name: '开始识别' })).toBeDisabled();
-  await page.getByRole('link', { name: '编辑票根' }).click();
+  await page.getByRole('link', { name: '编辑电影票' }).click();
   await expect(page.getByText('处理配置未就绪，请配置服务端识别。', { exact: true })).toBeVisible();
   await expect(page.getByLabel('片名')).toBeEditable();
   expect(api.requests.some(request => request.path.endsWith('/process'))).toBeFalsy();
@@ -1070,7 +1070,7 @@ test('OCR updates untouched fields while preserving a local correction and an ex
   ticket.processing.status = 'poster'; ticket.version++; api.revision++;
   await page.clock.fastForward(4001);
   await expect(page.getByLabel('片名')).toHaveValue('用户修正的片名'); await expect(page.getByLabel('影院')).toHaveValue('识别的影院');
-  await page.getByLabel('座位').fill(''); await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await page.getByLabel('座位').fill(''); await page.getByRole('button', { name: '保存电影票', exact: true }).click();
   await expect(page.getByRole('heading', { name: '用户修正的片名' })).toBeVisible();
   const update = api.requests.find(request => request.method === 'PATCH')!;
   expect(update.body.fields).toEqual({ title: '用户修正的片名', seat: '' });
@@ -1208,7 +1208,7 @@ test('a manual value matching a concurrent OCR result still claims the user fiel
   ticket.fields.title = '用户手填 A'; ticket.fieldSources.title = 'ocr'; ticket.processing.status = 'poster'; ticket.version++; api.revision++;
   await page.clock.fastForward(4001); await page.getByLabel('影院').fill('用户填写的影院');
   await expect(page.getByLabel('片名')).toHaveValue('用户手填 A');
-  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await page.getByRole('button', { name: '保存电影票', exact: true }).click();
   await expect(page.getByRole('heading', { name: '用户手填 A' })).toBeVisible();
   const update = api.requests.find(request => request.method === 'PATCH')!;
   expect(update.body.fields).toEqual({ title: '用户手填 A', cinema: '用户填写的影院' });
@@ -1220,7 +1220,7 @@ test('explicitly clearing a new manual field preserves its user intent while unt
   const api = await mockApi(page, { user: 'a', empty: true, processing: true }); await page.goto('/tickets/new');
   await page.getByLabel('选择原票照片').setInputFiles({ name: 'manual-empty.png', mimeType: 'image/png', buffer: png });
   await page.getByLabel('片名').fill('临时手填'); await page.getByLabel('片名').fill('');
-  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await page.getByRole('button', { name: '保存电影票', exact: true }).click();
   await expect(page.getByRole('heading', { name: '待补充片名' })).toBeVisible();
   const created = api.requests.find(request => request.path === '/api/tickets' && request.method === 'POST')!;
   expect(created.body.fields).toEqual({ title: '' });
@@ -1304,7 +1304,7 @@ test('editor action bar preserves busy protection, one submission and cancel tar
   const api = await mockApi(page, { user: 'a' });
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/tickets/new');
-  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await page.getByRole('button', { name: '保存电影票', exact: true }).click();
   await expectFeedback('请先选择一张电影票照片。', 'missing-photo');
   await page.getByLabel('选择原票照片').setInputFiles({ name: 'ticket.png', mimeType: 'image/png', buffer: png });
   await page.evaluate(() => window.scrollTo(0, 0));
@@ -1317,7 +1317,7 @@ test('editor action bar preserves busy protection, one submission and cancel tar
     if (route.request().method() === 'POST') { started = true; await gate; }
     await route.fallback();
   });
-  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await page.getByRole('button', { name: '保存电影票', exact: true }).click();
   await expect.poll(() => started).toBe(true);
   await expect(page.getByRole('button', { name: '正在保存…', exact: true })).toBeDisabled();
   await expect(page.getByRole('link', { name: '取消', exact: true })).toHaveAttribute('aria-disabled', 'true');
@@ -1336,7 +1336,7 @@ test('editor action bar preserves busy protection, one submission and cancel tar
   expect(api.data.get('a')!.tickets).toHaveLength(2);
   await expect(page.locator('.ticket-editor-actions')).toHaveCount(0);
   await page.goto('/tickets/item-1/edit');
-  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await page.getByRole('button', { name: '保存电影票', exact: true }).click();
   await expectFeedback('尚未修改电影信息或原票。', 'unchanged-edit');
   await page.getByLabel('片名').fill('底栏编辑后回车保存');
   await page.getByLabel('片名').press('Enter');
@@ -1358,7 +1358,7 @@ test('editor action bar measures large text, navigation wrapping and error clear
   await page.getByLabel('片名').fill('保留未保存修改');
   const message = '测试保存失败，草稿仍保留。请检查网络后重试。';
   await page.route('**/api/tickets/item-1', route => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ detail: message }) }));
-  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await page.getByRole('button', { name: '保存电影票', exact: true }).click();
   await expect(page.getByRole('alert')).toHaveText(message);
   await expect.poll(() => editorGeometry(page)).toMatchObject({ alertVisible: true, alertClear: true, alertHit: true });
   await page.evaluate(() => {
@@ -1451,7 +1451,7 @@ for (const mode of ['new', 'edit']) {
     await expect(page.locator('.ticket-editor-actions')).toHaveCount(0);
     expect(await page.evaluate(() => (window as any).__editorViewportFixture.count())).toBe(0);
     await page.evaluate(() => (window as any).__editorViewportFixture.set({ height: 628, offsetTop: 0 }, 'scroll'));
-    await page.getByRole('link', { name: '上传电影票', exact: true }).click();
+    await page.getByRole('link', { name: '录入电影票', exact: true }).click();
     await expectEditorActions(page);
     expect(await page.evaluate(() => (window as any).__editorViewportFixture.count())).toBe(2);
     expect(errors).toEqual([]);

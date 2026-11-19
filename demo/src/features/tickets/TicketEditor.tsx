@@ -116,7 +116,7 @@ export default function TicketEditor({ item, busy, runMutation, runReconciliatio
   const currentSources = item?.fieldSources ?? baselineSources.current;
   const userChange = (key: FieldName) => touched.current.has(key) && (fields[key] !== currentFields[key] || currentSources[key] !== 'user');
   useEffect(() => {
-    if (!item) { if (editId) { setDeleted(true); setError('这张票根已被删除，当前草稿仍保留。不能保存到原记录，可以返回票夹另建。'); } return; }
+    if (!item) { if (editId) { setDeleted(true); setError('这张电影票已被删除，当前草稿仍保留。不能保存到原记录，可以返回票夹另建。'); } return; }
     setFields(previous => {
       const next = { ...previous };
       for (const key of fieldNames) if (!touched.current.has(key)) next[key] = item.fields[key];
@@ -154,7 +154,7 @@ export default function TicketEditor({ item, busy, runMutation, runReconciliatio
           if (intent.attempted) {
             try {
               const status = await getUploadStatus(intent.uploadId);
-              if (status.status === 'attached') throw new ApiError('图片已关联票根，请先核对保存结果。', 409);
+              if (status.status === 'attached') throw new ApiError('图片已关联电影票，请先核对保存结果。', 409);
               media = status.asset ?? undefined;
             } catch (error) { if (!(error instanceof ApiError) || error.status !== 404) throw error; }
           }
@@ -164,7 +164,7 @@ export default function TicketEditor({ item, busy, runMutation, runReconciliatio
           await verifyMediaBlob(selected, media, () => assertSessionEpoch(scope));
           assertSessionEpoch(scope);
           if (!alive.current) throw new DOMException('编辑页面已关闭。', 'AbortError');
-          setUploadStatus('图片已上传，票根引用尚待确认；这不代表票根已保存。');
+          setUploadStatus('图片已上传，电影票引用尚待确认；这不代表电影票已保存。');
           uploaded.current = { file: selected, assetId: media.assetId };
         }
         assetId = uploaded.current!.assetId;
@@ -184,7 +184,7 @@ export default function TicketEditor({ item, busy, runMutation, runReconciliatio
       onCancel: () => { if (alive.current) { setError('保存请求已取消，结果尚未确认。请核对保存结果，草稿仍保留。'); setUncertain(true); } },
       onSuccess: next => {
         if (!alive.current) return;
-        if (!next.tickets.some(ticket => ticket.id === id && ticket.deletedAt === null)) throw new Error('未返回已保存的票根，请核对保存结果。');
+        if (!next.tickets.some(ticket => ticket.id === id && ticket.deletedAt === null)) throw new Error('未返回已保存的电影票，请核对保存结果。');
         releasePreview(); onSaved(id);
       },
     });
@@ -213,7 +213,7 @@ export default function TicketEditor({ item, busy, runMutation, runReconciliatio
       const confirmed = [...submissions.current.values()].filter(submission => submission.applied);
       if (current?.deletedAt != null || !current && (editing || confirmed.length > 0)) {
         setDeleted(true);
-        setError('已保存的票根已被删除。当前草稿保留，不能重新提交到已删除的记录。');
+        setError('已保存的电影票已被删除。当前草稿保留，不能重新提交到已删除的记录。');
         return;
       }
       if (submissions.current.size > 0 && confirmed.length === 0) {
@@ -245,7 +245,7 @@ export default function TicketEditor({ item, busy, runMutation, runReconciliatio
       setError(current ? '已核对保存结果，草稿中尚未提交的修改仍保留。再次保存会更新同一条记录。' : '尚未找到保存记录，草稿保留，可以重试。');
     },
   });
-  return <section ref={page} className="ticket-editor-page"><h1>{editing ? '编辑票根' : '上传电影票'}</h1><p className="page-intro">保留原票照片，电影信息可以稍后补充。</p>
+  return <section ref={page} className="ticket-editor-page"><h1>{editing ? '编辑电影票' : '录入电影票'}</h1><p className="page-intro">保留原票照片，电影信息可以稍后补充。</p>
     <form className="ticket-editor" onSubmit={submit}><fieldset disabled={busy}>
       <div><button type="button" className="upload-card" onClick={() => fileInput.current?.click()}>
         {displayPreview ? <img src={displayPreview} alt="原票预览" /> : <span><Camera size={36} /><strong>选择电影票照片</strong><small>JPG / PNG / WebP · 最大 12 MiB</small></span>}
@@ -259,9 +259,9 @@ export default function TicketEditor({ item, busy, runMutation, runReconciliatio
         {(item || touched.current.has(key)) && <span className="field-source">{userChange(key) ? '手动修改，尚未保存' : sourceLabels[currentSources[key]]}</span>}
       </label>)}
         {error && <p ref={feedback} className="form-error" role="alert">{error}</p>}
-        {deleted && <Link to="/tickets/new" className="secondary-button">返回上传页另建票根</Link>}
+        {deleted && <Link to="/tickets/new" className="secondary-button">返回录入页另建电影票</Link>}
         {uncertain && <button type="button" className="secondary-button" onClick={reconcile}>核对保存结果，保留草稿</button>}
       </div>
-    </fieldset><footer ref={actions} className="ticket-editor-actions" aria-label="票根操作"><Link to={cancelTo ?? (editing ? `/tickets/${encodeURIComponent(id)}` : '/tickets')} className="secondary-button" disabled={busy}>取消</Link><button type="submit" className="primary-button" disabled={busy || deleted}><Check size={20} />{busy ? '正在保存…' : '保存票根'}</button></footer></form>
+    </fieldset><footer ref={actions} className="ticket-editor-actions" aria-label="电影票操作"><Link to={cancelTo ?? (editing ? `/tickets/${encodeURIComponent(id)}` : '/tickets')} className="secondary-button" disabled={busy}>取消</Link><button type="submit" className="primary-button" disabled={busy || deleted}><Check size={20} />{busy ? '正在保存…' : '保存电影票'}</button></footer></form>
   </section>;
 }

@@ -141,7 +141,7 @@ export class AccountSync implements AccountEventPort {
         || page.total !== first.total || page.expiresAt !== first.expiresAt || page.offset !== tickets.size) throw new ApiError('快照页面不一致，需要重新读取。', 410, 'snapshot_expired');
       bytes += new TextEncoder().encode(JSON.stringify(page.tickets)).byteLength;
       if (page.total > 10000 || bytes > 16 * 1024 * 1024) throw new ApiError('票夹快照超过容量限制。');
-      for (const ticket of page.tickets) { if (tickets.has(ticket.id)) throw new ApiError('快照包含重复票根。'); tickets.set(ticket.id, ticket); }
+      for (const ticket of page.tickets) { if (tickets.has(ticket.id)) throw new ApiError('快照包含重复电影票。'); tickets.set(ticket.id, ticket); }
       token = page.nextPageToken;
       if (token && (!page.tickets.length || tokens.has(token))) throw new ApiError('快照分页没有前进。');
       if (token) tokens.add(token);
@@ -172,7 +172,7 @@ export class AccountSync implements AccountEventPort {
           for (const change of page.changes) {
             if (change.cursor !== baseline.cursor + 1) throw new ApiError('增量游标不连续。', 410, 'cursor_gap');
             const existing = baseline.tickets.get(change.type === 'upsert' ? change.ticket.id : change.id);
-            if (existing && (change.type === 'upsert' ? change.ticket.version : change.version) < existing.version) throw new ApiError('票根版本倒退。', 410, 'cursor_gap');
+            if (existing && (change.type === 'upsert' ? change.ticket.version : change.version) < existing.version) throw new ApiError('电影票版本倒退。', 410, 'cursor_gap');
             if (change.type === 'delete') baseline.tickets.delete(change.id); else baseline.tickets.set(change.ticket.id, change.ticket);
             baseline.cursor = change.cursor;
           }

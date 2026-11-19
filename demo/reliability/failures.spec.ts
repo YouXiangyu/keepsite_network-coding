@@ -24,17 +24,17 @@ test('JSON save body timeout releases the form, retains its photo and draft, and
   await page.getByLabel('片名').fill('慢响应中的票根');
   await page.getByLabel('影院').fill('请求超时后仍保留的文字');
   await hang(request, '/api/tickets', 'POST');
-  await waitForHeaders(page, '/api/tickets', () => page.getByRole('button', { name: '保存票根', exact: true }).click());
+  await waitForHeaders(page, '/api/tickets', () => page.getByRole('button', { name: '保存电影票', exact: true }).click());
   await stalled(request, '/api/tickets');
   await expect(page.getByRole('button', { name: '正在保存…', exact: true })).toBeDisabled();
   await page.clock.fastForward(29_000);
   await expect(page.getByRole('button', { name: '正在保存…', exact: true })).toBeDisabled();
   await page.clock.fastForward(1_001);
   await expect(page.getByRole('alert')).toContainText('请求超时');
-  await expect(page.getByRole('button', { name: '保存票根', exact: true })).toBeEnabled();
+  await expect(page.getByRole('button', { name: '保存电影票', exact: true })).toBeEnabled();
   await expect(page.getByLabel('影院')).toHaveValue('请求超时后仍保留的文字');
   await expect(page.getByRole('img', { name: '原票预览' })).toBeVisible();
-  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await page.getByRole('button', { name: '保存电影票', exact: true }).click();
   await expect(page.getByRole('heading', { name: '慢响应中的票根', exact: true })).toBeVisible();
   const received = (await status(request)).requests;
   const creates = received.filter((item: any) => item.path === '/api/tickets' && item.method === 'POST');
@@ -50,7 +50,7 @@ test('logout during a stalled save cannot publish the old response into a replac
   await page.goto('/tickets/item-1/edit');
   await page.getByLabel('影院').fill('旧账户的草稿');
   await hang(request, '/api/tickets/item-1', 'PATCH');
-  await waitForHeaders(page, '/api/tickets/item-1', () => page.getByRole('button', { name: '保存票根', exact: true }).click());
+  await waitForHeaders(page, '/api/tickets/item-1', () => page.getByRole('button', { name: '保存电影票', exact: true }).click());
   await page.getByRole('button', { name: '退出登录', exact: true }).first().click();
   await expect(page.getByRole('heading', { name: '欢迎回来', exact: true })).toBeVisible();
   await expect.poll(async () => (await status(request)).stalls[0]?.closed).toBeTruthy();
@@ -71,18 +71,18 @@ test('an already-created draft can recover from timeout, changed content and a c
   await page.getByLabel('片名').fill('超时后继续编辑');
   await page.getByLabel('影院').fill('第一次提交');
   await hang(request, '/api/tickets', 'POST');
-  await waitForHeaders(page, '/api/tickets', () => page.getByRole('button', { name: '保存票根', exact: true }).click());
+  await waitForHeaders(page, '/api/tickets', () => page.getByRole('button', { name: '保存电影票', exact: true }).click());
   await page.clock.fastForward(30_001);
   await expect(page.getByRole('alert')).toContainText('请求超时');
   await page.getByLabel('影院').fill('响应丢失后继续修改的草稿');
-  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await page.getByRole('button', { name: '保存电影票', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('票根已创建');
   await page.getByRole('button', { name: '核对保存结果，保留草稿', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('再次保存会更新同一条记录');
-  await expect(page.getByRole('heading', { name: '编辑票根', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '编辑电影票', exact: true })).toBeVisible();
   await expect(page.getByLabel('影院')).toHaveValue('响应丢失后继续修改的草稿');
   await expect(page.getByRole('img', { name: '原票预览' })).toBeVisible();
-  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await page.getByRole('button', { name: '保存电影票', exact: true }).click();
   await expect(page.getByRole('heading', { name: '超时后继续编辑', exact: true })).toBeVisible();
   await expect(page.getByRole('definition').filter({ hasText: '响应丢失后继续修改的草稿' })).toBeVisible();
   const received = (await status(request)).requests;
@@ -106,12 +106,12 @@ test('an uncertain edit can be reverted to its original value after reconciliati
   await page.clock.install(); await page.goto('/tickets/item-1/edit');
   await page.getByLabel('片名').fill('服务端已保存的新片名');
   await hang(request, '/api/tickets/item-1', 'PATCH');
-  await waitForHeaders(page, '/api/tickets/item-1', () => page.getByRole('button', { name: '保存票根', exact: true }).click());
+  await waitForHeaders(page, '/api/tickets/item-1', () => page.getByRole('button', { name: '保存电影票', exact: true }).click());
   await page.clock.fastForward(30001); await expect(page.getByRole('alert')).toContainText('请求超时');
   await page.getByLabel('片名').fill('A 的电影票');
   await page.getByRole('button', { name: '核对保存结果，保留草稿' }).click();
   await expect(page.getByLabel('片名')).toHaveValue('A 的电影票');
-  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await page.getByRole('button', { name: '保存电影票', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'A 的电影票', exact: true })).toBeVisible();
   const data = await (await request.get('/api/sync/snapshot')).json();
   expect(data.tickets[0].fields.title).toBe('A 的电影票'); expect(data.tickets[0].version).toBe(3);
@@ -120,7 +120,7 @@ test('reconciliation merges untouched remote fields and never reattaches a confi
   await page.clock.install(); await page.goto('/tickets/new');
   await page.getByLabel('选择原票照片').setInputFiles({ name: 'photo.png', mimeType: 'image/png', buffer: png });
   await page.getByLabel('片名').fill('自己的片名'); await hang(request, '/api/tickets', 'POST');
-  await waitForHeaders(page, '/api/tickets', () => page.getByRole('button', { name: '保存票根', exact: true }).click());
+  await waitForHeaders(page, '/api/tickets', () => page.getByRole('button', { name: '保存电影票', exact: true }).click());
   await page.clock.fastForward(30001); await expect(page.getByRole('alert')).toContainText('请求超时');
   const created = (await status(request)).requests.find((entry: any) => entry.path === '/api/tickets' && entry.method === 'POST').body;
   const remote = await request.patch(`/api/tickets/${created.id}`, { headers: { 'X-CSRF-Token': 'csrf-a' }, data: { operationId: 'remote-fields', fields: { cinema: '另一台设备填写的影院' } } }); expect(remote.ok()).toBeTruthy();
@@ -129,7 +129,7 @@ test('reconciliation merges untouched remote fields and never reattaches a confi
   await page.getByRole('button', { name: '核对保存结果，保留草稿' }).click();
   await expect(page.getByLabel('影院')).toHaveValue('另一台设备填写的影院');
   await expect(page.getByRole('img', { name: '原票预览' })).toHaveAttribute('src', /^blob:/);
-  await page.getByLabel('片名').fill('新的片名'); await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await page.getByLabel('片名').fill('新的片名'); await page.getByRole('button', { name: '保存电影票', exact: true }).click();
   await expect(page.getByRole('heading', { name: '新的片名' })).toBeVisible();
   const writes = (await status(request)).requests.filter((entry: any) => entry.method === 'PATCH');
   expect(writes.at(-1).body.fields).toEqual({ title: '新的片名' }); expect(writes.at(-1).body.originalAssetId).toBeUndefined();
@@ -139,13 +139,13 @@ test('reconciliation merges untouched remote fields and never reattaches a confi
 test('same-account CSRF renewal exposes reconciliation for an interrupted save', async ({ page, request }) => {
   await page.goto('/tickets/item-1/edit'); await page.getByLabel('片名').fill('服务端已保存的新片名');
   await hang(request, '/api/tickets/item-1', 'PATCH');
-  await waitForHeaders(page, '/api/tickets/item-1', () => page.getByRole('button', { name: '保存票根', exact: true }).click());
+  await waitForHeaders(page, '/api/tickets/item-1', () => page.getByRole('button', { name: '保存电影票', exact: true }).click());
   await request.post('/__test/renew', { data: { user: 'a' } });
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(page.getByRole('alert')).toContainText('保存请求已取消');
   await page.getByLabel('片名').fill('A 的电影票');
   await page.getByRole('button', { name: '核对保存结果，保留草稿' }).click();
-  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await page.getByRole('button', { name: '保存电影票', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'A 的电影票', exact: true })).toBeVisible();
   const data = await (await request.get('/api/sync/snapshot')).json(); expect(data.tickets[0].fields.title).toBe('A 的电影票');
 });
@@ -153,12 +153,12 @@ test('same-account CSRF renewal exposes reconciliation for an interrupted save',
 test('confirmed fields accept a later remote correction when the user made no new edit', async ({ page, request }) => {
   await page.clock.install(); await page.goto('/tickets/item-1/edit');
   await page.getByLabel('片名').fill('本端提交 B'); await hang(request, '/api/tickets/item-1', 'PATCH');
-  await waitForHeaders(page, '/api/tickets/item-1', () => page.getByRole('button', { name: '保存票根', exact: true }).click());
+  await waitForHeaders(page, '/api/tickets/item-1', () => page.getByRole('button', { name: '保存电影票', exact: true }).click());
   await page.clock.fastForward(30001); await expect(page.getByRole('alert')).toContainText('请求超时');
   const remote = await request.patch('/api/tickets/item-1', { headers: { 'X-CSRF-Token': 'csrf-a' }, data: { operationId: 'remote-correction', fields: { title: '另一端修正 C' } } }); expect(remote.ok()).toBeTruthy();
   await page.getByRole('button', { name: '核对保存结果，保留草稿' }).click();
   await expect(page.getByLabel('片名')).toHaveValue('另一端修正 C');
-  await page.getByLabel('座位').fill('7 排 8 座'); await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await page.getByLabel('座位').fill('7 排 8 座'); await page.getByRole('button', { name: '保存电影票', exact: true }).click();
   await expect(page.getByRole('heading', { name: '另一端修正 C' })).toBeVisible();
   const updates = (await status(request)).requests.filter((entry: any) => entry.method === 'PATCH');
   expect(updates.at(-1).body.fields).toEqual({ seat: '7 排 8 座' });
@@ -167,11 +167,11 @@ test('confirmed fields accept a later remote correction when the user made no ne
 test('an unapplied receipt preserves the operation identity for an unchanged retry', async ({ page, request }) => {
   await page.goto('/tickets/item-1/edit'); await page.getByLabel('影院').fill('未提交的影院');
   await request.post('/__test/reject', { data: { path: '/api/tickets/item-1', method: 'PATCH' } });
-  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await page.getByRole('button', { name: '保存电影票', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('暂时无法提交');
   await page.getByRole('button', { name: '核对保存结果，保留草稿' }).click();
   await expect(page.getByRole('alert')).toContainText('上次提交尚未确认');
-  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await page.getByRole('button', { name: '保存电影票', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'A 的电影票' })).toBeVisible();
   const writes = (await status(request)).requests.filter((entry: any) => entry.method === 'PATCH');
   expect(writes).toHaveLength(2); expect(writes[1].body.operationId).toBe(writes[0].body.operationId);
@@ -179,23 +179,23 @@ test('an unapplied receipt preserves the operation identity for an unchanged ret
 test('a confirmed create deleted elsewhere cannot be mistaken for an unsaved new draft', async ({ page, request }) => {
   await page.clock.install(); await page.goto('/tickets/new');
   await page.getByLabel('选择原票照片').setInputFiles({ name: 'photo.png', mimeType: 'image/png', buffer: png });
-  await hang(request, '/api/tickets', 'POST'); await waitForHeaders(page, '/api/tickets', () => page.getByRole('button', { name: '保存票根', exact: true }).click());
+  await hang(request, '/api/tickets', 'POST'); await waitForHeaders(page, '/api/tickets', () => page.getByRole('button', { name: '保存电影票', exact: true }).click());
   await page.clock.fastForward(30001); await expect(page.getByRole('alert')).toContainText('请求超时');
   const created = (await status(request)).requests.find((entry: any) => entry.path === '/api/tickets' && entry.method === 'POST').body;
   const removed = await request.delete(`/api/tickets/${created.id}`, { headers: { 'X-CSRF-Token': 'csrf-a' }, data: { operationId: 'remote-delete' } }); expect(removed.ok()).toBeTruthy();
   await page.getByRole('button', { name: '核对保存结果，保留草稿' }).click();
-  await expect(page.getByRole('alert')).toContainText('已保存的票根已被删除');
-  await expect(page.getByRole('button', { name: '保存票根', exact: true })).toBeDisabled();
+  await expect(page.getByRole('alert')).toContainText('已保存的电影票已被删除');
+  await expect(page.getByRole('button', { name: '保存电影票', exact: true })).toBeDisabled();
 });
 
 test('an upload with a lost response is reconciled without uploading its bytes twice', async ({ page, request }) => {
   await page.clock.install(); await page.goto('/tickets/new');
   await page.getByLabel('选择原票照片').setInputFiles({ name: 'photo.png', mimeType: 'image/png', buffer: png });
   await page.getByLabel('片名').fill('上传回执核对'); await hang(request, '/api/media', 'POST');
-  await waitForHeaders(page, '/api/media', () => page.getByRole('button', { name: '保存票根', exact: true }).click());
+  await waitForHeaders(page, '/api/media', () => page.getByRole('button', { name: '保存电影票', exact: true }).click());
   await page.clock.fastForward(120001); await expect(page.getByRole('alert')).toContainText('请求超时');
   await expect(page.getByRole('img', { name: '原票预览' })).toBeVisible();
-  await page.getByRole('button', { name: '保存票根', exact: true }).click();
+  await page.getByRole('button', { name: '保存电影票', exact: true }).click();
   await expect(page.getByRole('heading', { name: '上传回执核对' })).toBeVisible();
   const received = (await status(request)).requests;
   const uploads = received.filter((entry: any) => entry.path === '/api/media' && entry.method === 'POST');

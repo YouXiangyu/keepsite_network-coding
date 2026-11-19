@@ -15,10 +15,10 @@ const titles: Record<Mode, string> = {
   'forgot-password': '找回密码', 'reset-password': '设置新密码',
 };
 const descriptions: Record<Mode, string> = {
-  login: '登录后，继续票根喜欢的日子。', register: '从一张照片开始，留下属于你的记忆。',
+  login: '登录后，继续整理你的电影票。', register: '从一张电影票开始，记录每一次观影。',
   'verify-email': '输入邮件中的验证码，完成账户验证。',
   'forgot-password': '填写注册邮箱，我们会发送密码重置验证码。',
-  'reset-password': '输入邮件验证码和新密码，重新开启你的票根。',
+  'reset-password': '输入邮件验证码和新密码，重新登录你的票夹。',
 };
 const anonymous: AuthSession = { authenticated: false, configured: false, providers: { google: false, email: false } };
 
@@ -210,12 +210,12 @@ function AuthPage({ mode, session, serviceError, retry, onSignedIn }: {
   };
 
   return <main className="auth-page">
-    <div className="auth-story"><Brand /><div className="auth-story-copy"><span className="eyebrow">A PLACE FOR YOUR MEMORIES</span>
-      <h2>把喜欢的日子<br />好好留下来。</h2><p>一张照片，一段故事。<br />让生活里的小小珍藏，有一个属于自己的位置。</p>
-      <div className="memory-illustration" aria-hidden="true"><div /><div /><div /><span>Every moment matters.</span></div>
-    </div><small>YOUR LIFE, COLLECTED.</small></div>
+    <div className="auth-story"><Brand /><div className="auth-story-copy"><span className="eyebrow">A PLACE FOR YOUR MOVIE TICKETS</span>
+      <h2>把看过的电影<br />好好留下来。</h2><p>一张电影票，一次走进影院的记忆。<br />识别票面信息、匹配电影海报，整理成自己的电影票收藏夹。</p>
+      <div className="memory-illustration" aria-hidden="true"><div /><div /><div /><span>Every ticket matters.</span></div>
+    </div><small>YOUR MOVIES, COLLECTED.</small></div>
     <section className="auth-panel" aria-labelledby="auth-heading"><div className="auth-mobile-brand"><Brand /></div>
-      <div className="auth-form-wrap"><span className="eyebrow">keepsite account</span><h1 id="auth-heading">{titles[mode]}</h1><p className="auth-description">{descriptions[mode]}</p>
+      <div className="auth-form-wrap"><span className="eyebrow">KEEPSITE ACCOUNT</span><h1 id="auth-heading">{titles[mode]}</h1><p className="auth-description">{descriptions[mode]}</p>
         {message && <p className="auth-notice" role="status"><CheckCircle size={20} />{message}</p>}
         {serviceError && <p className="auth-service-message" role="status">{serviceError}</p>}
         {!session.configured && <div className="auth-unavailable" role="alert"><p>登录服务暂时不可用，请稍后重试。</p><button className="secondary-button" onClick={retry}>重新连接</button></div>}
@@ -243,8 +243,8 @@ function AuthPage({ mode, session, serviceError, retry, onSignedIn }: {
           void perform(async () => { await resendCode(email.trim()); setMessage('验证码已重新发送，请检查收件箱。'); });
         }}>重新发送验证码</button>}
         <div className="auth-switch">{mode === 'login' ? <>还没有账户？<button disabled={busy} onClick={() => move('register')}>注册账户</button></> : mode === 'register' ? <>已经有账户？<button disabled={busy} onClick={() => move('login')}>登录</button></> : <button disabled={busy} onClick={() => move('login')}><ArrowLeft size={16} />返回登录</button>}</div>
-        {mode === 'login' && <a className="auth-text-button" href="/download/android">下载 Android App</a>}
-        <p className="auth-footer">登录后，你的票根只在自己的账户中保存与管理。</p>
+        {mode === 'login' && <p className="auth-download"><a className="auth-text-button" href="/download/android">下载 Android App</a></p>}
+        <p className="auth-footer">登录后，你的电影票只在自己的账户中保存与管理。</p>
       </div>
     </section>
   </main>;
