@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { ArrowLeft, ArrowClockwise, CaretDown, FilmSlate, Devices, Plus, SignOut, Trash, PencilSimple, MagnifyingGlass, UserCircle } from '@phosphor-icons/react';
 import { Brand } from './AuthGate';
 import { errorMessage, mutate, signOut, type SignedInSession } from './api';
@@ -21,6 +21,12 @@ import DeviceStatus from './features/tickets/DeviceStatus';
 import AccountMethods from './features/AccountMethods';
 import { sourceLabels } from './features/tickets/processing';
 
+const mobileNavigation = window.matchMedia('(max-width: 760px)');
+function subscribeToNavigationLayout(onChange: () => void) {
+  mobileNavigation.addEventListener('change', onChange);
+  return () => mobileNavigation.removeEventListener('change', onChange);
+}
+
 export default function Prototype({ session }: { session: SignedInSession }) {
   const path = useLocationPath();
   const route = parseRoute(path);
@@ -34,7 +40,11 @@ export default function Prototype({ session }: { session: SignedInSession }) {
   const source = 'from' in route ? route.from : '/tickets';
   const sourceRoute = parseRoute(source);
   const parentRoute = 'from' in route ? sourceRoute : route;
-  const mineActive = ['mine', 'months', 'month', 'devices'].includes(parentRoute.type);
+  const mobile = useSyncExternalStore(subscribeToNavigationLayout, () => mobileNavigation.matches);
+  const devicesPage = route.type === 'devices';
+  const mineActive = ['mine', 'months', 'month'].includes(parentRoute.type) || (mobile && devicesPage);
+  const devicesActive = devicesPage && !mobile;
+  const ticketsActive = !mineActive && !devicesPage && route.type !== 'new';
   const title = item?.fields.title || (route.type === 'devices' ? '设备与保存状态' : route.type === 'mine' ? '我的' : route.type === 'months' ? '全部月份' : route.type === 'month' ? monthLabel(route.month) : '我的票夹');
   const deleteOperation = useRef({ id: '', operationId: '' });
   const alive = useRef(true);
@@ -73,7 +83,14 @@ export default function Prototype({ session }: { session: SignedInSession }) {
   else if (route.type === 'devices') content = <><header className="page-heading"><div><span className="eyebrow">STORAGE & DEVICES</span><h1>设备与保存状态</h1><p>区分云端保存、处理进度与这台设备上的可用情况。</p></div></header><div className="device-panels"><AccountMethods emailEnabled={session.providers.email} googleEnabled={session.providers.google} /><section className="status-panel"><h2>云端保存</h2><p>{capabilities?.cloudStorage ? '已配置私有云存储；请以每张票根的保存状态为准。' : '当前服务器未配置云存储。当前保存不具备云端恢复保障。'}</p><p>上传完成并确认票根记录后，才会更新保存状态。</p><p>自动识别：{capabilities?.processing ? '配置已就绪' : '配置未就绪'}</p>{!capabilities?.processing && capabilities?.processingUnavailableReason && <p>{capabilities.processingUnavailableReason}</p>}</section><section className="status-panel"><CacheStatus /></section><section className="status-panel device-peer-panel"><DeviceStatus /><p>{connected ? '状态提示已连接，变化通过增量同步更新。' : '状态连接恢复中，正在通过增量请求核对。'}</p></section><section className="status-panel tmdb-credits"><h2>关于海报数据</h2><a href="https://www.themoviedb.org/" target="_blank" rel="noopener noreferrer"><img src="/tmdb-logo.svg" alt="TMDB" width="190" height="82" /></a><p>This product uses the TMDB API but is not endorsed or certified by TMDB.</p></section></div></>;
   else content = <>{back}<div className="empty-state"><h1>票根或页面不存在</h1><p>记录可能已被删除，请返回票夹查看。</p></div></>;
   return <MediaProvider accountId={session.user.id} ready={ready} tickets={data.tickets} eventPort={eventPort} deviceSync={!!capabilities?.deviceSync}><div className="keepsite-shell" data-authenticated="true" data-user-id={session.user.id}><a className="skip-link" href="#main-content">跳到主要内容</a>
-    <header className="app-header"><Link to="/tickets"><div className="desktop-brand"><Brand /></div><span className="mobile-brand">{mineActive ? '我的' : '我的票夹'}</span></Link><nav aria-label="主导航"><Link to="/tickets" current={!mineActive && route.type !== 'new'}><FilmSlate size={24} weight={!mineActive && route.type !== 'new' ? 'fill' : 'regular'} />票夹</Link><Link to="/tickets/new" className="mobile-upload" current={route.type === 'new'}><Plus size={26} /><span className="visually-hidden">上传电影票</span></Link><Link to="/mine" current={mineActive}><UserCircle size={24} weight={mineActive ? 'fill' : 'regular'} />我的</Link><Link to="/devices" className="desktop-devices"><Devices size={24} />设备与状态</Link></nav><div className="account-actions"><span>{session.user.email}</span><button className="icon-button" aria-label="退出登录" disabled={logoutBusy} onClick={() => void logout()}><SignOut size={22} /></button></div></header>
+    <header className="app-header"><Link to="/tickets"><div className="desktop-brand"><Brand /></div><span className="mobile-brand">{mineActive ? '我的' : '我的票夹'}</span></Link>
+      <nav aria-label="主导航">
+        <Link to="/tickets" current={ticketsActive}><FilmSlate size={24} weight={ticketsActive ? 'fill' : 'regular'} />票夹</Link>
+        <Link to="/tickets/new" className="mobile-upload" current={route.type === 'new'}><Plus size={26} /><span className="visually-hidden">上传电影票</span></Link>
+        <Link to="/mine" current={mineActive}><UserCircle size={24} weight={mineActive ? 'fill' : 'regular'} />我的</Link>
+        <Link to="/devices" className="desktop-devices" current={devicesActive}><Devices size={24} weight={devicesActive ? 'fill' : 'regular'} />设备与状态</Link>
+      </nav>
+      <div className="account-actions"><span>{session.user.email}</span><button className="icon-button" aria-label="退出登录" disabled={logoutBusy} onClick={() => void logout()}><SignOut size={22} /></button></div></header>
     <main className="workspace" id="main-content" aria-busy={busy}><div ref={heading} tabIndex={-1} className="page-focus-anchor" />
       {(storageError || syncError) && <div className="form-error" role="alert">{storageError || syncError}<button className="text-button" onClick={retry} disabled={busy}>重试</button></div>}
       {actionError && !deleting && <p className="form-error" role="alert">{actionError}</p>}
