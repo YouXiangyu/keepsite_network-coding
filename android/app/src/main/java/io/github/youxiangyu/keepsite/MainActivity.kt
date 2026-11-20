@@ -355,6 +355,7 @@ class MainActivity : AppCompatActivity() {
     }
     private fun authScreen(session: Session) {
         val body = scrollColumn()
+        addUpdatePanel(body)
         val titles = mapOf("login" to "欢迎回来", "register" to "创建账号", "verify" to "验证邮箱", "forgot" to "找回密码", "reset" to "设置新密码")
         val hints = mapOf("login" to "登录后继续整理你的电影票。", "register" to "用邮箱创建账号，开始记录每一次观影。", "verify" to "输入邮件中的验证码，完成账户验证。",
             "forgot" to "填写注册邮箱，我们会发送密码重置验证码。", "reset" to "输入邮件验证码和新密码，重新登录你的票夹。")
