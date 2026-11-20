@@ -13,14 +13,15 @@ for (const width of [390, 1440]) {
       authenticated: false, configured: true, providers: { email: true, google: false },
     } }));
     let tag = 'v2';
-    await page.route(api, route => route.fulfill({ json: { tag_name: tag, body: '发行说明', assets: [asset(tag)] } }));
+    await page.route(api, route => route.fulfill({ json: { tag_name: tag, body: '20261120 之前的版本需要先手动安装一次。\n修复 #123。', assets: [asset(tag)] } }));
     await page.goto('/login');
     await page.getByRole('link', { name: '下载 Android App' }).click();
     const download = page.getByRole('link', { name: '下载最新版 APK' });
     await expect(download).toHaveAttribute('href', asset(tag).browser_download_url);
-    await expect(page.getByText('发行说明')).toBeHidden();
+    await expect(page.getByText('20261120 之前的版本需要先手动安装一次。', { exact: false })).toBeHidden();
     await page.getByText('版本说明', { exact: true }).click();
-    await expect(page.getByText('发行说明')).toBeVisible();
+    await expect(page.locator('details.release-notes > p')).toHaveText('20261120 之前的版本需要先手动安装一次。\n修复 #123。');
+    await expect(page.locator('details.release-notes > p')).toBeVisible();
     await page.route(asset(tag).browser_download_url, route => route.fulfill({ headers: {
       'Content-Disposition': 'attachment; filename="keepsite.apk"',
     }, body: 'test apk' }));

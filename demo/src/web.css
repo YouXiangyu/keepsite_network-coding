@@ -141,7 +141,5 @@ h1, h2, h3, p { margin-top: 0; }
 .download-release .field-hint { margin: 12px 0 0; }
 .release-notes { margin-top: 24px; padding-top: 4px; border-top: 1px solid var(--line); }
 .release-notes summary { display: flex; align-items: center; min-height: 44px; cursor: pointer; font-size: 15px; font-weight: 600; }
-.release-notes h3 { margin: 14px 0 6px; font-size: 14px; font-weight: 600; }
-.release-notes ul { margin: 0; padding-left: 20px; color: #4a4f57; font-size: 14px; line-height: 1.8; }
-.release-notes > p { color: var(--muted); font-size: 14px; }
+.release-notes > p { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--muted); font-size: 14px; }
 .download-back { margin-top: 20px; }
