@@ -355,7 +355,7 @@ class MainActivity : AppCompatActivity() {
                 addView(divider(), LinearLayout.LayoutParams(0, 1, 1f))
             }, Space.L)
         }
-        val email = input("邮箱地址", 254).apply {
+        val email = input("邮箱", 254).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
             setText(model.authEmail); doAfterTextChanged { model.authEmail = it.toString() }
         }

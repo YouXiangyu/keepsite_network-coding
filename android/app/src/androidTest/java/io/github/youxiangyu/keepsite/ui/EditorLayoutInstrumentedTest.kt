@@ -293,7 +293,7 @@ class EditorLayoutInstrumentedTest {
             portrait(scenario)
             scenario.onActivity { it.renderState(error = "保存未完成，草稿仍保留。") }
             await(scenario) { !it.notice.isLayoutRequested && complete(it.notice) && it.editor.scroll.scrollY == 0 }
-            field(scenario, "电影名称", "portrait-title-ime")
+            field(scenario, "片名", "portrait-title-ime")
             field(scenario, "座位", "portrait-seat-ime")
             scenario.recreate()
             await(scenario) { it.hasWindowFocus() && it.editor.scroll.height > 0 }
@@ -324,7 +324,7 @@ class EditorLayoutInstrumentedTest {
             onView(withText("取消")).perform(click())
             scenario.onActivity { assertEquals(1, it.cancelClicks); it.renderState(error = failedSave); checkState(it, busy = false, pending = false) }
             await(scenario) { !it.notice.isLayoutRequested && complete(it.notice) && it.editor.scroll.scrollY == 0 }
-            field(scenario, "电影名称", "large-portrait-title-ime")
+            field(scenario, "片名", "large-portrait-title-ime")
             field(scenario, "座位", "large-portrait-seat-ime")
         }
     }
