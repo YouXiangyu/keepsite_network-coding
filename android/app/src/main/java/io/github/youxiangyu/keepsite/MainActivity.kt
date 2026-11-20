@@ -342,9 +342,12 @@ class MainActivity : AppCompatActivity() {
     private fun sectionTitle(text: String): TextView = label(text, Type.Title, heading = true)
     private fun setAuthMode(mode: String) { model.authMode = mode; model.authPending = null; redraw() }
     private fun submitAuth(next: String, request: () -> Unit) {
-        val before = controller.snapshot(); request(); val after = controller.snapshot()
-        // Acceptance publishes busy synchronously; a fast request may already show its own result.
-        val accepted = after.busy.isNotEmpty() && after.authStep == null || after !== before && after.busy.isEmpty() && after.authStep == next
+        val before = controller.snapshot()
+        request()
+        val after = controller.snapshot()
+        // Success can be published before the worker clears busy.
+        val accepted = after !== before &&
+            (after.authStep == next || (after.authStep == null && after.busy.isNotEmpty()))
         model.authPending = if (accepted) model.authMode to next else null
     }
     private fun LinearLayout.addWrapped(view: View, top: Int = 0, gravity: Int = Gravity.START) {
