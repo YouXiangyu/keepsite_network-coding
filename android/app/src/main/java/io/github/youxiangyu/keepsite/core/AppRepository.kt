@@ -74,7 +74,7 @@ class AppRepository(context: Context) : AppController {
         val accepted = synchronized(lock) {
             if (!current(expected) || !allowed() || label.isNotEmpty() && state.busy.isNotEmpty()) false
             else {
-                if (label.isNotEmpty()) publish(expected) { it.copy(busy = label, error = "", message = "") }
+                if (label.isNotEmpty()) publish(expected) { it.copy(busy = label, error = "", message = "", completedAuth = null) }
                 true
             }
         }
@@ -193,20 +193,20 @@ class AppRepository(context: Context) : AppController {
         events?.align(value.serverId)
         cache?.refresh()
     }
-    private fun authAction(label: String, path: String, body: JSONObject, success: String) = run(label) { expected ->
-        api.json(path, "POST", body, false); guard(expected); publish { it.copy(message = success) }
+    private fun authAction(label: String, path: String, body: JSONObject, success: String, submission: AuthSubmission? = null) = run(label) { expected ->
+        api.json(path, "POST", body, false); guard(expected); publish { it.copy(message = success, completedAuth = submission) }
     }
     override fun login(email: String, password: String) = run("正在登录") { expected ->
         val session = Wire.session(api.json("/api/auth/login", "POST", JSONObject().put("email", email).put("password", password), false))
         if (!session.authenticated) Wire.invalid()
         guard(expected); install(session, expected); if (foreground) synchronize(expected)
     }
-    override fun register(email: String, password: String) = authAction("正在注册", "/api/auth/register",
-        JSONObject().put("email", email).put("password", password), "请查收验证邮件，并输入验证码。")
+    override fun register(submission: AuthSubmission, password: String) = authAction("正在注册", "/api/auth/register",
+        JSONObject().put("email", submission.email).put("password", password), "请查收验证邮件，并输入验证码。", submission)
     override fun confirmEmail(email: String, code: String) = authAction("正在验证邮箱", "/api/auth/verify-email",
         JSONObject().put("email", email).put("code", code), "邮箱已验证，可以登录。")
     override fun resendEmail(email: String) = authAction("正在发送验证码", "/api/auth/resend-code", JSONObject().put("email", email), "验证码请求已提交，请查收邮件。")
-    override fun resetPassword(email: String) = authAction("正在发送重置邮件", "/api/auth/forgot-password", JSONObject().put("email", email), "重置请求已提交，请查收邮件。")
+    override fun resetPassword(submission: AuthSubmission) = authAction("正在发送重置邮件", "/api/auth/forgot-password", JSONObject().put("email", submission.email), "重置请求已提交，请查收邮件。", submission)
     override fun confirmPassword(email: String, code: String, password: String) = authAction("正在重置密码", "/api/auth/reset-password",
         JSONObject().put("email", email).put("code", code).put("password", password), "密码已重置，请重新登录。")
     override fun refreshAccountMethods() = run("正在读取登录方式") { expected ->
@@ -336,7 +336,7 @@ class AppRepository(context: Context) : AppController {
     }
     override fun editDraft(ticketId: String) = run {
         if (draft != null) { publish { it.copy(message = "请先完成或放弃当前草稿。") }; return@run }
-        val ticket = state.tickets.find { it.id == ticketId } ?: throw ApiFailure(message = "该票根已不可用。")
+        val ticket = state.tickets.find { it.id == ticketId } ?: throw ApiFailure(message = "该电影票已不可用。")
         setDraft(Draft(ticket.id, ticket.id, ticket.fields, ticket.fields, UUID.randomUUID().toString(), UUID.randomUUID().toString()))
     }
     override fun setDraftFields(fields: TicketFields) = run {
@@ -345,7 +345,7 @@ class AppRepository(context: Context) : AppController {
         setDraft(active.copy(fields = fields))
     }
     override fun selectPhoto(uri: Uri) = run("正在读取照片") { expected ->
-        val active = draft ?: throw ApiFailure(message = "请先新建或编辑票根。")
+        val active = draft ?: throw ApiFailure(message = "请先新建或编辑电影票。")
         if (active.awaitingConfirmation) throw ApiFailure(message = "请先核对上次提交结果。")
         val prepared = photoImporter.read(uri)
         val bytes = prepared.bytes
@@ -439,7 +439,7 @@ class AppRepository(context: Context) : AppController {
         publish { it.copy(message = "当前草稿已关闭。") }
     }
     private fun ticketAction(ticketId: String, kind: String) = run(if (kind == "delete") "正在删除" else "正在重新处理") { expected ->
-        if (state.tickets.none { it.id == ticketId }) throw ApiFailure(message = "该票根已不可用。")
+        if (state.tickets.none { it.id == ticketId }) throw ApiFailure(message = "该电影票已不可用。")
         val key = "$kind:$ticketId"
         val request = pending.getOrPut(key) { UUID.randomUUID().toString().let { it to JSONObject().put("operationId", it) } }
         val receipt = applied(request.first) ?: Wire.receipt(api.json("/api/tickets/$ticketId" + if (kind == "process") "/process" else "",

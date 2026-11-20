@@ -131,7 +131,7 @@ async function pair(group: string, sourceFault: Fault = 'none', targetFault: Fau
   let target: Endpoint | undefined;
   try {
     await ready(source); await load(source);
-    await source.page.getByRole('link', { name: '设备与状态', exact: true }).click();
+    await source.page.getByRole('link', { name: '账户与设备', exact: true }).click();
     await expect(source.page.getByTestId('peer-inventory')).toHaveAttribute('data-count', '1');
     target = await endpoint(group, group + '-target', targetFault);
     await ready(target);
@@ -153,7 +153,7 @@ test('two independent Chromium processes transfer verified bytes directly withou
     const observed = await devices.target.page.evaluate(() => (window as any).__peerObservation);
     expect(observed.receivedBytes).toBeGreaterThan(devices.target.fixture.media.size);
     expect(observed.binaryMessages).toBeGreaterThan(32);
-    await devices.target.page.getByRole('link', { name: '设备与状态', exact: true }).click();
+    await devices.target.page.getByRole('link', { name: '账户与设备', exact: true }).click();
     await expect(devices.target.page.locator('[data-testid="peer-transfer"][data-path="peer"][data-route="direct"][data-status="complete"]')).toHaveCount(1);
     await testInfo.attach('direct-transfer.json', { body: JSON.stringify({ fixture: devices.target.fixture, browserVersion: devices.target.browser.version(), verifiedCache: await cached(devices.target), observed, records: await transferRecords(devices.target), serverMediaRequests: 0, scope: 'same-host independent Chromium; fake Redis; local object store; no TURN or real S3' }), contentType: 'application/json' });
     await devices.target.page.reload();
@@ -174,7 +174,7 @@ for (const [group, sourceFault, targetFault] of [
       const reads = await mediaRequests(devices.target);
       expect(reads.filter((item: any) => item.path === '/api/media/' + devices.target.fixture.media.assetId)).toHaveLength(1);
       expect(reads.every((item: any) => item.status === 200)).toBeTruthy();
-      await devices.target.page.getByRole('link', { name: '设备与状态', exact: true }).click();
+      await devices.target.page.getByRole('link', { name: '账户与设备', exact: true }).click();
       await expect(devices.target.page.locator('[data-testid="peer-transfer"][data-path="server"][data-status="complete"]')).toHaveCount(1);
       await expect(devices.target.page.locator('[data-testid="peer-transfer"][data-path="peer"][data-status="complete"]')).toHaveCount(0);
       const source = await observation(devices.source), target = await observation(devices.target);
@@ -199,7 +199,7 @@ test('one interrupted connection resumes its contiguous prefix within the origin
     expect(source.channelFirstOffsets).toEqual(target.getOffsets);
     // A successful resume does not send the complete file a second time.
     expect(source.sentBytes).toBeLessThan(devices.target.fixture.media.size * 1.3);
-    await devices.target.page.getByRole('link', { name: '设备与状态', exact: true }).click();
+    await devices.target.page.getByRole('link', { name: '账户与设备', exact: true }).click();
     await expect(devices.target.page.locator('[data-testid="peer-transfer"][data-path="peer"][data-status="complete"]')).toHaveCount(1);
     await testInfo.attach('resume-transfer.json', { body: JSON.stringify({ source, target: await observation(devices.target), records: await transferRecords(devices.target), media: devices.target.fixture.media, serverMediaRequests: 0 }), contentType: 'application/json' });
   } finally { await devices.close(); }

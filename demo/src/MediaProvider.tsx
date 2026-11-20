@@ -48,7 +48,7 @@ export function CacheStatus() {
   const cache = useCache();
   const summary = useSyncExternalStore(cache.subscribe, cache.cacheSummary);
   useEffect(() => { void cache.refresh(); }, [cache]);
-  return <><h2>当前设备缓存</h2><p>{summary.state === 'checking' ? '正在检查本机缓存…' : `本账号已存 ${summary.count} 张图片 · ${(summary.bytes / 1024 / 1024).toFixed(1)} MiB / 128 MiB`}</p>
+  return <><h2>本机图片缓存</h2><p>{summary.state === 'checking' ? '正在检查本机缓存…' : `本账号已存 ${summary.count} 张图片 · ${(summary.bytes / 1024 / 1024).toFixed(1)} MiB / 128 MiB`}</p>
     <p>读取时校验完整性。浏览器可能回收缓存；已云存图片可重新获取。</p>
     {summary.message && <p role="status">{summary.message}</p>}
     <button className="secondary-button" disabled={summary.clearing} onClick={() => void cache.clear()}>{summary.clearing ? '正在清理…' : '清除本账号本机缓存'}</button></>;

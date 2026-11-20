@@ -332,7 +332,7 @@ class NativePeer internal constructor(
             if (epoch != generation || identity != peerId) return@fileWork
             sourceCheckBusy = false
             transfers.values.filter { transfer -> transfer.source && actual.none { PeerJson.same(it, transfer.media) } }
-                .toList().forEach { fail(it, "来源缓存或票根引用已撤销") }
+                .toList().forEach { fail(it, "来源缓存或电影票引用已撤销") }
             if (sourceCheckDirty) checkSourceReferences()
         }, {
             if (epoch == generation && identity == peerId) {
@@ -353,7 +353,7 @@ class NativePeer internal constructor(
             val identifiers = actual.map { it.assetId }.sorted()
             val wanted = identifiers.toSet()
             transfers.values.filter { it.source && it.media.assetId !in wanted }.toList()
-                .forEach { fail(it, "来源缓存或票根引用已撤销") }
+                .forEach { fail(it, "来源缓存或电影票引用已撤销") }
             val added = wanted - advertised; val removed = advertised - wanted
             if (!replaceRequired && added.isEmpty() && removed.isEmpty()) { inventoryBusy = false; return@fileWork }
             val revision = inventoryRevision + 1
@@ -431,7 +431,7 @@ class NativePeer internal constructor(
         if (transfer.closed || transfers[transfer.id] !== transfer || !ready() || transfer.download?.aborted?.get() == true) return false
         if (transfer.source && !runCatching { cache.canShare(transfer.media) }.getOrDefault(false)) {
             withdrawn.add(transfer.media.assetId); inventoryDirty = true; inventoryAt = now()
-            fail(transfer, "来源缓存或票根引用已撤销")
+            fail(transfer, "来源缓存或电影票引用已撤销")
             return false
         }
         return true

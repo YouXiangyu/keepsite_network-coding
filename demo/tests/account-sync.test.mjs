@@ -116,5 +116,5 @@ test('an old A receipt cannot confirm after HTTP has already moved to B', async 
 test('duplicate records across snapshot pages never publish a partial replacement', async () => {
   const expiry = Date.now(), base = { ...snapshotPage(), total: 2, expiresAt: expiry };
   const h = setup({ snapshot: async token => token ? { ...base, offset: 1, nextPageToken: null } : { ...base, nextPageToken: 'next' } });
-  await assert.rejects(h.actor.catchUp(), /重复票根/); assert.equal(h.actor.snapshot().ready, false);
+  await assert.rejects(h.actor.catchUp(), /重复电影票/); assert.equal(h.actor.snapshot().ready, false);
 });

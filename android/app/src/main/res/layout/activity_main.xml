@@ -3,7 +3,7 @@
     android:id="@+id/root" android:layout_width="match_parent" android:layout_height="match_parent"
     android:orientation="vertical">
     <TextView android:id="@+id/brand" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:text="我的票夹" />
+        android:text="keepsite" />
     <TextView android:id="@+id/connection" android:layout_width="match_parent" android:layout_height="wrap_content" />
     <TextView android:id="@+id/notice" android:layout_width="match_parent" android:layout_height="wrap_content"
         android:accessibilityLiveRegion="polite" />

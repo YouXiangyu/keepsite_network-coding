@@ -2,6 +2,7 @@ package io.github.youxiangyu.keepsite
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
+import io.github.youxiangyu.keepsite.core.AuthForm
 import io.github.youxiangyu.keepsite.core.AppController
 import io.github.youxiangyu.keepsite.core.AppRepository
 import io.github.youxiangyu.keepsite.updates.AndroidUpdateRuntime
@@ -15,8 +16,7 @@ class UiViewModel(application: Application) : AndroidViewModel(application) {
     var detailFrom = "library"
     var month: String? = null
     var mineScroll = 0
-    var authMode = "login"
-    var authEmail = ""
+    val authForm = AuthForm()
     var awaitingDraft = false
     var editorWasOpen = false
     var afterDraftRoute = "library"

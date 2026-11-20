@@ -359,41 +359,41 @@ class NativeUiInstrumentedTest {
         login()
         val ticket = controller.snapshot().tickets.first()
         val before = controller.snapshot().tickets.associate { it.id to it.version }
-        val title = ticket.fields.title.ifBlank { "未命名电影票" }
+        val title = ticket.fields.title.ifBlank { "待补充片名" }
         onView(withContentDescription("${title}封面")).perform(click())
         onView(withText("编辑电影票")).perform(scrollTo(), click())
         await { controller.snapshot().draft?.ticketId == ticket.id }
         // OEM Chinese IMEs may compose ASCII hardware key events. Set the prefix
         // deterministically, then exercise successive user edits with digit keys.
-        onView(withHint("电影名称")).perform(scrollTo(), replaceText("UI-typing-"), click(), typeText("12345"))
+        onView(withHint("片名")).perform(scrollTo(), replaceText("UI-typing-"), click(), typeText("12345"))
             .check(matches(withText("UI-typing-12345")))
         awaitKeyboard()
-        onView(withHint("电影名称")).check(matches(isCompletelyDisplayed()))
+        onView(withHint("片名")).check(matches(isCompletelyDisplayed()))
         screenshot("editor-keyboard")
-        onView(withHint("电影名称")).perform(closeSoftKeyboard())
+        onView(withHint("片名")).perform(closeSoftKeyboard())
         await { controller.snapshot().draft?.fields?.title == "UI-typing-12345" }
         val rotationStarted = SystemClock.elapsedRealtime()
         rotate(UiAutomation.ROTATION_FREEZE_90)
         await { var landscape = false; scenario.onActivity { landscape = it.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE }; landscape }
         awaitWindow()
         awaitHealthy("rotation", rotationStarted)
-        onView(withHint("电影名称")).perform(scrollTo()).check(matches(withText("UI-typing-12345")))
+        onView(withHint("片名")).perform(scrollTo()).check(matches(withText("UI-typing-12345")))
         screenshot("editor-landscape")
-        onView(withHint("电影名称")).perform(click())
+        onView(withHint("片名")).perform(click())
         awaitKeyboard()
-        onView(withHint("电影名称")).check(matches(isCompletelyDisplayed()))
+        onView(withHint("片名")).check(matches(isCompletelyDisplayed()))
         screenshot("editor-landscape-keyboard")
-        onView(withHint("电影名称")).perform(closeSoftKeyboard())
+        onView(withHint("片名")).perform(closeSoftKeyboard())
         scenario.recreate()
         awaitWindow()
         awaitHealthy("recreate")
-        onView(withHint("电影名称")).perform(scrollTo()).check(matches(withText("UI-typing-12345")))
+        onView(withHint("片名")).perform(scrollTo()).check(matches(withText("UI-typing-12345")))
         scenario.moveToState(Lifecycle.State.CREATED)
         foregroundFixtureActivity()
         awaitWindow()
         awaitHealthy("editor-foreground")
         await { controller.snapshot().busy.isBlank() && controller.snapshot().draft?.fields?.title == "UI-typing-12345" }
-        onView(withHint("电影名称")).perform(scrollTo()).check(matches(withText("UI-typing-12345")))
+        onView(withHint("片名")).perform(scrollTo()).check(matches(withText("UI-typing-12345")))
         assertEquals("A local edit must not create or modify a server ticket before save", before, controller.snapshot().tickets.associate { it.id to it.version })
         lateinit var landscapeActivity: WeakReference<MainActivity>
         scenario.onActivity { landscapeActivity = WeakReference(it) }
@@ -407,12 +407,12 @@ class NativeUiInstrumentedTest {
             portraitRecreated
         }
         awaitWindow()
-        onView(withHint("电影名称")).perform(scrollTo()).check(matches(withText("UI-typing-12345")))
+        onView(withHint("片名")).perform(scrollTo()).check(matches(withText("UI-typing-12345")))
     }
 
     @Test fun returningFromBackgroundRebindsVisibleCachedImages() {
         login()
-        val title = controller.snapshot().tickets.first().fields.title.ifBlank { "未命名电影票" }
+        val title = controller.snapshot().tickets.first().fields.title.ifBlank { "待补充片名" }
         await { imageVisible("${title}封面") }
         screenshot("library-portrait")
         scenario.moveToState(Lifecycle.State.CREATED)
@@ -431,7 +431,7 @@ class NativeUiInstrumentedTest {
         val monthKey = tickets.maxOf { Presentation.month(it.fields.showtime, it.createdAt) }
         val inMonth = tickets.filter { Presentation.month(it.fields.showtime, it.createdAt) == monthKey }
         val month = Presentation.monthLabel(monthKey)
-        val monthTitle = inMonth.first().fields.title.ifBlank { "未命名电影票" }
+        val monthTitle = inMonth.first().fields.title.ifBlank { "待补充片名" }
         onView(withContentDescription("查看${month}的${inMonth.size}张电影票")).perform(scrollTo(), click())
         onView(withText("${inMonth.size} 张")).check(matches(isDisplayed()))
         onView(withContentDescription("打开${monthTitle}详情")).perform(click())

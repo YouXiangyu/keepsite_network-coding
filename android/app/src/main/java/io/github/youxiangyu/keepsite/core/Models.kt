@@ -72,6 +72,8 @@ data class AppState(
     val message: String = "", val capabilities: Capabilities? = null, val cache: CacheInfo = CacheInfo(),
     val peer: PeerView = PeerView(), val draft: DraftView? = null,
     val accountMethods: AccountMethods? = null, val accountPasswordEmail: String? = null,
+    /** Exact submission acknowledged by the server. */
+    val completedAuth: AuthSubmission? = null,
 )
 
 /** UI calls are non-blocking. Listener/media callbacks are delivered on the main thread. */
@@ -81,10 +83,10 @@ interface AppController : Closeable {
     fun setForeground(foreground: Boolean)
     fun refresh()
     fun login(email: String, password: String)
-    fun register(email: String, password: String)
+    fun register(submission: AuthSubmission, password: String)
     fun confirmEmail(email: String, code: String)
     fun resendEmail(email: String)
-    fun resetPassword(email: String)
+    fun resetPassword(submission: AuthSubmission)
     fun confirmPassword(email: String, code: String, password: String)
     fun startGoogle(openBrowser: (String) -> Unit)
     fun handleGoogleCallback(uri: Uri)

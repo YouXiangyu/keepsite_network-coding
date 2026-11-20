@@ -85,6 +85,6 @@ export function validTicket(value: unknown): value is Ticket {
 export function validateData(value: unknown): asserts value is AppData {
   if (!object(value) || !Array.isArray(value.tickets) || !value.tickets.every(validTicket)
     || new Set(value.tickets.map(ticket => ticket.id)).size !== value.tickets.length) {
-    throw new Error('票根数据格式异常，未更新已有界面。');
+    throw new Error('电影票数据格式异常，未更新已有界面。');
   }
 }
