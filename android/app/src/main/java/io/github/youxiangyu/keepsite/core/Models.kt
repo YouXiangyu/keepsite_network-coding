@@ -72,6 +72,8 @@ data class AppState(
     val message: String = "", val capabilities: Capabilities? = null, val cache: CacheInfo = CacheInfo(),
     val peer: PeerView = PeerView(), val draft: DraftView? = null,
     val accountMethods: AccountMethods? = null, val accountPasswordEmail: String? = null,
+    /** Next auth form after a confirmed register/forgot request; cleared whenever another labelled action is accepted. */
+    val authStep: String? = null,
 )
 
 /** UI calls are non-blocking. Listener/media callbacks are delivered on the main thread. */

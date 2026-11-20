@@ -74,7 +74,7 @@ class AppRepository(context: Context) : AppController {
         val accepted = synchronized(lock) {
             if (!current(expected) || !allowed() || label.isNotEmpty() && state.busy.isNotEmpty()) false
             else {
-                if (label.isNotEmpty()) publish(expected) { it.copy(busy = label, error = "", message = "") }
+                if (label.isNotEmpty()) publish(expected) { it.copy(busy = label, error = "", message = "", authStep = null) }
                 true
             }
         }
@@ -193,8 +193,8 @@ class AppRepository(context: Context) : AppController {
         events?.align(value.serverId)
         cache?.refresh()
     }
-    private fun authAction(label: String, path: String, body: JSONObject, success: String) = run(label) { expected ->
-        api.json(path, "POST", body, false); guard(expected); publish { it.copy(message = success) }
+    private fun authAction(label: String, path: String, body: JSONObject, success: String, step: String? = null) = run(label) { expected ->
+        api.json(path, "POST", body, false); guard(expected); publish { it.copy(message = success, authStep = step) }
     }
     override fun login(email: String, password: String) = run("正在登录") { expected ->
         val session = Wire.session(api.json("/api/auth/login", "POST", JSONObject().put("email", email).put("password", password), false))
@@ -202,11 +202,11 @@ class AppRepository(context: Context) : AppController {
         guard(expected); install(session, expected); if (foreground) synchronize(expected)
     }
     override fun register(email: String, password: String) = authAction("正在注册", "/api/auth/register",
-        JSONObject().put("email", email).put("password", password), "请查收验证邮件，并输入验证码。")
+        JSONObject().put("email", email).put("password", password), "请查收验证邮件，并输入验证码。", "verify")
     override fun confirmEmail(email: String, code: String) = authAction("正在验证邮箱", "/api/auth/verify-email",
         JSONObject().put("email", email).put("code", code), "邮箱已验证，可以登录。")
     override fun resendEmail(email: String) = authAction("正在发送验证码", "/api/auth/resend-code", JSONObject().put("email", email), "验证码请求已提交，请查收邮件。")
-    override fun resetPassword(email: String) = authAction("正在发送重置邮件", "/api/auth/forgot-password", JSONObject().put("email", email), "重置请求已提交，请查收邮件。")
+    override fun resetPassword(email: String) = authAction("正在发送重置邮件", "/api/auth/forgot-password", JSONObject().put("email", email), "重置请求已提交，请查收邮件。", "reset")
     override fun confirmPassword(email: String, code: String, password: String) = authAction("正在重置密码", "/api/auth/reset-password",
         JSONObject().put("email", email).put("code", code).put("password", password), "密码已重置，请重新登录。")
     override fun refreshAccountMethods() = run("正在读取登录方式") { expected ->

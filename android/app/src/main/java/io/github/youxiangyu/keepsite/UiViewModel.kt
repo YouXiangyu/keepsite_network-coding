@@ -17,6 +17,8 @@ class UiViewModel(application: Application) : AndroidViewModel(application) {
     var mineScroll = 0
     var authMode = "login"
     var authEmail = ""
+    /** (form that sent the request, form to open once that request succeeds) */
+    var authPending: Pair<String, String>? = null
     var awaitingDraft = false
     var editorWasOpen = false
     var afterDraftRoute = "library"

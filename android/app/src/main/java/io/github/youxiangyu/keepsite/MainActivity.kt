@@ -134,7 +134,7 @@ class MainActivity : AppCompatActivity() {
                 when {
                     model.route == "editor" -> leaveDraft()
                     model.route != "library" -> navigate(parentRoute(model.route))
-                    controller.snapshot().session?.authenticated != true && model.authMode != "login" -> { model.authMode = "login"; redraw() }
+                    controller.snapshot().session?.authenticated != true && model.authMode != "login" -> setAuthMode("login")
                     else -> { isEnabled = false; onBackPressedDispatcher.onBackPressed(); isEnabled = true }
                 }
             }
@@ -218,6 +218,13 @@ class MainActivity : AppCompatActivity() {
         binding.notice.setTextColor(getColor(if (state.error.isBlank()) R.color.mv_muted else R.color.mv_error))
         binding.notice.background = if (state.error.isBlank()) noticeSurface else errorSurface
         val authenticated = state.session?.authenticated == true
+        model.authPending?.let { (from, next) ->
+            if (authenticated || model.authMode != from) model.authPending = null
+            else if (state.busy.isEmpty()) {
+                model.authPending = null
+                if (state.error.isEmpty() && state.authStep == next) model.authMode = next
+            }
+        }
         if (binding.navigation.isEmpty()) {
             listOf("票夹" to "library", "录入电影票" to "editor", "我的" to "mine").forEach { (label, route) ->
                 binding.navigation.addView(navigationItem(label, route) {
@@ -333,6 +340,13 @@ class MainActivity : AppCompatActivity() {
     }
     private fun pageTitle(text: String): TextView = label(text, Type.Display, heading = true)
     private fun sectionTitle(text: String): TextView = label(text, Type.Title, heading = true)
+    private fun setAuthMode(mode: String) { model.authMode = mode; model.authPending = null; redraw() }
+    private fun submitAuth(next: String, request: () -> Unit) {
+        val before = controller.snapshot(); request(); val after = controller.snapshot()
+        // Acceptance publishes busy synchronously; a fast request may already show its own result.
+        val accepted = after.busy.isNotEmpty() && after.authStep == null || after !== before && after.busy.isEmpty() && after.authStep == next
+        model.authPending = if (accepted) model.authMode to next else null
+    }
     private fun LinearLayout.addWrapped(view: View, top: Int = 0, gravity: Int = Gravity.START) {
         addView(view, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(top); this.gravity = gravity })
     }
@@ -373,15 +387,15 @@ class MainActivity : AppCompatActivity() {
             if (model.authMode in listOf("verify", "reset")) body.add(code, Space.M)
             if (model.authMode in listOf("login", "register", "reset")) body.add(password, Space.M)
             if (model.authMode in listOf("register", "reset")) body.add(label("密码需为 8–128 个字符，不限制字符组合。", Type.Caption), Space.S)
-            if (model.authMode == "login") body.addWrapped(action("忘记密码？", ButtonKind.Quiet) { model.authMode = "forgot"; redraw() }, gravity = Gravity.END)
+            if (model.authMode == "login") body.addWrapped(action("忘记密码？", ButtonKind.Quiet) { setAuthMode("forgot") }, gravity = Gravity.END)
             body.add(action(when (model.authMode) { "register" -> "创建账户"; "verify" -> "验证邮箱"; "forgot" -> "发送重置验证码"; "reset" -> "更新密码"; else -> "登录" }, ButtonKind.Primary) {
                 if (controller.snapshot().busy.isNotBlank()) return@action
                 val address = email.text.toString().trim()
                 if (address.isBlank()) { email.error = "请输入邮箱"; return@action }
                 when (model.authMode) {
-                    "register" -> { controller.register(address, password.text.toString()); model.authMode = "verify"; redraw() }
+                    "register" -> submitAuth("verify") { controller.register(address, password.text.toString()) }
                     "verify" -> controller.confirmEmail(address, code.text.toString().trim())
-                    "forgot" -> { controller.resetPassword(address); model.authMode = "reset"; redraw() }
+                    "forgot" -> submitAuth("reset") { controller.resetPassword(address) }
                     "reset" -> controller.confirmPassword(address, code.text.toString().trim(), password.text.toString())
                     else -> controller.login(address, password.text.toString())
                 }
@@ -389,12 +403,12 @@ class MainActivity : AppCompatActivity() {
             if (model.authMode == "verify") body.add(action("重新发送验证码", ButtonKind.Text) { controller.resendEmail(email.text.toString().trim()) }, Space.S)
             when (model.authMode) {
                 "login" -> {
-                    body.addWrapped(action("还没有账户？注册账户", ButtonKind.Quiet) { model.authMode = "register"; redraw() }, Space.L, Gravity.CENTER_HORIZONTAL)
-                    body.addWrapped(action("已有验证码", ButtonKind.Quiet) { model.authMode = "verify"; redraw() }, Gravity.CENTER_HORIZONTAL)
+                    body.addWrapped(action("还没有账户？注册账户", ButtonKind.Quiet) { setAuthMode("register") }, Space.L, Gravity.CENTER_HORIZONTAL)
+                    body.addWrapped(action("已有验证码", ButtonKind.Quiet) { setAuthMode("verify") }, gravity = Gravity.CENTER_HORIZONTAL)
                 }
-                "register" -> body.addWrapped(action("已经有账户？登录", ButtonKind.Quiet) { model.authMode = "login"; redraw() }, Space.L, Gravity.CENTER_HORIZONTAL)
-                "forgot" -> body.addWrapped(action("已有重置码", ButtonKind.Quiet) { model.authMode = "reset"; redraw() }, Space.L, Gravity.CENTER_HORIZONTAL)
-                else -> body.addWrapped(action("返回登录", ButtonKind.Quiet) { model.authMode = "login"; redraw() }, Space.L, Gravity.CENTER_HORIZONTAL)
+                "register" -> body.addWrapped(action("已经有账户？登录", ButtonKind.Quiet) { setAuthMode("login") }, Space.L, Gravity.CENTER_HORIZONTAL)
+                "forgot" -> body.addWrapped(action("已有重置码", ButtonKind.Quiet) { setAuthMode("reset") }, Space.L, Gravity.CENTER_HORIZONTAL)
+                else -> body.addWrapped(action("返回登录", ButtonKind.Quiet) { setAuthMode("login") }, Space.L, Gravity.CENTER_HORIZONTAL)
             }
         } else if (session.googleEnabled && model.authMode !in listOf("login", "register")) {
             body.add(action("使用 Google 继续") { controller.startGoogle(::openUrl) }, Space.XL)

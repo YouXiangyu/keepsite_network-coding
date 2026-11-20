@@ -131,7 +131,7 @@ h1 { font-size: clamp(28px, 3.2vw, 36px); font-weight: 700; line-height: 1.25; l
   .ticket-editor-actions > .primary-button { flex: 1 1 160px; }
 }
 .status-note { background: var(--soft); padding: 16px; border-radius: var(--radius-control); font-size: 14px; line-height: 1.7; color: #4a4f57; }
-@media (max-width: 1100px) { .ticket-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } .account-actions span { display: none; } .detail-layout, .ticket-editor > fieldset { gap: 32px; } .device-panels { grid-template-columns: 1fr; } }
+@media (max-width: 1100px) { .ticket-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } .account-actions span { display: none; } .detail-layout, .ticket-editor > fieldset { gap: 32px; } .ticket-editor > fieldset { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .device-panels { grid-template-columns: 1fr; } }
 @media (max-width: 760px) { .app-header { padding: 16px 20px; gap: 12px; flex-wrap: wrap; } .app-header > a { flex: 1; } .app-header nav { order: 3; width: 100%; } .app-header nav a { flex: 1; justify-content: center; } .workspace { padding: 28px 20px 56px; } .page-heading { align-items: start; flex-direction: column; gap: 8px; } .ticket-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 14px; } .detail-layout, .ticket-editor > fieldset { grid-template-columns: 1fr; gap: 24px; } .detail-layout .ticket-image { max-height: 540px; } .upload-card { max-height: 440px; } .empty-state { padding: 48px 16px; } }
 
 .media-availability { padding: 8px 0 0; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }

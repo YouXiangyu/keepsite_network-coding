@@ -370,7 +370,7 @@ test.describe('monthly review', () => {
 
   test('session expiry removes private month and profile views before another login', async ({ page }) => {
     const api = await mockApi(page, { user: 'a' }); api.data.set('a', { tickets: monthlyTickets() });
-    await page.goto('/mine'); await expect(page.locator('.profile-stats dd')).toHaveText(['14 张', '7 个']);
+    await page.goto('/mine'); await expect(page.locator('.profile-stats')).toHaveText('14 张电影票 · 7 个观影月份');
     await page.route('**/api/sync/changes?**', route => route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ detail: '会话已失效' }) }));
     api.data.get('a')!.tickets[0].version++; api.revision++;
     await expect(page.getByRole('button', { name: '登录', exact: true })).toBeVisible();
