@@ -28,6 +28,8 @@
 .month-photo:nth-child(2) { inset: 3% 5% 9% 18%; z-index: 0; transform: rotate(5deg); }
 .month-photo .ticket-media, .month-photo .ticket-image { height: 100%; min-height: 0; aspect-ratio: auto; border-radius: 2px; }
 .month-photo .media-availability, .month-photo .image-unavailable { display: none; }
+.month-cover-error { display: none; }
+.month-card:has(.month-photo:first-child [data-media-status='error']) .month-cover-error { display: block; color: var(--muted); font-size: 13px; }
 .month-card h3 { margin: 10px 0 2px; font-size: 15px; font-weight: 600; }
 .month-card > p { margin: 0; color: var(--muted); font-size: 13px; }
 .mine-settings { display: grid; max-width: 720px; margin-top: 40px; border: 1px solid var(--line); border-radius: var(--radius-panel); overflow: hidden; background: #fff; }

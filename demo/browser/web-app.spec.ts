@@ -318,6 +318,7 @@ test.describe('monthly review', () => {
     api.data.get('a')!.tickets.push(ticket); api.revision++;
     await expect(page.locator('.month-card h3')).toHaveText(['2026年10月']);
     await expect(page.locator('.recent-tickets [data-media-status="error"]')).toHaveCount(1);
+    await expect(page.locator('.month-card').getByText('封面暂不可用')).toBeVisible();
     await expect(page.locator('.month-card button,.recent-tickets button')).toHaveCount(0);
     await page.locator('.month-card').click();
     await page.getByRole('searchbox').fill('无匹配');

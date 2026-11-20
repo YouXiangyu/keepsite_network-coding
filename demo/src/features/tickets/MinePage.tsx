@@ -8,6 +8,7 @@ import { HOME_MONTH_LIMIT, MONTH_PREVIEW_LIMIT, type MonthCollection, type ticke
 export function MonthCards({ months }: { months: MonthCollection[] }) {
   return <div className="month-grid">{months.map(group => <Link key={group.month} to={`/months/${group.month}`} className="month-card">
     <div className="month-covers" aria-hidden="true">{group.tickets.slice(0, MONTH_PREVIEW_LIMIT).map(ticket => <div className="month-photo" key={ticket.id}><TicketImage retry={false} media={ticket.media.poster ?? ticket.media.original} title={ticket.fields.title} /></div>)}</div>
+    <span className="month-cover-error">封面暂不可用</span>
     <h3>{group.label}</h3><p>{group.tickets.length} 张</p>
   </Link>)}</div>;
 }
