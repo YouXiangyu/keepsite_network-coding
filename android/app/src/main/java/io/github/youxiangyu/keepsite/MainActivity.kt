@@ -134,7 +134,7 @@ class MainActivity : AppCompatActivity() {
                 when {
                     model.route == "editor" -> leaveDraft()
                     model.route != "library" -> navigate(parentRoute(model.route))
-                    controller.snapshot().session?.authenticated != true && model.authMode != "login" -> setAuthMode("login")
+                    controller.snapshot().session?.authenticated != true && model.authForm.mode != "login" -> setAuthMode("login")
                     else -> { isEnabled = false; onBackPressedDispatcher.onBackPressed(); isEnabled = true }
                 }
             }
@@ -218,13 +218,7 @@ class MainActivity : AppCompatActivity() {
         binding.notice.setTextColor(getColor(if (state.error.isBlank()) R.color.mv_muted else R.color.mv_error))
         binding.notice.background = if (state.error.isBlank()) noticeSurface else errorSurface
         val authenticated = state.session?.authenticated == true
-        model.authPending?.let { (from, next) ->
-            if (authenticated || model.authMode != from) model.authPending = null
-            else if (state.busy.isEmpty()) {
-                model.authPending = null
-                if (state.error.isEmpty() && state.authStep == next) model.authMode = next
-            }
-        }
+        model.authForm.update(state)
         if (binding.navigation.isEmpty()) {
             listOf("票夹" to "library", "录入电影票" to "editor", "我的" to "mine").forEach { (label, route) ->
                 binding.navigation.addView(navigationItem(label, route) {
@@ -247,7 +241,7 @@ class MainActivity : AppCompatActivity() {
         updateChromeVisibility()
         val key: Any = when {
             state.session == null -> "boot"
-            !authenticated -> listOf("auth", model.authMode, state.session.configured, state.session.emailEnabled, state.session.googleEnabled)
+            !authenticated -> listOf("auth", model.authForm.mode, state.session.configured, state.session.emailEnabled, state.session.googleEnabled)
             model.route == "editor" -> listOf("editor", state.draft?.operationId)
             model.route == "detail" -> listOf("detail", state.tickets.find { it.id == model.detailId })
             model.route == "mine" -> listOf("mine", state.session.name, state.session.email, state.ready,
@@ -340,16 +334,7 @@ class MainActivity : AppCompatActivity() {
     }
     private fun pageTitle(text: String): TextView = label(text, Type.Display, heading = true)
     private fun sectionTitle(text: String): TextView = label(text, Type.Title, heading = true)
-    private fun setAuthMode(mode: String) { model.authMode = mode; model.authPending = null; redraw() }
-    private fun submitAuth(next: String, request: () -> Unit) {
-        val before = controller.snapshot()
-        request()
-        val after = controller.snapshot()
-        // Success can be published before the worker clears busy.
-        val accepted = after !== before &&
-            (after.authStep == next || (after.authStep == null && after.busy.isNotEmpty()))
-        model.authPending = if (accepted) model.authMode to next else null
-    }
+    private fun setAuthMode(mode: String) { model.authForm.open(mode); redraw() }
     private fun LinearLayout.addWrapped(view: View, top: Int = 0, gravity: Int = Gravity.START) {
         addView(view, LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(top); this.gravity = gravity })
     }
@@ -359,13 +344,13 @@ class MainActivity : AppCompatActivity() {
         val titles = mapOf("login" to "欢迎回来", "register" to "创建账号", "verify" to "验证邮箱", "forgot" to "找回密码", "reset" to "设置新密码")
         val hints = mapOf("login" to "登录后继续整理你的电影票。", "register" to "用邮箱创建账号，开始记录每一次观影。", "verify" to "输入邮件中的验证码，完成账户验证。",
             "forgot" to "填写注册邮箱，我们会发送密码重置验证码。", "reset" to "输入邮件验证码和新密码，重新登录你的票夹。")
-        body.add(pageTitle(titles[model.authMode] ?: "登录"), Space.L)
+        body.add(pageTitle(titles[model.authForm.mode] ?: "登录"), Space.L)
         if (!session.configured) {
             body.add(label("服务器尚未配置身份验证，请稍后重试。", color = R.color.mv_muted), Space.S)
             body.add(action("重新连接", clicked = controller::refresh), Space.XL); return
         }
-        body.add(label(hints[model.authMode].orEmpty(), color = R.color.mv_muted), Space.S)
-        if (session.googleEnabled && model.authMode in listOf("login", "register")) {
+        body.add(label(hints[model.authForm.mode].orEmpty(), color = R.color.mv_muted), Space.S)
+        if (session.googleEnabled && model.authForm.mode in listOf("login", "register")) {
             body.add(action("使用 Google 继续") { controller.startGoogle(::openUrl) }, Space.XL)
             if (session.emailEnabled) body.add(row().apply {
                 addView(divider(), LinearLayout.LayoutParams(0, 1, 1f))
@@ -375,37 +360,37 @@ class MainActivity : AppCompatActivity() {
         }
         val email = input("邮箱", 254).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
-            setText(model.authEmail); doAfterTextChanged { model.authEmail = it.toString() }
+            setText(model.authForm.email); doAfterTextChanged { model.authForm.email = it.toString() }
         }
-        val password = input(if (model.authMode == "reset") "设置密码" else "密码", 256).apply {
+        val password = input(if (model.authForm.mode == "reset") "设置密码" else "密码", 256).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
         }
         val code = input("邮件验证码", 20)
         authInputs = if (session.emailEnabled) listOfNotNull(email,
-            password.takeIf { model.authMode in listOf("login", "register", "reset") },
-            code.takeIf { model.authMode in listOf("verify", "reset") }) else emptyList()
+            password.takeIf { model.authForm.mode in listOf("login", "register", "reset") },
+            code.takeIf { model.authForm.mode in listOf("verify", "reset") }) else emptyList()
         authInputs.forEach { it.doAfterTextChanged { updateInstallGuard() } }
         if (session.emailEnabled) {
-            body.add(email, if (session.googleEnabled && model.authMode in listOf("login", "register")) Space.L else Space.XL)
-            if (model.authMode in listOf("verify", "reset")) body.add(code, Space.M)
-            if (model.authMode in listOf("login", "register", "reset")) body.add(password, Space.M)
-            if (model.authMode in listOf("register", "reset")) body.add(label("密码需为 8–128 个字符，不限制字符组合。", Type.Caption), Space.S)
-            if (model.authMode == "login") body.addWrapped(action("忘记密码？", ButtonKind.Quiet) { setAuthMode("forgot") }, gravity = Gravity.END)
-            body.add(action(when (model.authMode) { "register" -> "创建账户"; "verify" -> "验证邮箱"; "forgot" -> "发送重置验证码"; "reset" -> "更新密码"; else -> "登录" }, ButtonKind.Primary) {
+            body.add(email, if (session.googleEnabled && model.authForm.mode in listOf("login", "register")) Space.L else Space.XL)
+            if (model.authForm.mode in listOf("verify", "reset")) body.add(code, Space.M)
+            if (model.authForm.mode in listOf("login", "register", "reset")) body.add(password, Space.M)
+            if (model.authForm.mode in listOf("register", "reset")) body.add(label("密码需为 8–128 个字符，不限制字符组合。", Type.Caption), Space.S)
+            if (model.authForm.mode == "login") body.addWrapped(action("忘记密码？", ButtonKind.Quiet) { setAuthMode("forgot") }, gravity = Gravity.END)
+            body.add(action(when (model.authForm.mode) { "register" -> "创建账户"; "verify" -> "验证邮箱"; "forgot" -> "发送重置验证码"; "reset" -> "更新密码"; else -> "登录" }, ButtonKind.Primary) {
                 if (controller.snapshot().busy.isNotBlank()) return@action
                 val address = email.text.toString().trim()
                 if (address.isBlank()) { email.error = "请输入邮箱"; return@action }
-                when (model.authMode) {
-                    "register" -> submitAuth("verify") { controller.register(address, password.text.toString()) }
+                when (model.authForm.mode) {
+                    "register" -> controller.register(model.authForm.begin(address, "verify"), password.text.toString())
                     "verify" -> controller.confirmEmail(address, code.text.toString().trim())
-                    "forgot" -> submitAuth("reset") { controller.resetPassword(address) }
+                    "forgot" -> controller.resetPassword(model.authForm.begin(address, "reset"))
                     "reset" -> controller.confirmPassword(address, code.text.toString().trim(), password.text.toString())
                     else -> controller.login(address, password.text.toString())
                 }
             }, Space.XL)
-            if (model.authMode == "verify") body.add(action("重新发送验证码", ButtonKind.Text) { controller.resendEmail(email.text.toString().trim()) }, Space.S)
-            when (model.authMode) {
+            if (model.authForm.mode == "verify") body.add(action("重新发送验证码", ButtonKind.Text) { controller.resendEmail(email.text.toString().trim()) }, Space.S)
+            when (model.authForm.mode) {
                 "login" -> {
                     body.addWrapped(action("还没有账户？注册账户", ButtonKind.Quiet) { setAuthMode("register") }, Space.L, Gravity.CENTER_HORIZONTAL)
                     body.addWrapped(action("已有验证码", ButtonKind.Quiet) { setAuthMode("verify") }, gravity = Gravity.CENTER_HORIZONTAL)
@@ -414,7 +399,7 @@ class MainActivity : AppCompatActivity() {
                 "forgot" -> body.addWrapped(action("已有重置码", ButtonKind.Quiet) { setAuthMode("reset") }, Space.L, Gravity.CENTER_HORIZONTAL)
                 else -> body.addWrapped(action("返回登录", ButtonKind.Quiet) { setAuthMode("login") }, Space.L, Gravity.CENTER_HORIZONTAL)
             }
-        } else if (session.googleEnabled && model.authMode !in listOf("login", "register")) {
+        } else if (session.googleEnabled && model.authForm.mode !in listOf("login", "register")) {
             body.add(action("使用 Google 继续") { controller.startGoogle(::openUrl) }, Space.XL)
         }
         body.add(label("登录后，你的电影票只在自己的账户中保存与管理。", Type.Caption, R.color.mv_muted).apply { gravity = Gravity.CENTER_HORIZONTAL }, Space.XL)
