@@ -21,7 +21,8 @@
     "@phosphor-icons/react": "2.1.10",
     "@radix-ui/react-dialog": "1.1.19",
     "react": "19.2.7",
-    "react-dom": "19.2.7"
+    "react-dom": "19.2.7",
+    "pinyin-pro": "3.29.5"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1",
