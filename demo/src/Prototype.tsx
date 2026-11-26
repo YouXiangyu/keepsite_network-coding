@@ -20,6 +20,7 @@ import PosterAttribution from './features/tickets/PosterAttribution';
 import DeviceStatus from './features/tickets/DeviceStatus';
 import AccountMethods from './features/AccountMethods';
 import { sourceLabels } from './features/tickets/processing';
+import { matchesTicketSearch } from './features/tickets/search';
 
 const mobileNavigation = window.matchMedia('(max-width: 760px)');
 function subscribeToNavigationLayout(onChange: () => void) {
@@ -109,7 +110,7 @@ function LibraryView({ tickets, month, initial, remember, busy, retry }: {
   const update = (change: Partial<Pick<ListContext, 'search' | 'sort'>>) => {
     const next = { ...context, ...change }; setContext(next); remember(next);
   };
-  const matching = orderedTickets(tickets.filter(ticket => `${ticket.fields.title} ${ticket.fields.cinema}`.toLocaleLowerCase().includes(context.search.trim().toLocaleLowerCase())), context.sort);
+  const matching = orderedTickets(tickets.filter(ticket => matchesTicketSearch(context.search, ticket.fields.title, ticket.fields.cinema)), context.sort);
   return <>{month && <Link to="/mine" className="back-link"><ArrowLeft size={18} />返回我的</Link>}<header className="page-heading collection-heading"><div className="collection-title"><div><span className="eyebrow">FILM JOURNAL</span><h1>{month ? monthLabel(month) : '电影'}</h1><p>留住每一次走进电影院的时刻。</p></div><span className="collection-count" aria-label={`${tickets.length} 张电影票`}>{tickets.length} 张</span></div><Link to="/tickets/new" className="primary-button collection-upload"><Plus size={20} />录入电影票</Link></header>
     <div className="collection-tools"><label className="collection-sort"><span className="visually-hidden">电影票排序</span><select value={context.sort} onChange={event => update({ sort: event.target.value === 'oldest' ? 'oldest' : 'recent' })}><option value="recent">最近添加</option><option value="oldest">最早添加</option></select><CaretDown size={15} aria-hidden="true" /></label><button className="icon-button" aria-label="刷新票夹" onClick={retry} disabled={busy}><ArrowClockwise size={19} /></button></div>
     <label className="collection-search"><MagnifyingGlass size={22} /><span className="visually-hidden">搜索片名或影院</span><input type="search" value={context.search} onChange={event => update({ search: event.target.value })} placeholder="搜索片名或影院" /></label>

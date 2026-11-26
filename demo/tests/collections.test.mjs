@@ -10,6 +10,7 @@ const hook = registerHooks({ resolve(specifier, context, nextResolve) {
   return nextResolve(specifier, context);
 } });
 const { ticketMonth, monthLabel, orderedTickets, ticketCollections, RECENT_TICKET_LIMIT, HOME_MONTH_LIMIT, MONTH_PREVIEW_LIMIT } = await import('../src/features/tickets/collections.ts');
+const { matchesTicketSearch } = await import('../src/features/tickets/search.ts');
 hook.deregister();
 const item = (id, showtime = '2026-10-22T19:30', createdAt = 100) => ({ ...sampleItem(id), fields: { ...sampleItem(id).fields, showtime }, createdAt });
 const ids = tickets => tickets.map(ticket => ticket.id);
@@ -128,4 +129,27 @@ test('new snapshots immediately derive additions, date migrations, deletion and 
   assert.deepEqual(before.months.map(group => group.month), ['2026-10']);
   assert.deepEqual(ticketCollections([]), { tickets: [], recent: [], months: [], undated: [] });
   assert.deepEqual(ids(ticketCollections([item('account-b', '2025-01-01T12:00')]).tickets), ['account-b']);
+});
+
+
+test('ticket search supports continuous, ordered-subsequence, full-pinyin and initials matches for both fields', () => {
+  const cases = [
+    ['星际穿越', '星穿', true],
+    ['星际穿越', 'xingjichuanyue', true],
+    ['星际穿越', 'xjcy', true],
+    ['万达影城', '万影', true],
+    ['万达影城', 'wandayingcheng', true],
+    ['万达影城', 'wdyc', true],
+    ['InterStellar', 'INTER', true],
+    ['InterStellar', 'stellar', true],
+    ['星际穿越', '穿星', false],
+    ['万达影城', 'wdyx', false],
+  ];
+  for (const [field, query, expected] of cases) {
+    assert.equal(matchesTicketSearch(query, field), expected, `${query} against ${field}`);
+  }
+  assert.equal(matchesTicketSearch('万影', '星际穿越', '万达影城'), true);
+  assert.equal(matchesTicketSearch('xjcy', '万达影城', '星际穿越'), true);
+  assert.equal(matchesTicketSearch('  ', '任意片名'), true);
+  assert.equal(matchesTicketSearch('xing-ji-chuan-yue', '星际穿越'), true);
 });

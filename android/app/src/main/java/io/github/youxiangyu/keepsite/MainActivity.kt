@@ -1,5 +1,6 @@
 package io.github.youxiangyu.keepsite
 
+import android.icu.text.Transliterator
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import android.content.Intent
@@ -465,7 +466,7 @@ class MainActivity : AppCompatActivity() {
         val query = if (month == null) model.libraryQuery.trim() else ""
         val filtered = state.tickets.filter {
             (month == null || Presentation.month(it.fields.showtime, it.createdAt) == month) &&
-                (query.isBlank() || it.fields.title.contains(query, true) || it.fields.cinema.contains(query, true))
+                (query.isBlank() || TicketSearch.matches(query, it.fields.title, it.fields.cinema))
         }
         val ordered = if (model.libraryOldestFirst && month == null) filtered.sortedWith(compareBy<Ticket> { it.createdAt }.thenBy { it.id })
             else filtered.sortedWith(compareByDescending<Ticket> { it.createdAt }.thenBy { it.id })
