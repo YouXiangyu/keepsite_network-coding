@@ -1,6 +1,5 @@
 package io.github.youxiangyu.keepsite
 
-import android.icu.text.Transliterator
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import android.content.Intent
