@@ -424,3 +424,18 @@ def test_operation_status_reads_persistent_fact_without_mutating_state(tmp_path)
         assert account_snapshot(client) == state
         with reopened.state.store.transaction() as db:
             assert db.execute("SELECT COUNT(*) FROM operations").fetchone()[0] == 1
+
+
+def test_account_cover_preference(client):
+    path = "/api/account/cover-preference"
+    assert client.get(path).json() == {"coverPreference": "poster"}
+    assert client.put(path, headers=WRITE_HEADERS, json={"coverPreference": "original"}).json() == {"coverPreference": "original"}
+    assert client.get(path).json() == {"coverPreference": "original"}
+    assert client.put(path, headers=WRITE_HEADERS, json={"coverPreference": "invalid"}).status_code == 422
+    assert client.put(path, json={"coverPreference": "poster"}).status_code in (401, 403)
+    signed_in(client, "bob")
+    assert client.get(path).json() == {"coverPreference": "poster"}
+    signed_in(client, "alice")
+    assert client.get(path).json() == {"coverPreference": "original"}
+    assert client.put(path, headers=WRITE_HEADERS, json={"coverPreference": "poster"}).status_code == 200
+    assert client.get(path).json() == {"coverPreference": "poster"}

@@ -43,6 +43,20 @@ class AppRepository(context: Context) : AppController {
     private var accountId: String? = null
     private var draft: Draft? = null
     private val syncing = AtomicBoolean()
+    private val checkingCover = AtomicBoolean()
+    private val coverRefresh = object : Runnable {
+        override fun run() {
+            if (!foreground || closed) return
+            if (state.session?.authenticated == true && checkingCover.compareAndSet(false, true)) {
+                run(expected = api.epoch(), completed = { checkingCover.set(false) },
+                    allowed = { foreground && state.session?.authenticated == true }) { expected ->
+                    try { readCoverPreference(expected) }
+                    catch (failure: ApiFailure) { if (failure.status == 401) throw failure }
+                }
+            }
+            main.postDelayed(this, 15_000)
+        }
+    }
     private val pending = HashMap<String, Pair<String, JSONObject>>()
 
     private data class Draft(
@@ -110,7 +124,8 @@ class AppRepository(context: Context) : AppController {
                 publish { it.copy(connected = false, busy = "", peer = it.peer.copy(registered = false, sending = 0, receiving = 0)) }
             }
         }
-        if (foreground) refresh()
+        main.removeCallbacks(coverRefresh)
+        if (foreground) { refresh(); main.post(coverRefresh) }
     }
     private fun stopNetwork() {
         peer?.close(); peer = null; events?.close(); events = null
@@ -192,6 +207,10 @@ class AppRepository(context: Context) : AppController {
             ready = true, cursor = value.cursor, capabilities = value.capabilities, error = "") }
         events?.align(value.serverId)
         cache?.refresh()
+        if (state.coverPreference == null) {
+            try { readCoverPreference(expected) }
+            catch (failure: ApiFailure) { if (failure.status == 401) throw failure }
+        }
     }
     private fun authAction(label: String, path: String, body: JSONObject, success: String, submission: AuthSubmission? = null) = run(label) { expected ->
         api.json(path, "POST", body, false); guard(expected); publish { it.copy(message = success, completedAuth = submission) }
@@ -209,6 +228,21 @@ class AppRepository(context: Context) : AppController {
     override fun resetPassword(submission: AuthSubmission) = authAction("正在发送重置邮件", "/api/auth/forgot-password", JSONObject().put("email", submission.email), "重置请求已提交，请查收邮件。", submission)
     override fun confirmPassword(email: String, code: String, password: String) = authAction("正在重置密码", "/api/auth/reset-password",
         JSONObject().put("email", email).put("code", code).put("password", password), "密码已重置，请重新登录。")
+    private fun checkedCoverPreference(value: JSONObject): String =
+        Wire.text(value, "coverPreference").also { if (it !in setOf("poster", "original")) Wire.invalid() }
+
+    private fun readCoverPreference(expected: Long) {
+        val value = checkedCoverPreference(api.json("/api/account/cover-preference"))
+        guard(expected)
+        if (state.coverPreference != value) publish(expected) { it.copy(coverPreference = value) }
+    }
+
+    override fun setCoverPreference(value: String) = run("正在保存封面设置") { expected ->
+        require(value in setOf("poster", "original"))
+        val saved = checkedCoverPreference(api.json("/api/account/cover-preference", "PUT", JSONObject().put("coverPreference", value)))
+        guard(expected)
+        publish(expected) { it.copy(coverPreference = saved) }
+    }
     override fun refreshAccountMethods() = run("正在读取登录方式") { expected ->
         val methods = Wire.accountMethods(api.json("/api/auth/account/methods"))
         guard(expected); publish { it.copy(accountMethods = methods) }
@@ -522,6 +556,7 @@ class AppRepository(context: Context) : AppController {
     }
     override fun close() {
         photoImporter.close()
+        main.removeCallbacks(coverRefresh)
         synchronized(lock) {
             if (closed) return
             closed = true; foreground = false; api.cancelRequests(); stopAccount(); api.close()

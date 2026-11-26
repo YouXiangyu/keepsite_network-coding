@@ -83,6 +83,10 @@ class Store:
                     id TEXT PRIMARY KEY, email TEXT NOT NULL, name TEXT NOT NULL,
                     revision INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS account_preferences (
+                    user_id TEXT PRIMARY KEY REFERENCES users(id),
+                    cover_preference TEXT NOT NULL CHECK(cover_preference IN ('poster','original'))
+                );
                 CREATE TABLE IF NOT EXISTS assets (
                     id TEXT PRIMARY KEY, object_key TEXT NOT NULL UNIQUE, mime TEXT NOT NULL,
                     size INTEGER NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL,

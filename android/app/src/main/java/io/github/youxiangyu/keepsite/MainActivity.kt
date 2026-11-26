@@ -243,11 +243,11 @@ class MainActivity : AppCompatActivity() {
             state.session == null -> "boot"
             !authenticated -> listOf("auth", model.authForm.mode, state.session.configured, state.session.emailEnabled, state.session.googleEnabled)
             model.route == "editor" -> listOf("editor", state.draft?.operationId)
-            model.route == "detail" -> listOf("detail", state.tickets.find { it.id == model.detailId })
-            model.route == "mine" -> listOf("mine", state.session.name, state.session.email, state.ready,
+            model.route == "detail" -> listOf("detail", state.coverPreference, state.tickets.find { it.id == model.detailId })
+            model.route == "mine" -> listOf("mine", state.session.name, state.session.email, state.ready, state.coverPreference,
                 state.tickets.map { listOf(it.id, it.fields.title, it.fields.showtime, it.createdAt, it.cover.assetId, it.cover.sha256) })
             model.route == "month" -> listOf("month", model.month)
-            model.route == "account" -> listOf("account", state.session.email, state.session.emailEnabled, state.session.googleEnabled, state.accountMethods, state.accountPasswordEmail)
+            model.route == "account" -> listOf("account", state.session.email, state.session.emailEnabled, state.session.googleEnabled, state.accountMethods, state.accountPasswordEmail, state.coverPreference)
             model.route == "sync" -> listOf("sync", state.cache, state.peer)
             model.route == "about" -> "about"
             else -> "library"
@@ -480,18 +480,19 @@ class MainActivity : AppCompatActivity() {
                 else -> "没有匹配的电影票"
             }
         }
-        adapter?.submitTickets(ordered)
+        adapter?.submitTickets(ordered, state.coverPreference)
     }
     private inner class TicketAdapter : RecyclerView.Adapter<TicketAdapter.Holder>(), Closeable {
         private var tickets = emptyList<Ticket>()
         private val bound = mutableSetOf<Holder>()
-        fun submitTickets(value: List<Ticket>) {
-            if (tickets == value) return
-            tickets = value; notifyDataSetChanged()
+        private var coverPreference: String? = null
+        fun submitTickets(value: List<Ticket>, preference: String?) {
+            if (tickets == value && coverPreference == preference) return
+            tickets = value; coverPreference = preference; notifyDataSetChanged()
         }
         fun retryFailedImages() {
             bound.filter { it.box.isAttachedToWindow }.forEach { holder ->
-                tickets.getOrNull(holder.bindingAdapterPosition)?.let { holder.presenter.retryFailed(it.cover) }
+                tickets.getOrNull(holder.bindingAdapterPosition)?.let { holder.presenter.retryFailed(it.coverFor(coverPreference)) }
             }
         }
         inner class Holder(val box: LinearLayout, val image: ImageView, val title: TextView, val caption: TextView, val date: TextView, val meta: TextView) : RecyclerView.ViewHolder(box) {
@@ -513,7 +514,7 @@ class MainActivity : AppCompatActivity() {
             val ticket = tickets[position]; bound.add(holder)
             holder.title.text = ticket.fields.title.ifBlank { "待补充片名" }
             holder.image.contentDescription = "${holder.title.text}封面"
-            (holder.image as TicketCoverView).setRatio(ticket.cover.width, ticket.cover.height)
+            (holder.image as TicketCoverView).setRatio(ticket.coverFor(coverPreference).width, ticket.coverFor(coverPreference).height)
             holder.date.text = ticket.fields.showtime.take(10).replace('-', '.').ifBlank { "日期待补充" }
             holder.meta.text = listOf(
                 if (ticket.processingStatus in listOf("ready", "not_started")) "" else Presentation.processing(ticket.processingStatus),
@@ -523,14 +524,14 @@ class MainActivity : AppCompatActivity() {
             holder.meta.isVisible = holder.meta.text.isNotBlank()
             holder.box.contentDescription = "打开${holder.title.text}详情"
             holder.box.setOnClickListener { openDetail(ticket, model.route) }
-            holder.presenter.bind(ticket.cover)
+            holder.presenter.bind(ticket.coverFor(coverPreference))
         }
         override fun getItemCount() = tickets.size
         override fun onViewRecycled(holder: Holder) { holder.presenter.close(); bound.remove(holder) }
         override fun onViewDetachedFromWindow(holder: Holder) { holder.presenter.close() }
         override fun onViewAttachedToWindow(holder: Holder) {
             val position = holder.bindingAdapterPosition
-            if (position != RecyclerView.NO_POSITION) holder.presenter.bind(tickets[position].cover)
+            if (position != RecyclerView.NO_POSITION) holder.presenter.bind(tickets[position].coverFor(coverPreference))
         }
         override fun close() { bound.forEach { it.presenter.close() }; bound.clear() }
     }
@@ -576,12 +577,12 @@ class MainActivity : AppCompatActivity() {
         val ticket = state.tickets.find { it.id == model.detailId }
         if (ticket == null) { body.add(label("这张电影票已不存在。", color = R.color.mv_muted), Space.XL); return }
         body.add(pageTitle(ticket.fields.title.ifBlank { "待补充片名" }), Space.XS)
-        picture(body, "电影封面", ticket.cover)
+        picture(body, "电影封面", ticket.coverFor(state.coverPreference))
         infoPanel(body, "电影票信息", listOf("片名", "影院", "影厅", "座位", "放映时间").zip(ticket.fields.copy(showtime = ticket.fields.showtime.replace('T', ' ')).values()))
         val saved = infoPanel(body, "保存状态", listOfNotNull("自动处理" to Presentation.processing(ticket.processingStatus),
             "原票" to Presentation.cloud(ticket.original.cloudStatus), ticket.poster?.let { "海报" to Presentation.cloud(it.cloudStatus) }))
         ticket.processingError?.takeIf { it.isNotBlank() }?.let { saved.addDivider(); saved.add(label(it, color = R.color.mv_error).apply { setPadding(0, dp(Space.M), 0, dp(Space.M)) }) }
-        ticket.poster?.source?.let { source ->
+        ticket.poster?.source?.takeIf { state.coverPreference == "poster" }?.let { source ->
             val facts = when (source) {
                 is CommonsPosterSource -> listOf("作者" to source.author.ifBlank { "未提供" }, "许可" to source.licenseName)
                 is TmdbPosterSource -> listOf("来源" to "TMDB", "版权" to "海报版权归原权利人所有")
@@ -593,7 +594,7 @@ class MainActivity : AppCompatActivity() {
             if (Presentation.safeExternalUrl(terms)) links.addView(action("查看使用条款", ButtonKind.Text) { openUrl(terms) }.apply { setPadding(0, 0, dp(Space.L), 0) })
             if (links.isNotEmpty()) { panel.addDivider(); panel.add(links) }
         }
-        if (ticket.poster != null) {
+        if (ticket.poster != null && state.coverPreference == "poster") {
             val original = column(); original.visibility = View.GONE; var presenter: MediaPresenter? = null
             val toggle = action("查看原票照片", ButtonKind.Text) {}
             toggle.setOnClickListener {
@@ -745,7 +746,7 @@ class MainActivity : AppCompatActivity() {
         }, LinearLayout.LayoutParams(dp(Size.INDICATOR), dp(Size.INDICATOR)).apply { marginStart = dp(Space.XS) })
     }
     private fun thumbnail(image: ImageView, ticket: Ticket, caption: TextView = TextView(this)) {
-        media.add(MediaPresenter(controller, imageExecutor, image, caption, compact = true, maxEdge = THUMBNAIL_EDGE).also { it.bind(ticket.cover) })
+        media.add(MediaPresenter(controller, imageExecutor, image, caption, compact = true, maxEdge = THUMBNAIL_EDGE).also { it.bind(ticket.coverFor(controller.snapshot().coverPreference)) })
     }
     private fun recentCard(ticket: Ticket): LinearLayout = column().apply {
         val title = ticket.fields.title.ifBlank { "待补充片名" }
@@ -795,6 +796,19 @@ class MainActivity : AppCompatActivity() {
             }, LinearLayout.LayoutParams(0, -2, 1f))
         }, Space.L)
 
+        body.add(sectionTitle("封面显示"), Space.XL)
+        body.add(panel().apply {
+            add(label("同一账号的 Web 与 Android 共用此设置。"), Space.M)
+            val preference = state.coverPreference
+            if (preference == null) {
+                add(action("读取封面设置", clicked = controller::refresh), Space.M)
+            } else {
+                add(label(if (preference == "poster") "当前：展示电影海报" else "当前：仅展示原票照片"), Space.M)
+                add(action(if (preference == "poster") "切换为仅展示原票照片" else "切换为展示电影海报") {
+                    controller.setCoverPreference(if (preference == "poster") "original" else "poster")
+                }, Space.M)
+            }
+        }, Space.M)
         body.add(sectionTitle("登录方式"), Space.XL)
         body.add(panel().apply {
             add(label("绑定后可使用任一方式独立登录当前票夹。其他票夹的登录方式不能合并到此账号。"), Space.M)

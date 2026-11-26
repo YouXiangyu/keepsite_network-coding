@@ -27,6 +27,26 @@ def install_routes(app: FastAPI, store, sync_http):
     def health():
         return {"status": "ok"}
 
+    @app.get("/api/account/cover-preference")
+    def get_cover_preference(request: Request):
+        user_id = current_user(request)
+        with store.transaction() as db:
+            store.require_user(db, user_id)
+            row = db.execute("SELECT cover_preference FROM account_preferences WHERE user_id=?", (user_id,)).fetchone()
+        return {"coverPreference": row[0] if row else "poster"}
+
+    @app.put("/api/account/cover-preference")
+    def set_cover_preference(request: Request, body: dict):
+        preference = body.get("coverPreference")
+        if set(body) != {"coverPreference"} or preference not in ("poster", "original"):
+            raise StoreError(422, "封面显示偏好无效。")
+        user_id = current_user(request)
+        with store.transaction(True) as db:
+            store.require_user(db, user_id)
+            db.execute("INSERT INTO account_preferences VALUES (?,?) ON CONFLICT(user_id) DO UPDATE SET cover_preference=excluded.cover_preference",
+                       (user_id, preference))
+        return {"coverPreference": preference}
+
     @app.get("/api/sync/snapshot")
     def snapshot(request: Request, limit: int = Query(100, ge=1, le=200), pageToken: str | None = None):
         return sync_http.snapshot(current_user(request), limit=limit, page_token=pageToken)

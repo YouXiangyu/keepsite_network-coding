@@ -3,11 +3,16 @@ import type { User } from '../../api';
 import Link from '../../app/Link';
 import { detailPath } from '../../app/routes';
 import TicketImage from './TicketImage';
+import { useTicketCover } from './coverPreference';
+function CoverImage({ ticket }: { ticket: import('../../data').Ticket }) {
+  const cover = useTicketCover(ticket);
+  return <TicketImage retry={false} media={cover} title={ticket.fields.title} />;
+}
 import { HOME_MONTH_LIMIT, MONTH_PREVIEW_LIMIT, type MonthCollection, type ticketCollections } from './collections';
 
 export function MonthCards({ months }: { months: MonthCollection[] }) {
   return <div className="month-grid">{months.map(group => <Link key={group.month} to={`/months/${group.month}`} className="month-card">
-    <div className="month-covers" aria-hidden="true">{group.tickets.slice(0, MONTH_PREVIEW_LIMIT).map(ticket => <div className="month-photo" key={ticket.id}><TicketImage retry={false} media={ticket.media.poster ?? ticket.media.original} title={ticket.fields.title} /></div>)}</div>
+    <div className="month-covers" aria-hidden="true">{group.tickets.slice(0, MONTH_PREVIEW_LIMIT).map(ticket => <div className="month-photo" key={ticket.id}><CoverImage ticket={ticket} /></div>)}</div>
     <span className="month-cover-error">封面暂不可用</span>
     <h3>{group.label}</h3><p>{group.tickets.length} 张</p>
   </Link>)}</div>;
@@ -20,7 +25,7 @@ export default function MinePage({ user, collection, logoutBusy, onLogout }: { u
     <p className="profile-stats">{collection.tickets.length} 张电影票 · {collection.months.length} 个观影月份</p>
     {collection.tickets.length ? <>
       <section className="mine-section" aria-labelledby="recent-title"><h2 id="recent-title" className="section-heading"><Link to="/tickets" className="section-link">最近添加<CaretRight size={18} /></Link></h2>
-        <ul className="recent-tickets" aria-label="最近添加的电影票">{collection.recent.map(ticket => <li key={ticket.id}><Link to={detailPath(ticket.id, '/mine')}><TicketImage retry={false} media={ticket.media.poster ?? ticket.media.original} title={ticket.fields.title} /><h3>{ticket.fields.title || '待补充片名'}</h3></Link></li>)}</ul>
+        <ul className="recent-tickets" aria-label="最近添加的电影票">{collection.recent.map(ticket => <li key={ticket.id}><Link to={detailPath(ticket.id, '/mine')}><CoverImage ticket={ticket} /><h3>{ticket.fields.title || '待补充片名'}</h3></Link></li>)}</ul>
       </section>
       <section className="mine-section" aria-labelledby="months-title"><h2 id="months-title" className="section-heading">{collection.months.length > HOME_MONTH_LIMIT ? <Link to="/months" className="section-link">按月回看<CaretRight size={18} /></Link> : '按月回看'}</h2><MonthCards months={collection.months.slice(0, HOME_MONTH_LIMIT)} />
         {!!collection.undated.length && <p className="field-hint">{collection.undated.length} 张电影票日期不可用，可在<Link to="/tickets" className="text-link">票夹</Link>查看。</p>}

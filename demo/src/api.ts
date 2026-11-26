@@ -26,6 +26,17 @@ function checkedAccountMethods(value: AccountMethods): AccountMethods {
   })) throw new ApiError('登录方式信息不完整，请重新读取。');
   return value;
 }
+export type CoverPreference = 'poster' | 'original';
+function checkedCoverPreference(value: { coverPreference: unknown }): CoverPreference {
+  if (value?.coverPreference !== 'poster' && value?.coverPreference !== 'original') throw new ApiError('封面设置响应无效。');
+  return value.coverPreference;
+}
+export async function getCoverPreference(signal?: AbortSignal) {
+  return checkedCoverPreference(await jsonRequest<{ coverPreference: unknown }>('/api/account/cover-preference', { authenticated: true, signal }));
+}
+export async function setCoverPreference(coverPreference: CoverPreference) {
+  return checkedCoverPreference(await jsonRequest<{ coverPreference: unknown }>('/api/account/cover-preference', { method: 'PUT', authenticated: true, ...jsonBody({ coverPreference }) }));
+}
 export async function getAccountMethods(signal?: AbortSignal) {
   return checkedAccountMethods(await jsonRequest<AccountMethods>('/api/auth/account/methods', { authenticated: true, signal }));
 }
