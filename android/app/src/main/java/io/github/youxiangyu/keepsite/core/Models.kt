@@ -40,6 +40,7 @@ data class Ticket(
     val processingError: String?, val operationId: String,
 ) {
     val cover get() = poster ?: original
+    fun coverFor(preference: String?) = if (preference == "poster") cover else original
 }
 
 data class Session(
@@ -74,6 +75,7 @@ data class AppState(
     val accountMethods: AccountMethods? = null, val accountPasswordEmail: String? = null,
     /** Exact submission acknowledged by the server. */
     val completedAuth: AuthSubmission? = null,
+    val coverPreference: String? = null,
 )
 
 /** UI calls are non-blocking. Listener/media callbacks are delivered on the main thread. */
@@ -90,6 +92,7 @@ interface AppController : Closeable {
     fun confirmPassword(email: String, code: String, password: String)
     fun startGoogle(openBrowser: (String) -> Unit)
     fun handleGoogleCallback(uri: Uri)
+    fun setCoverPreference(value: String)
     fun refreshAccountMethods()
     fun addAccountPassword(action: String, email: String, password: String, code: String = "")
     fun linkGoogle(openBrowser: (String) -> Unit)
